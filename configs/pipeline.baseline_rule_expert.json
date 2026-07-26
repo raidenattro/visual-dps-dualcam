@@ -1,0 +1,47 @@
+{
+  "name": "baseline_rule_expert",
+  "description": "现有 ankle_max_norm + triple90 + stance 作为 expert；平滑后的 pick_score 门控再判格子",
+  "pose_frame_interval": 2,
+  "feature_smooth": {
+    "enabled": true,
+    "window_frames": 5,
+    "method": "ema",
+    "ema_alpha": 0.35
+  },
+  "pick_state": {
+    "scorer": "rule_expert",
+    "score_smooth": {
+      "enabled": true,
+      "window_frames": 5,
+      "method": "ema",
+      "ema_alpha": 0.4
+    },
+    "threshold": 0.5,
+    "rule_expert": {
+      "speed_feature": "ankle_max_speed_norm",
+      "speed_threshold": 0.08177,
+      "arm_torso_min": 90.0,
+      "elbow_min": 150.0,
+      "wrist_elevation_min": 60.0,
+      "stance_feature": "shoulder_hip_knee_angle_min",
+      "stance_threshold": 140.0,
+      "logic": "pick_ok = NOT (speed_block AND NOT triple90 AND is_standing)"
+    }
+  },
+  "box_trigger": {
+    "enabled": true,
+    "require_pick_state": true,
+    "wrist_score_min": 0.3
+  },
+  "alarm": {
+    "min_consecutive_frames": 3,
+    "cooldown_frames": 0
+  },
+  "features": [
+    "ankle_max_speed_norm",
+    "arm_torso_angle_max",
+    "elbow_angle_mean",
+    "wrist_elevation_angle_max",
+    "shoulder_hip_knee_angle_min"
+  ]
+}

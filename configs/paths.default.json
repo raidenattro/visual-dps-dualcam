@@ -1,0 +1,8 @@
+{
+  "collector_root": "/home/hqit/workspace/visual-dps-data-collector",
+  "localdata_rel": "localdata",
+  "baseline_manifest_rel": "export/rule-baseline-local-prod-test/_manifest.json",
+  "review_rel": "review",
+  "json_rel": "json",
+  "note": "只读；勿写回 collector timeline"
+}
