@@ -1,0 +1,34 @@
+{
+  "name": "logistic_v1_t025",
+  "description": "5 维特征 L2 logistic 拟合 pick_score，门控后再判货框",
+  "pose_frame_interval": 2,
+  "pick_state": {
+    "scorer": "linear_expert",
+    "score_smooth": {
+      "enabled": true,
+      "window_frames": 5,
+      "method": "ema",
+      "ema_alpha": 0.4
+    },
+    "threshold": 0.25,
+    "linear_expert": {
+      "model_path": "output/train/logistic_v1/model.json"
+    }
+  },
+  "box_trigger": {
+    "enabled": true,
+    "require_pick_state": true,
+    "wrist_score_min": 0.3
+  },
+  "alarm": {
+    "min_consecutive_frames": 3,
+    "cooldown_frames": 0
+  },
+  "features": [
+    "ankle_max_speed_norm",
+    "arm_torso_angle_max",
+    "elbow_angle_mean",
+    "wrist_elevation_angle_max",
+    "shoulder_hip_knee_angle_min"
+  ]
+}

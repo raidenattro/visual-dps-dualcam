@@ -1,0 +1,20 @@
+{
+  "name": "nogate",
+  "description": "本仓自基线：不做拣货态门控，纯手腕∩货框 + 连续帧告警；用于隔离标注差异与门控效果",
+  "pose_frame_interval": 2,
+  "pick_state": {
+    "scorer": "rule_expert",
+    "score_smooth": { "enabled": false },
+    "threshold": 0.5,
+    "rule_expert": {}
+  },
+  "box_trigger": {
+    "enabled": true,
+    "require_pick_state": false,
+    "wrist_score_min": 0.3
+  },
+  "alarm": {
+    "min_consecutive_frames": 3,
+    "cooldown_frames": 0
+  }
+}

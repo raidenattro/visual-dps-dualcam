@@ -1,2 +1,6 @@
-# 实验仓轻依赖；重型评测复用 collector 环境
-numpy>=1.24
+numpy>=2.0
+pandas>=2.2
+pyarrow>=17.0
+scikit-learn>=1.5
+opencv-python-headless>=4.10
+pytest>=8.0
