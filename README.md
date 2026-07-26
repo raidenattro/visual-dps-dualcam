@@ -34,11 +34,59 @@ MANIFEST=$LOCALDATA/export/rule-baseline-local-prod-test/_manifest.json
 
 可用环境变量覆盖：`PICK_STATE_COLLECTOR_ROOT`。
 
-## 快速检查
+## 环境
+
+系统 python 缺 pandas/pyarrow/sklearn，必须用本仓 venv：
 
 ```bash
 cd /home/hqit/workspace/visual-dps-pick-state
-python scripts/check_data_access.py
+python3 -m venv .venv
+.venv/bin/pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
+.venv/bin/python -m pytest tests/ -q
+.venv/bin/python scripts/check_data_access.py
+```
+
+## 回归流程
+
+```bash
+# 1) 导出（写本仓 output/，不碰 collector）
+.venv/bin/python scripts/export_manifest28.py \
+  --config configs/pipeline.nogate.json --out output/export/pickstate-nogate-prod-test
+.venv/bin/python scripts/export_manifest28.py \
+  --config configs/pipeline.baseline_rule_expert.json --out output/export/pickstate-rule-v0-prod-test
+
+# 2) 评估 / 对比（用 collector 脚本，系统 python 已装 fastapi）
+cd /home/hqit/workspace/visual-dps-data-collector
+python3 scripts/data/evaluate_inference_upload.py --in-place --dirs \
+  /home/hqit/workspace/visual-dps-pick-state/output/export/pickstate-nogate-prod-test \
+  /home/hqit/workspace/visual-dps-pick-state/output/export/pickstate-rule-v0-prod-test
+python3 scripts/data/compare_export_false_alarms.py \
+  --baseline .../pickstate-nogate-prod-test --experiment .../pickstate-rule-v0-prod-test \
+  --out-dir /home/hqit/workspace/visual-dps-pick-state/output/compare
+```
+
+导出帧号直接复用 baseline 导出包的 `frame_idx`，无检测帧也产出空行，保证告警连续帧计数可比。
+
+## 当前结果（28-clip，标真 156 段）
+
+| 包 | TP | FP | FN | 召回 |
+|----|----|----|----|------|
+| collector `rule-baseline-local-prod-test` | 147 | 430 | 9 | 94.23% |
+| 本仓 `pickstate-nogate`（无门控自基线） | 147 | 442 | 9 | 94.23% |
+| 本仓 `pickstate-rule-v0`（硬规则门控） | 146 | 355 | 10 | 93.59% |
+| 本仓 `pickstate-logistic-v1-t025`（**当前最好**） | 147 | 306 | 9 | 94.23% |
+
+完整阈值扫描、特征权重、误报归因见 **[docs/HANDOVER.md](docs/HANDOVER.md)**。
+
+nogate 与 collector baseline 召回一致，FP 差 12：本仓货框取 record 自带 `manifest.annotation`（与 baseline 用的 reflection 临时标注文件不同版本），且 BoxTrigger 去掉了原实现命中首框即 `break` 的限制。以 `timeline.parquet` 做逐帧几何校验，19369 帧中 19367 帧完全一致，2 帧差异均为重叠框多记，符合预期。
+
+## 训练与可视化
+
+```bash
+.venv/bin/python train/build_dataset.py     # → output/train/dataset_v1.npz
+.venv/bin/python train/fit_logistic.py      # → output/train/logistic_v1/
+.venv/bin/python scripts/render_fn_fp_frames.py \
+  --report output/export/<包名>/accuracy_report.json --out output/viz/<包名>
 ```
 
 ## 与两仓关系
@@ -48,4 +96,5 @@ python scripts/check_data_access.py
 
 ## 状态
 
-骨架阶段：接口与配置已立，拟合与全量回归待下一步。
+阶段 1、2 完成：只读适配、5 维特征、BoxTrigger + Alarm、28-clip 回归、logistic 拟合权重。  
+下一步：判定单元改为 `(人, 货框)` 对 + 补手-货框几何特征。理由与数据见 [docs/HANDOVER.md](docs/HANDOVER.md)。
