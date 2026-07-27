@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
 
 from features.box_geometry import PAIR_FEATURE_KEYS, compute_pair_features
 from features.depth_geometry import DEPTH_FEATURE_KEYS, compute_depth_features, load_depth_cache
+from features.pair_temporal import TEMPORAL_FEATURE_KEYS, PairTemporalTracker
 
 PERSON_FEATURE_KEYS = [
     "ankle_max_speed_norm",
@@ -27,7 +28,7 @@ PERSON_FEATURE_KEYS = [
     "wrist_elevation_angle_max",
     "shoulder_hip_knee_angle_min",
 ]
-FEATURE_KEYS = PERSON_FEATURE_KEYS + PAIR_FEATURE_KEYS
+FEATURE_KEYS = PERSON_FEATURE_KEYS + PAIR_FEATURE_KEYS + TEMPORAL_FEATURE_KEYS
 
 # 负样本细分，用于诊断而非训练
 KIND_POS = 0
@@ -118,6 +119,11 @@ def build(*, paths, report_path: Path, depth_dir: Path | None = None) -> dict[st
         trigger = BoxTrigger(record.boxes)
         box_by_token = {b.token: b for b in record.boxes}
         depth_cache = load_depth_cache(depth_dir, ref.record_id) if depth_dir else {}
+        temporal = PairTemporalTracker(
+            infer_width=int(record.meta.get("infer_width") or ref.infer_width or 1),
+            infer_height=infer_h,
+            video_fps=float(record.fps or 15.0),
+        )
 
         by_key = {
             int(fr.get("source_frame_idx") or fr.get("frame_idx") or 0): fr for fr in record.frames
@@ -126,10 +132,15 @@ def build(*, paths, report_path: Path, depth_dir: Path | None = None) -> dict[st
         keys = sorted(frame_indices) if frame_indices is not None else sorted(by_key)
 
         for export_key in keys:
-            frame = by_key.get(export_key)
-            if frame is None:
-                continue
-            pending: list[tuple[dict[str, Any], int, dict[str, Any], dict[str, Any]]] = []
+            # 无骨架的帧也要推进 tracker，否则停留计数不清零；与 runner 的空帧处理一致
+            frame = by_key.get(export_key) or {
+                "frame_idx": export_key,
+                "source_frame_idx": export_key,
+                "timestamp_sec": 0.0,
+                "persons": [],
+            }
+            pending: list[tuple[dict[str, Any], int, dict[str, Any], dict[str, Any], str]] = []
+            active_pairs: dict[str, dict[str, Any]] = {}
             # 速度特征依赖逐帧推进，所以整帧都要过一遍 bank
             for row in bank.rows_for_frame(frame):
                 person = row.get("_person")
@@ -141,17 +152,28 @@ def build(*, paths, report_path: Path, depth_dir: Path | None = None) -> dict[st
                     if box is None:
                         continue
                     pair = compute_pair_features(person, hit, box, infer_height=infer_h)
-                    pending.append((row, track, hit, pair))
+                    pair_key = f"{track}|{hit['token']}"
+                    active_pairs[pair_key] = {
+                        "depth_ratio": hit["depth_ratio"],
+                        "center_dist_norm": pair.get("center_dist_norm"),
+                        "wrist_xy": hit["wrist_xy"],
+                    }
+                    pending.append((row, track, hit, pair, pair_key))
 
+            temporal_feats = temporal.update(export_key, active_pairs)
             active = [(i, s) for i, s in enumerate(segs) if s[1] <= export_key <= s[2]]
 
-            for row, track, hit, pair in pending:
+            for row, track, hit, pair, pair_key in pending:
+                tmp = temporal_feats.get(pair_key) or {}
                 vec: list[float | None] = []
                 for key in PERSON_FEATURE_KEYS:
                     v = row.get(key)
                     vec.append(None if v is None else float(v))
                 for key in PAIR_FEATURE_KEYS:
                     v = pair.get(key)
+                    vec.append(None if v is None else float(v))
+                for key in TEMPORAL_FEATURE_KEYS:
+                    v = tmp.get(key)
                     vec.append(None if v is None else float(v))
                 if depth_dir:
                     dep = compute_depth_features(
@@ -208,6 +230,7 @@ def build(*, paths, report_path: Path, depth_dir: Path | None = None) -> dict[st
         "feature_keys": feature_keys,
         "person_feature_keys": list(PERSON_FEATURE_KEYS),
         "pair_feature_keys": list(PAIR_FEATURE_KEYS),
+        "temporal_feature_keys": list(TEMPORAL_FEATURE_KEYS),
         "depth_feature_keys": list(DEPTH_FEATURE_KEYS) if depth_dir else [],
         "missing_rate": {k: round(float(r), 4) for k, r in zip(feature_keys, missing_rate)},
         "meta": meta,
@@ -250,6 +273,7 @@ def main() -> int:
         feature_keys=np.asarray(ds["feature_keys"]),
         person_feature_keys=np.asarray(ds["person_feature_keys"]),
         pair_feature_keys=np.asarray(ds["pair_feature_keys"]),
+        temporal_feature_keys=np.asarray(ds["temporal_feature_keys"]),
         depth_feature_keys=np.asarray(ds["depth_feature_keys"]),
     )
     kind = ds["kind"]

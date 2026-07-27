@@ -10,6 +10,7 @@ from experts.linear_expert import LinearPickExpert
 from experts.rule_expert import RulePickExpert
 from features.bank import FeatureBank
 from features.box_geometry import compute_pair_features
+from features.pair_temporal import PairTemporalTracker
 from pipeline.alarm import AlarmTracker
 from pipeline.box_trigger import BoxTrigger
 from pipeline.smooth import ScalarSmoother, SmoothConfig
@@ -59,6 +60,13 @@ class PickStatePipeline:
             if self.pair_enabled
             else None
         )
+        self._pair_temporal: PairTemporalTracker | None = None
+
+    def configure_dims(self, *, infer_width: int, infer_height: int, video_fps: float) -> None:
+        """时序 tracker 需要画面尺寸与帧率，run_record 里按 record 配置。"""
+        self._pair_temporal = PairTemporalTracker(
+            infer_width=infer_width, infer_height=infer_height, video_fps=video_fps
+        )
 
     def reset_session(self) -> None:
         self._score_smoothers.clear()
@@ -66,6 +74,8 @@ class PickStatePipeline:
         self.scorer.reset()
         if self.pair_scorer is not None:
             self.pair_scorer.reset()
+        if self._pair_temporal is not None:
+            self._pair_temporal.reset()
         self.alarm.reset()
 
     def _smoother(self, track_id: str) -> ScalarSmoother:
@@ -104,6 +114,14 @@ class PickStatePipeline:
         tokens: set[str] = set()
         hit_detail: list[dict[str, Any]] = []
 
+        if self._pair_temporal is None:
+            self.configure_dims(
+                infer_width=infer_height, infer_height=infer_height, video_fps=15.0
+            )
+
+        # 先枚举全帧的命中，才能让时序 tracker 知道哪些对本帧消失了
+        pending: list[tuple[dict[str, Any], str, dict[str, Any], dict[str, Any]]] = []
+        active_pairs: dict[str, dict[str, Any]] = {}
         for row in feature_rows:
             person = row.get("_person")
             if not isinstance(person, dict):
@@ -113,26 +131,38 @@ class PickStatePipeline:
                 box = hit.get("box")
                 if box is None:
                     continue
-                pair_row = dict(row)
-                pair_row.update(compute_pair_features(person, hit, box, infer_height=infer_height))
-                raw, detail = self.pair_scorer.score(pair_row)
+                pair = compute_pair_features(person, hit, box, infer_height=infer_height)
                 key = f"{track_id}|{hit['token']}"
-                smooth = self._pair_smoother(key).update(raw)
-                smooth_v = float(smooth if smooth is not None else raw)
-                is_picking = smooth_v >= self.pair_threshold
-                decisions.append(
-                    PickDecision(
-                        person_track_id=key,
-                        score_raw=float(raw),
-                        score_smooth=smooth_v,
-                        is_picking=is_picking,
-                        expert=self.pair_scorer.name,
-                        detail=detail,
-                    )
+                active_pairs[key] = {
+                    "depth_ratio": hit["depth_ratio"],
+                    "center_dist_norm": pair.get("center_dist_norm"),
+                    "wrist_xy": hit["wrist_xy"],
+                }
+                pending.append((row, key, hit, pair))
+
+        temporal_feats = self._pair_temporal.update(ctx.frame_idx, active_pairs)
+
+        for row, key, hit, pair in pending:
+            pair_row = dict(row)
+            pair_row.update(pair)
+            pair_row.update(temporal_feats.get(key) or {})
+            raw, detail = self.pair_scorer.score(pair_row)
+            smooth = self._pair_smoother(key).update(raw)
+            smooth_v = float(smooth if smooth is not None else raw)
+            is_picking = smooth_v >= self.pair_threshold
+            decisions.append(
+                PickDecision(
+                    person_track_id=key,
+                    score_raw=float(raw),
+                    score_smooth=smooth_v,
+                    is_picking=is_picking,
+                    expert=self.pair_scorer.name,
+                    detail=detail,
                 )
-                if is_picking:
-                    tokens.add(hit["token"])
-                    hit_detail.append(hit)
+            )
+            if is_picking:
+                tokens.add(hit["token"])
+                hit_detail.append(hit)
 
         collisions = sorted(tokens)
         return PipelineResult(
@@ -197,10 +227,16 @@ class PickStatePipeline:
         frame_indices: set[int] | None = None,
     ) -> list[dict[str, Any]]:
         """跑完一条 record，返回与 collector 评估器兼容的 upload 行。"""
-        self.reset_session()
+        infer_width = int(record.meta.get("infer_width") or record.ref.infer_width or 1)
         infer_height = int(record.meta.get("infer_height") or record.ref.infer_height or 1)
+        self.configure_dims(
+            infer_width=infer_width,
+            infer_height=infer_height,
+            video_fps=float(record.fps or 15.0),
+        )
+        self.reset_session()
         bank = FeatureBank(
-            infer_width=int(record.meta.get("infer_width") or record.ref.infer_width or 1),
+            infer_width=infer_width,
             infer_height=infer_height,
             video_fps=float(record.fps or 15.0),
         )
