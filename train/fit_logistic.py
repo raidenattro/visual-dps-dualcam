@@ -38,6 +38,12 @@ def main() -> int:
     ap.add_argument("--out-dir", default=str(ROOT / "output/train/logistic_v1"))
     ap.add_argument("--C", type=float, default=1.0)
     ap.add_argument("--folds", type=int, default=5)
+    ap.add_argument("--name", default="logistic_v1")
+    ap.add_argument(
+        "--features",
+        default="",
+        help="逗号分隔的特征子集；留空用数据集全部特征",
+    )
     args = ap.parse_args()
 
     data = np.load(args.dataset, allow_pickle=True)
@@ -45,6 +51,15 @@ def main() -> int:
     y = data["y"].astype(int)
     groups = data["groups"]
     feature_keys = [str(x) for x in data["feature_keys"].tolist()]
+
+    if args.features.strip():
+        wanted = [k.strip() for k in args.features.split(",") if k.strip()]
+        unknown = [k for k in wanted if k not in feature_keys]
+        if unknown:
+            raise SystemExit(f"数据集中不存在这些特征：{unknown}")
+        cols = [feature_keys.index(k) for k in wanted]
+        X = X[:, cols]
+        feature_keys = wanted
 
     out_dir = Path(args.out_dir)
     if not out_dir.is_absolute():
@@ -93,7 +108,7 @@ def main() -> int:
     importance.sort(key=lambda r: r["abs_coef"], reverse=True)
 
     model = {
-        "name": "logistic_v1",
+        "name": args.name,
         "feature_keys": feature_keys,
         "scaler_mean": [float(x) for x in scaler.mean_],
         "scaler_scale": [float(x) for x in scaler.scale_],
@@ -115,7 +130,7 @@ def main() -> int:
     )
 
     lines = [
-        "# logistic_v1 特征权重（标准化空间 |coef| 排序）",
+        f"# {args.name} 特征权重（标准化空间 |coef| 排序）",
         "",
         f"- 样本：{len(y)}（正 {int(y.sum())} / 负 {int(len(y) - y.sum())}）",
         f"- GroupKFold OOF AUC：{roc_auc_score(y, oof):.4f}",

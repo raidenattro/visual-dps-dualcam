@@ -9,6 +9,7 @@ from typing import Any
 from experts.linear_expert import LinearPickExpert
 from experts.rule_expert import RulePickExpert
 from features.bank import FeatureBank
+from features.box_geometry import compute_pair_features
 from pipeline.alarm import AlarmTracker
 from pipeline.box_trigger import BoxTrigger
 from pipeline.smooth import ScalarSmoother, SmoothConfig
@@ -47,15 +48,35 @@ class PickStatePipeline:
             cooldown_frames=int(alarm_cfg.get("cooldown_frames", 0)),
         )
 
+        # 配对模式：判定单元从「人」变成「人-货框」对，未配置时完全不影响原路径
+        pair_cfg = config.get("pair_state") or {}
+        self.pair_enabled = bool(pair_cfg.get("enabled"))
+        self.pair_threshold = float(pair_cfg.get("threshold", 0.5))
+        self._pair_smooth_cfg = SmoothConfig(**(pair_cfg.get("score_smooth") or {}))
+        self._pair_smoothers: dict[str, ScalarSmoother] = {}
+        self.pair_scorer = (
+            _build_scorer(str(pair_cfg.get("scorer") or "linear_expert"), pair_cfg)
+            if self.pair_enabled
+            else None
+        )
+
     def reset_session(self) -> None:
         self._score_smoothers.clear()
+        self._pair_smoothers.clear()
         self.scorer.reset()
+        if self.pair_scorer is not None:
+            self.pair_scorer.reset()
         self.alarm.reset()
 
     def _smoother(self, track_id: str) -> ScalarSmoother:
         if track_id not in self._score_smoothers:
             self._score_smoothers[track_id] = ScalarSmoother(self._score_smooth_cfg)
         return self._score_smoothers[track_id]
+
+    def _pair_smoother(self, key: str) -> ScalarSmoother:
+        if key not in self._pair_smoothers:
+            self._pair_smoothers[key] = ScalarSmoother(self._pair_smooth_cfg)
+        return self._pair_smoothers[key]
 
     def _decide(self, row: dict[str, Any]) -> PickDecision:
         track_id = str(row.get("person_track_id") or "0")
@@ -71,6 +92,57 @@ class PickStatePipeline:
             detail=detail,
         )
 
+    def _process_frame_pairwise(
+        self,
+        ctx: FrameContext,
+        feature_rows: list[dict[str, Any]],
+        box_trigger: BoxTrigger,
+        infer_height: int,
+    ) -> PipelineResult:
+        """逐个 (人, 货框) 对打分：手腕落在哪个框里，就只对那个框负责。"""
+        decisions: list[PickDecision] = []
+        tokens: set[str] = set()
+        hit_detail: list[dict[str, Any]] = []
+
+        for row in feature_rows:
+            person = row.get("_person")
+            if not isinstance(person, dict):
+                continue
+            track_id = str(row.get("person_track_id") or "0")
+            for hit in box_trigger.hits_for_person(person):
+                box = hit.get("box")
+                if box is None:
+                    continue
+                pair_row = dict(row)
+                pair_row.update(compute_pair_features(person, hit, box, infer_height=infer_height))
+                raw, detail = self.pair_scorer.score(pair_row)
+                key = f"{track_id}|{hit['token']}"
+                smooth = self._pair_smoother(key).update(raw)
+                smooth_v = float(smooth if smooth is not None else raw)
+                is_picking = smooth_v >= self.pair_threshold
+                decisions.append(
+                    PickDecision(
+                        person_track_id=key,
+                        score_raw=float(raw),
+                        score_smooth=smooth_v,
+                        is_picking=is_picking,
+                        expert=self.pair_scorer.name,
+                        detail=detail,
+                    )
+                )
+                if is_picking:
+                    tokens.add(hit["token"])
+                    hit_detail.append(hit)
+
+        collisions = sorted(tokens)
+        return PipelineResult(
+            frame_idx=ctx.frame_idx,
+            pick_decisions=decisions,
+            box_hits=collisions,
+            alarm_hits=self.alarm.step(collisions, ctx.frame_idx),
+            debug={"hits": hit_detail},
+        )
+
     def process_frame(
         self,
         ctx: FrameContext,
@@ -78,8 +150,14 @@ class PickStatePipeline:
         feature_rows: list[dict[str, Any]] | None = None,
         box_trigger: BoxTrigger | None = None,
         provisional_box_hits: list[str] | None = None,
+        infer_height: int = 1,
     ) -> PipelineResult:
         """按人判定拣货态；非拣货态的人不贡献碰撞（对齐 DPS blocked → continue）。"""
+        if self.pair_enabled and box_trigger is not None:
+            return self._process_frame_pairwise(
+                ctx, feature_rows or [], box_trigger, infer_height
+            )
+
         decisions: list[PickDecision] = []
         tokens: set[str] = set()
         hit_detail: list[dict[str, Any]] = []
@@ -120,9 +198,10 @@ class PickStatePipeline:
     ) -> list[dict[str, Any]]:
         """跑完一条 record，返回与 collector 评估器兼容的 upload 行。"""
         self.reset_session()
+        infer_height = int(record.meta.get("infer_height") or record.ref.infer_height or 1)
         bank = FeatureBank(
             infer_width=int(record.meta.get("infer_width") or record.ref.infer_width or 1),
-            infer_height=int(record.meta.get("infer_height") or record.ref.infer_height or 1),
+            infer_height=infer_height,
             video_fps=float(record.fps or 15.0),
         )
         trigger = BoxTrigger(record.boxes, wrist_score_min=self.wrist_score_min)
@@ -152,7 +231,9 @@ class PickStatePipeline:
                 frame_idx=export_key,
                 camera_slug=record.ref.camera_slug,
             )
-            result = self.process_frame(ctx, feature_rows=rows, box_trigger=trigger)
+            result = self.process_frame(
+                ctx, feature_rows=rows, box_trigger=trigger, infer_height=infer_height
+            )
 
             probs = [d.score_smooth for d in result.pick_decisions]
             out.append(

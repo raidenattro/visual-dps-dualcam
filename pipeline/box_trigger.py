@@ -39,6 +39,7 @@ class BoxTrigger:
                 out[box.token] = {
                     "token": box.token,
                     "box_id": box.box_id,
+                    "box": box,
                     "wrist_idx": wrist_idx,
                     "wrist_xy": (wx, wy),
                     "depth_ratio": depth_ratio,

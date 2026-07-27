@@ -1,0 +1,31 @@
+{
+  "name": "pairwise_v1_t030",
+  "description": "配对判定，阈值 0.3",
+  "pose_frame_interval": 2,
+  "pick_state": {
+    "scorer": "rule_expert"
+  },
+  "pair_state": {
+    "enabled": true,
+    "scorer": "linear_expert",
+    "threshold": 0.3,
+    "score_smooth": {
+      "enabled": true,
+      "window_frames": 5,
+      "method": "ema",
+      "ema_alpha": 0.4
+    },
+    "linear_expert": {
+      "model_path": "output/train/pair_logistic_v1/model.json"
+    }
+  },
+  "box_trigger": {
+    "enabled": true,
+    "require_pick_state": false,
+    "wrist_score_min": 0.3
+  },
+  "alarm": {
+    "min_consecutive_frames": 3,
+    "cooldown_frames": 0
+  }
+}
