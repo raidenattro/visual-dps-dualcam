@@ -55,12 +55,27 @@ python3 scripts/data/compare_export_false_alarms.py \
 ## 训练
 
 ```bash
+# 按人判定（旧）
 .venv/bin/python train/build_dataset.py          # → output/train/dataset_v1.npz
 .venv/bin/python train/fit_logistic.py           # → output/train/logistic_v1/
+
+# 按「人-货框」对判定（当前）
+.venv/bin/python train/build_pair_dataset.py --out output/train/pairs_v2.npz \
+  [--depth-dir output/depth]                     # 深度维可选，未接入 pipeline
+.venv/bin/python train/eval_pair_features.py --dataset output/train/pairs_v2.npz \
+  --out-dir output/train/pair_ablation_v2        # 特征消融 + 阈值扫描
+.venv/bin/python train/fit_logistic.py \
+  --dataset output/train/pairs_v2.npz --out-dir output/train/pair_logistic_v2 \
+  --name pair_logistic_v2 --features <逗号分隔的特征子集>
 ```
 
-标签：帧号落在 `verified_true` 条目上为正。数据只有 **28 条 record**，分组泛化样本量就是 28，
-用 `GroupKFold(groups=record_id)`，慎用高容量模型。
+时序特征（`features/pair_temporal.py`）有状态，**必须逐帧推进，包括没有骨架的空帧**，
+否则停留计数不清零。`build_pair_dataset.py` 与 `pipeline/runner.py` 两边口径必须一致。
+
+标签：按人时，帧号落在 `verified_true` 条目上为正；按对时，复刻 collector 的**区间**口径
+（连续同 token 的条目合并成段，配对落在段内且 token 匹配为正），与评估指标同口径。
+
+数据只有 **28 条 record**，分组泛化样本量就是 28，用 `GroupKFold(groups=record_id)`，慎用高容量模型。
 
 ## 可视化
 
