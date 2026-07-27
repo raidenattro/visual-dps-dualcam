@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from features.box_geometry import PAIR_FEATURE_KEYS, compute_pair_features
+from features.depth_geometry import DEPTH_FEATURE_KEYS, compute_depth_features, load_depth_cache
 
 PERSON_FEATURE_KEYS = [
     "ankle_max_speed_norm",
@@ -79,13 +80,13 @@ def _baseline_frame_indices(paths, file_name: str) -> set[int] | None:
     return {int(r.get("frame_idx") or 0) for r in rows if isinstance(r, dict)}
 
 
-def build(*, paths, report_path: Path) -> dict[str, Any]:
+def build(*, paths, report_path: Path, depth_dir: Path | None = None) -> dict[str, Any]:
     from adapters.record_reader import list_records, load_record
     from features.bank import FeatureBank
     from pipeline.box_trigger import BoxTrigger
 
     review_map = _review_key_map(report_path)
-    feature_keys = list(FEATURE_KEYS)
+    feature_keys = list(FEATURE_KEYS) + (list(DEPTH_FEATURE_KEYS) if depth_dir else [])
 
     rows: list[list[float | None]] = []
     y_list: list[int] = []
@@ -116,6 +117,7 @@ def build(*, paths, report_path: Path) -> dict[str, Any]:
         )
         trigger = BoxTrigger(record.boxes)
         box_by_token = {b.token: b for b in record.boxes}
+        depth_cache = load_depth_cache(depth_dir, ref.record_id) if depth_dir else {}
 
         by_key = {
             int(fr.get("source_frame_idx") or fr.get("frame_idx") or 0): fr for fr in record.frames
@@ -151,6 +153,13 @@ def build(*, paths, report_path: Path) -> dict[str, Any]:
                 for key in PAIR_FEATURE_KEYS:
                     v = pair.get(key)
                     vec.append(None if v is None else float(v))
+                if depth_dir:
+                    dep = compute_depth_features(
+                        depth_cache.get((export_key, track, hit["token"]))
+                    )
+                    for key in DEPTH_FEATURE_KEYS:
+                        v = dep.get(key)
+                        vec.append(None if v is None else float(v))
 
                 matched = [i for i, s in active if hit["token"] in s[0]]
                 if matched:
@@ -199,6 +208,7 @@ def build(*, paths, report_path: Path) -> dict[str, Any]:
         "feature_keys": feature_keys,
         "person_feature_keys": list(PERSON_FEATURE_KEYS),
         "pair_feature_keys": list(PAIR_FEATURE_KEYS),
+        "depth_feature_keys": list(DEPTH_FEATURE_KEYS) if depth_dir else [],
         "missing_rate": {k: round(float(r), 4) for k, r in zip(feature_keys, missing_rate)},
         "meta": meta,
     }
@@ -215,9 +225,17 @@ def main() -> int:
         default=str(ROOT / "output/export/pickstate-logistic-v1-t025-prod-test/accuracy_report.json"),
     )
     ap.add_argument("--out", default=str(ROOT / "output/train/pairs_v1.npz"))
+    ap.add_argument(
+        "--depth-dir",
+        default="",
+        help="深度标量缓存目录（scripts/precompute_depth.py 的产物）；留空则不带深度特征",
+    )
     args = ap.parse_args()
 
-    ds = build(paths=load_paths(), report_path=Path(args.report))
+    depth_dir = Path(args.depth_dir) if args.depth_dir.strip() else None
+    if depth_dir is not None and not depth_dir.is_absolute():
+        depth_dir = ROOT / depth_dir
+    ds = build(paths=load_paths(), report_path=Path(args.report), depth_dir=depth_dir)
     out = Path(args.out)
     if not out.is_absolute():
         out = ROOT / out
@@ -232,6 +250,7 @@ def main() -> int:
         feature_keys=np.asarray(ds["feature_keys"]),
         person_feature_keys=np.asarray(ds["person_feature_keys"]),
         pair_feature_keys=np.asarray(ds["pair_feature_keys"]),
+        depth_feature_keys=np.asarray(ds["depth_feature_keys"]),
     )
     kind = ds["kind"]
     summary = {

@@ -1,0 +1,6 @@
+# 单目深度实验专用（体积大，核心链路不需要）
+# .venv/bin/pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements-depth.txt
+torch>=2.5
+torchvision>=0.20
+transformers>=4.45
+pillow>=10.0

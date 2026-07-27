@@ -86,11 +86,17 @@ def main() -> int:
     pair_keys = [str(k) for k in data["pair_feature_keys"].tolist()]
     idx = {k: i for i, k in enumerate(keys)}
 
+    depth_keys = (
+        [str(k) for k in data["depth_feature_keys"].tolist()]
+        if "depth_feature_keys" in data
+        else []
+    )
+
     # 站位代理 = 免标定的「人离相机多远」；框内 = 手腕在框里的位置
     stance_keys = ["stance_gap_norm", "person_height_norm", "box_bottom_y_norm", "stance_valid"]
     inbox_keys = ["depth_ratio", "center_dist_norm", "wrist_bearing_x", "wrist_bearing_y"]
-    # 上线的 11 维 = 全部 − 站位代理
-    prod_keys = [k for k in keys if k not in stance_keys]
+    # 上线的 11 维 = 全部 − 站位代理 − 深度
+    prod_keys = [k for k in keys if k not in stance_keys and k not in depth_keys]
 
     variants = {
         "人体特征（对照基线）": person_keys,
@@ -98,9 +104,14 @@ def main() -> int:
         "人体 + 站位代理": person_keys + stance_keys,
         "人体 + 框内位置": person_keys + inbox_keys,
         "上线 11 维": prod_keys,
-        "全部 − 框内位置": [k for k in keys if k not in inbox_keys],
-        "全部": keys,
+        "全部 − 框内位置": [k for k in keys if k not in inbox_keys and k not in depth_keys],
     }
+    if depth_keys:
+        variants["人体 + 深度"] = person_keys + depth_keys
+        variants["上线 11 维 + 深度"] = prod_keys + depth_keys
+        variants["全部（含深度）"] = keys
+    else:
+        variants["全部"] = keys
 
     results = []
     oofs = {}
@@ -157,7 +168,7 @@ def main() -> int:
     seg_ids = data["seg_ids"] if "seg_ids" in data else np.asarray([""] * len(y))
     n_segments = len({s for s in seg_ids.tolist() if s})
     thresholds = [0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80]
-    sweep_names = [n for n in ("人体特征（对照基线）", "上线 11 维", "全部") if n in oofs]
+    sweep_names = [n for n in ("人体特征（对照基线）", "上线 11 维", "上线 11 维 + 深度") if n in oofs]
     sweeps = {name: _sweep(y, oofs[name], seg_ids, n_segments, thresholds) for name in sweep_names}
     lines += [
         "",
