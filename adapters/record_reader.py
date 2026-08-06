@@ -70,6 +70,66 @@ def list_records(paths: CollectorPaths | None = None) -> list[RecordRef]:
     return out
 
 
+def list_records_from_manifest(
+    manifest_path: Path | str,
+    *,
+    split_role: str | None = None,
+) -> list[RecordRef]:
+    """读本仓 tagged manifest。
+
+    split_role:
+      - None: 全部 record
+      - "val": 含至少一段 val 的 record（导出/评估用）
+      - "train": 含至少一段 train 的 record
+    """
+    data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    out: list[RecordRef] = []
+    for item in data.get("records") or []:
+        if not isinstance(item, dict):
+            continue
+        n_val = int(item.get("n_val_segments") or 0)
+        n_train = int(item.get("n_train_segments") or 0)
+        if split_role == "val" and n_val <= 0:
+            continue
+        if split_role == "train" and n_train <= 0:
+            continue
+        fn = str(item.get("file") or "")
+        if not fn.endswith(".json"):
+            fn = f"{item.get('clip_name') or 'clip'}.json"
+        out.append(
+            RecordRef(
+                record_id=str(item.get("record_id") or ""),
+                clip_name=str(item.get("clip_name") or ""),
+                camera_slug=str(item.get("camera_slug") or ""),
+                file_name=fn,
+                infer_width=int(float(item.get("infer_width") or 0)),
+                infer_height=int(float(item.get("infer_height") or 0)),
+            )
+        )
+    return out
+
+
+def review_key_map_from_manifest(manifest_path: Path | str) -> dict[str, str]:
+    data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    out: dict[str, str] = {}
+    for item in data.get("records") or []:
+        rid = str(item.get("record_id") or "")
+        rk = str(item.get("review_key") or "")
+        if rid and rk:
+            out[rid] = rk
+    return out
+
+
+def load_segment_split(manifest_path: Path | str) -> dict[str, list[dict[str, Any]]]:
+    """record_id -> segments（含 split/gt_tokens/tracks/frames）。"""
+    data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    by: dict[str, list[dict[str, Any]]] = {}
+    for seg in data.get("segments") or []:
+        rid = str(seg.get("record_id") or "")
+        by.setdefault(rid, []).append(seg)
+    return by
+
+
 def record_dir(ref: RecordRef, paths: CollectorPaths | None = None) -> Path:
     p = paths or load_paths()
     return p.json_dir / ref.record_id

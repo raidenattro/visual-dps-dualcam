@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from adapters.collector_paths import load_paths
-from adapters.record_reader import list_records, load_record
+from adapters.record_reader import list_records, list_records_from_manifest, load_record
 from pipeline.runner import PickStatePipeline, load_pipeline_config
 
 
@@ -32,10 +32,16 @@ def baseline_frame_indices(paths, file_name: str) -> set[int] | None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="导出 pick-state pipeline 的 28-clip 推测结果")
+    ap = argparse.ArgumentParser(description="导出 pick-state pipeline 推测结果")
     ap.add_argument("--config", default=str(ROOT / "configs" / "pipeline.baseline_rule_expert.json"))
     ap.add_argument("--out", required=True, help="输出目录（建议 output/export/<run>）")
     ap.add_argument("--limit", type=int, default=0, help="只跑前 N 条（调试）")
+    ap.add_argument("--manifest", default="", help="本仓 tagged manifest；指定后按 --split-role 选 record")
+    ap.add_argument(
+        "--split-role",
+        default="val",
+        help="配合 --manifest：val=含 val 段的 record；train；空=全部",
+    )
     args = ap.parse_args()
 
     paths = load_paths()
@@ -45,7 +51,14 @@ def main() -> int:
         out_dir = ROOT / out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    refs = list_records(paths)
+    if args.manifest.strip():
+        man = Path(args.manifest)
+        if not man.is_absolute():
+            man = ROOT / man
+        role = args.split_role.strip() or None
+        refs = list_records_from_manifest(man, split_role=role)
+    else:
+        refs = list_records(paths)
     if args.limit:
         refs = refs[: args.limit]
 
