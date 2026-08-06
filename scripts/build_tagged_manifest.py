@@ -2,8 +2,8 @@
 """从 data.db 三标签生成段级 5:5 train/val manifest（只读 collector）。
 
 标签：8.3新标注 / 8.4新标注 / 8.5新标注
-划分单位：GT 段（同 token 集 + 同 person_track_id 连续合并）
-产物：本仓 output/manifests/tagged_aug85_v1.json
+划分单位：一次拣货（同一货框、标注帧间隔 <= gap 帧）
+产物：本仓 output/manifests/tagged_aug85_v2.json
 """
 
 from __future__ import annotations
@@ -81,42 +81,62 @@ def find_review_key(paths, record_id: str) -> tuple[str, dict[str, Any]] | None:
     return None
 
 
-def build_gt_segments(verified_true: list[Any]) -> list[dict[str, Any]]:
-    """同 (tokens, tracks) 连续合并。"""
-    entries = normalize_verified_true(verified_true)
-    segs: list[dict[str, Any]] = []
-    cur: dict[str, Any] | None = None
-    for entry in entries:
+def build_gt_segments(verified_true: list[Any], *, gap: int = 15) -> list[dict[str, Any]]:
+    """一段 = 一次拣货：同一货框集合、相邻标注帧间隔不超过 gap 帧。
+
+    跟踪 ID 不参与切段。上游跟踪会在同一个人身上来回换 ID（实测同一次拣货中
+    #2/#4 逐帧抖动），计入判据会把一次拣货切成几十个单帧段。段内出现过的 ID
+    全部记下，供训练标签匹配用。
+
+    按货框分组后再切，避免多人同时拣不同货框时标注交错、互相打断。
+    """
+    by_tokens: dict[tuple[str, ...], list[tuple[int, set[str]]]] = {}
+    for entry in normalize_verified_true(verified_true):
         toks = tuple(sorted(entry.get("confirmed_box_tokens") or []))
-        tracks = tuple(sorted({t for t in (entry.get("person_track_ids") or []) if t}))
+        tracks = {str(t) for t in (entry.get("person_track_ids") or []) if t}
         fi = int(entry.get("frame_idx") or entry.get("source_frame_idx") or 0)
         if fi <= 0 or not toks:
             continue
-        key = (toks, tracks)
-        if cur is not None and cur["_key"] == key:
-            cur["frame_end"] = max(cur["frame_end"], fi)
-            cur["entry_count"] += 1
-            continue
+        by_tokens.setdefault(toks, []).append((fi, tracks))
+
+    segs: list[dict[str, Any]] = []
+    for toks, items in by_tokens.items():
+        items.sort(key=lambda x: x[0])
+        cur: dict[str, Any] | None = None
+        for fi, tracks in items:
+            if cur is not None and fi - cur["frame_end"] <= gap:
+                cur["frame_end"] = fi
+                cur["_tracks"] |= tracks
+                cur["entry_count"] += 1
+                continue
+            if cur is not None:
+                segs.append(cur)
+            cur = {
+                "gt_tokens": list(toks),
+                "_tracks": set(tracks),
+                "frame_start": fi,
+                "frame_end": fi,
+                "entry_count": 1,
+            }
         if cur is not None:
-            cur.pop("_key", None)
             segs.append(cur)
-        cur = {
-            "_key": key,
-            "gt_tokens": list(toks),
-            "person_track_ids": list(tracks),
-            "frame_start": fi,
-            "frame_end": fi,
-            "entry_count": 1,
-        }
-    if cur is not None:
-        cur.pop("_key", None)
-        segs.append(cur)
+
+    segs.sort(key=lambda s: (s["frame_start"], s["gt_tokens"]))
+    for s in segs:
+        s["person_track_ids"] = sorted(s.pop("_tracks"))
     return segs
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="三标签段级 5:5 manifest")
-    ap.add_argument("--out", default=str(ROOT / "output/manifests/tagged_aug85_v1.json"))
+    ap.add_argument("--out", default=str(ROOT / "output/manifests/tagged_aug85_v2.json"))
+    ap.add_argument("--name", default="tagged_aug85_v2")
+    ap.add_argument(
+        "--gap",
+        type=int,
+        default=15,
+        help="同一货框的相邻标注帧间隔超过多少帧就算两次拣货（15fps 下 15 帧=1 秒）",
+    )
     ap.add_argument("--val-ratio", type=float, default=0.5)
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
@@ -141,7 +161,7 @@ def main() -> int:
         if str(review.get("status") or "").lower() != "completed":
             skipped.append({"record_id": record_id, "reason": f"status={review.get('status')}"})
             continue
-        segs = build_gt_segments(review.get("verified_true") or [])
+        segs = build_gt_segments(review.get("verified_true") or [], gap=args.gap)
         if not segs:
             skipped.append({"record_id": record_id, "reason": "no_segments"})
             continue
@@ -230,9 +250,10 @@ def main() -> int:
             rec["split_role"] = "train"
 
     out = {
-        "name": "tagged_aug85_v1",
+        "name": args.name,
         "require_tags": list(TAG_NAMES),
         "split_unit": "segment",
+        "merge_gap_frames": args.gap,
         "val_ratio": args.val_ratio,
         "seed": args.seed,
         "n_records": len(records),
