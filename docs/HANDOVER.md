@@ -1,217 +1,151 @@
 # 交接：当前进度与下一步
 
-更新时间：2026-07-27
+更新时间：2026-08-06　分支：`exp/tagged-aug85-v1`
 
 ## 一句话
 
-判定单元从「人」改为「人-货框」对 + 补时序特征，**首次同时突破召回天花板和误报**：
-95.51% / FP 290（此前最好 94.23% / 306，且 94.23% 是含 nogate 在内所有方案的上限）。
+换到只含「8.3/8.4/8.5 新标注」的高质量数据集后重做了一遍，**漏报的瓶颈已确认在上游姿态估计
+而非拣货判定**（18 段漏报无一是判定算错）；模型侧还能压误报，但工作点未定。
 
-## 结论数据（28-clip，标真 156 段）
+28-clip 时代的结论已作废（标注质量问题），归档在
+[`archive/HANDOVER-28clip-2026-07-27.md`](archive/HANDOVER-28clip-2026-07-27.md)，
+其中的否定结论（站位代理、单目深度）仍有参考价值。
 
-| 包 | TP | FP | FN | 召回 |
-|----|----|----|----|------|
-| collector `rule-baseline-local-prod-test`（团队基线，仅供参考） | 147 | 430 | 9 | 94.23% |
-| `pickstate-nogate`（**本仓对照基准**，无门控） | 147 | 442 | 9 | 94.23% |
-| `pickstate-rule-v0`（硬规则门控） | 146 | 355 | 10 | 93.59% |
-| `pickstate-logistic-v1-t025`（按人判定，前一代最好） | 147 | 306 | 9 | 94.23% |
-| `pickstate-logistic-v1-t030` | 143 | 283 | 13 | 91.67% |
-| `pickstate-logistic-v1-t035` | 141 | 242 | 15 | 90.38% |
-| `pickstate-logistic-v1-t040` | 135 | 222 | 21 | 86.54% |
-| `pickstate-pairwise-v1-t015`（配对判定，11 维） | 147 | 278 | 9 | 94.23% |
-| `pickstate-pairwise-v1-t030` | 144 | 188 | 12 | 92.31% |
-| `pickstate-pairwise-v1-t035` | 142 | 164 | 14 | 91.03% |
-| `pickstate-pairwise-v1-t045` | 136 | 113 | 20 | 87.18% |
-| **`pickstate-pairwise-v2-t025_mcf2`（+时序，当前最好）** | **149** | **290** | **7** | **95.51%** |
-| **`pickstate-pairwise-v2-t030_mcf2`（同召回最省）** | **147** | **247** | **9** | **94.23%** |
-| `pickstate-pairwise-v2-t040_mcf2` | 144 | 177 | 12 | 92.31% |
-| `pickstate-pairwise-v2-t040_mcf3` | 139 | 120 | 17 | 89.10% |
-| `pickstate-pairwise-v2-t050_mcf3` | 136 | 87 | 20 | 87.18% |
+## 数据集与口径
 
-同召回横向对比（三代）：
+| 项 | 内容 |
+|----|------|
+| manifest | `output/manifests/tagged_aug85_v1.json`（`scripts/build_tagged_manifest.py` 生成） |
+| 规模 | 26 条 record、210 段，段级 5:5 划分（train 105 / val 105） |
+| 来源 | `data.db` 中带「8.3新标注 / 8.4新标注 / 8.5新标注」标签的 record，其余全部排除 |
+| 评估 | **只看段（事件）级漏报与误报，不看帧级**；`scripts/eval_tagged_val.py` |
+| 优先级 | **漏报最少优先，在此基础上误报最少** |
+| 线上口径 | 工作系统按 **15fps 抽帧**处理；离线数据是逐帧 25fps，须用 `--sample-fps 15` 模拟 |
 
-| 召回 | 按人判定 | 配对 11 维 | 配对 + 时序 |
-|------|---------|-----------|------------|
-| 95.51% | 达不到 | 333（v1 t030_mcf2） | **290** |
-| 94.23% | 306 | 278 | **247** |
-| 92.31% | — | 188 | **177** |
-| 87.18% | 222（86.54%） | 113 | **87** |
+## 当前配置与模型
 
-94.23% 曾是**含 nogate 在内所有方案的召回上限**（见下节漏报成因）。把连续帧门槛降到 2
-才捅破，而时序特征把降门槛带来的额外误报又赚了回来：v1 在 95.51% 要 333 FP，v2 只要 290。
+| 项 | 值 |
+|----|-----|
+| 配置 | `configs/pipeline.pairwise_v4_wscore.json` |
+| 模型 | `output/train/v4_wscore/model.json`（22 维，OOF AUC 0.8803） |
+| 训练集 | `output/train/pairs_v4_wscore.npz`（25fps 逐帧 + 手腕门槛 0.15，23572 样本） |
+| 手腕触发门槛 | **0.15**（角度特征仍走 0.3，不可混） |
+| 阈值 / 连续帧 | **未定**，见下方取舍前沿 |
 
-注意：以上为**同一 28-clip 上训练 + 评估**，数字偏乐观。三代模型都是全量拟合，对比公平。
-另外 `mcf=2` 的包与 nogate（`mcf=3`）对比时会出现「新增 FP」，那是告警门槛不同导致的，
-不是算法退化，看评估器给的 recall/FP 总数即可。
+**训练用 25fps、推理用 15fps** 是刻意的：训练集按 15fps 重建过，样本少 30% 反而变差。
 
-## 上线模型（`output/train/pair_logistic_v2/`，17 维）
+## 取舍前沿（val 105 段，41.5 分钟）
 
-配对级 GroupKFold OOF AUC = **0.9030**，样本 3185（正 1779 / 负 1406），28 组。
+| 漏段 | 召回 | 阈值 / 连续帧 | 误报事件 | 每小时误报 |
+|------|------|--------------|---------|-----------|
+| 18 | 82.86% | 0.10 / 1帧 | 1528 | 2212 |
+| 24 | 77.14% | 0.15 / 2帧 | 745 | 1078 |
+| 26 | 75.24% | 0.20 / 2帧 | 608 | 880 |
+| 28 | 73.33% | 0.24 / 2帧 | 526 | 761 |
+| 33 | 68.57% | 0.24 / 5帧 | 157 | 227 |
+| 36 | 65.71% | 0.35 / 6帧 | 75 | 109 |
 
-| 特征 | coef（标准化） | | 特征 | coef |
-|------|---------------|-|------|------|
-| `dwell_ratio_win` | **+1.02** | | `dwell_frames_norm` | +0.34 |
-| `wrist_speed_norm` | **−0.80** | | `wrist_bearing_x` | +0.29 |
-| `arm_torso_angle_max` | +0.79 | | `candidate_count` | −0.22 |
-| `center_dist_norm` | −0.77 | | `depth_ratio_delta` | +0.14 |
-| `elbow_angle_mean` | +0.54 | | `wrist_elevation_angle_max` | +0.10 |
-| `depth_ratio` | +0.53 | | `center_dist_delta` | +0.09 |
-| `wrist_bearing_y` | −0.49 | | `shoulder_hip_knee_angle_min` | −0.06 |
-| `ankle_max_speed_norm` | −0.36 | | `margin_gap` / `wrist_speed_win_mean` | ≈0 |
+严格按漏报优先取 0.10 / 1帧，但每小时 2212 次误报实际不可用；最严档位仍有每小时 109 次。
+误报口径为「未被任何标注段覆盖的告警事件」，偏严（详见日报第六节）。
 
-排前两位的都是时序量：**手在这个框里停留的窗口占比**、**手腕瞬时速度**（拣货时手在框内是慢的）。
+## 结论汇总
 
-## 消融结论（`output/train/pair_ablation_v2/ablation.md`）
+已采纳：
 
-| 特征组 | 维数 | OOF AUC | AUC(正 vs 邻框负) |
-|--------|------|---------|------------------|
-| 人体特征（对照基线） | 5 | 0.7336 | 0.6218 |
-| 人体 + 站位代理 | 9 | 0.7490 | 0.6493 |
-| 人体 + 框内位置 | 9 | 0.8373 | 0.8699 |
-| 人体 + 时序 | 11 | 0.8591 | 0.8170 |
-| 上线 11 维（人体 + 框内位置 + 候选框数） | 11 | 0.8379 | 0.8861 |
-| **上线 11 维 + 时序（= v2 上线）** | **17** | **0.9030** | **0.9081** |
-| 上线 11 维 + 深度 | 14 | 0.8450 | 0.8936 |
-| 上线 11 维 + 时序 + 深度 | 20 | 0.9071 | 0.9175 |
+| 改动 | 效果 |
+|------|------|
+| 触发手角度特征（替代左右聚合） | OOF AUC 0.8915 → 0.8989 |
+| 手腕触发门槛 0.30 → 0.15 | 召回上限 74.29% → 82.86%（15fps），同等漏报下误报也更低 |
+| 手腕置信度进特征 | 段级误报降 2%~19% |
+| 缺失值改均值填充（原 fail-open 0.55 = 必报） | 修掉训练/推理口径不一致 |
+| 提高连续帧要求 | 压误报效率最高的杠杆，优于提高分数阈值 |
+| 离线策略扫描工具 | 64 组合 13 秒，此前 3 组合 3 分钟 |
 
-三条结论：
+已否掉（不要再试）：
 
-1. **时序特征增益最大**：0.8379 → 0.9030。停留 + 速度直接替代了「连续帧门槛」这种硬规则，
-   而且是可学习的软判据，所以能一边把 `mcf` 降到 2 捞召回，一边压住多出来的误报。
-2. **「框内位置」是第二来源**（`depth_ratio` / `center_dist_norm` / `wrist_bearing_x,y`）。
-   这些量 `BoxTrigger` 一直在算，只是判定单元是「人」时无处安放。
-3. **免标定站位代理零边际贡献**（详见下节），`features/box_geometry.py` 保留但没进上线模型。
+| 尝试 | 为什么不行 |
+|------|-----------|
+| 头部朝向特征（鼻/眼/耳 5 点） | 全线零贡献，头部方位两维有害（0.8989 → 0.8922）。头部测的是「人站在哪、朝哪看」，不是「手有没有伸进去」 |
+| 左右镜像增强 | 特征本身左右对称，镜像后 21 维里只有 `wrist_bearing_x` 变号；左右手触发本就 7277:7270 均衡 |
+| 一人一帧只报一个框（互斥） | 只减 1~9 个误报。62% 的「邻框错」是不同人或不同时刻，互斥覆盖不到 |
+| 训练集按 15fps 重建 | 样本少 30%，损失盖过帧率口径一致的收益 |
 
-### 站位代理为什么没用
+## 漏报根因（26 段全部拆开，已出图）
 
-删掉站位代理三维后 AUC 从 0.8380 变 0.8379，对邻框判别甚至略有改善。原因：站位代理测的是
-「人离相机多远」，而问题是「手有没有伸进去」——人站在货架前手悬空时，脚的位置和真拣货一模一样。
+| 根因 | 段数 | 放宽门槛到 0.15 |
+|------|------|----------------|
+| 人在，手腕置信度不足 0.3（最低 0.19，因头/身体遮挡） | 12 | 部分救回 |
+| 能用的手不在框内，在框内的手被丢弃 | 7 | 部分救回 |
+| 手确实进框了，但进的是隔壁那格 | 7 | 救不回 |
 
-## 漏报成因（9 段全部拆开了）
+**没有一段是判定算法的问题。** 业务侧已确认「进隔壁格」那 7 段标注是对的，
+即姿态估计把手腕估偏了一格 —— 推理分辨率 852×480，货框内切半径仅 18~21 像素。
 
-对 nogate 的 9 个漏报段，逐段检查 BoxTrigger 在段内命中正确 token 的帧数与**最长连续帧数**
-（导出步长为 2，间隔 ≤2 记为连续）：
-
-| record | gt 框 | 命中帧 | 最长连续 | ext0.3 后最长连续 |
-|--------|-------|--------|---------|------------------|
-| clip_0002_00-24-56 | Box_3062 | 2 | 1 | 1 |
-| clip_0003_00-39-45 | Box_3040 | **0** | 0 | **17** |
-| clip_0005_00-07-59 | Box_3093 | 6 | 2 | 2 |
-| clip_0006_00-41-26 | Box_3022 | 1 | 1 | 2 |
-| clip_0010_00-18-36 | Box_4025 | 3 | 1 | 1 |
-| clip_0011_00-20-06 | Box_4027 | **0** | 0 | **4** |
-| clip_0013_00-11-22 | Box_2010 | **0** | 0 | 1 |
-| clip_0014_00-31-27 | Box_4018 | 8 | 2 | 2 |
-| clip_0023_00-49-39 | Box_4027 | 3 | 2 | 2 |
-
-**6/9 的漏报与模型无关**：BoxTrigger 明明命中了正确的框，只是连续帧数不够 3，被
-`alarm.min_consecutive_frames=3` 掐掉。剩下 3 段是手腕根本没落进框。
-
-`ext0.3` = 探测点沿小臂从手腕外推 0.3 倍前臂长（手掌位置估计）。collector 那边已经预存了
-`timeline_collision_hand_ext_0.20/0.30/0.40.parquet`，说明这条路团队也想过，但本仓 `BoxTrigger`
-目前只用手腕点。
-
-### 连续帧门槛的实测代价
-
-| 配置 | 召回 | FP |
-|------|------|----|
-| pairwise v1 t015 + mcf3 | 94.23% | 278 |
-| pairwise v1 t030 + mcf2 | 95.51% | 333 |
-| pairwise v1 t045 + mcf1 | 91.67% | 433 |
-| pairwise v1 t060 + mcf1 | 80.13% | 175 |
-| **pairwise v2 t025 + mcf2（+时序）** | **95.51%** | **290** |
-
-`mcf=2` 首次突破 94.23% 这个天花板（此前所有方案，含 nogate，都卡在这里）。
-在 v1 上代价是 FP 278 → 333；补上时序特征后同一召回只要 290，代价基本抵消。
-`mcf=1` 是灾难：单帧接触全部起报，FP 炸到 433 而召回反而更低。
-
-## 单目深度实验（结论：有信息，但不值得上线）
-
-`scripts/precompute_depth.py` 用 Depth Anything V2-Small 对 3185 个配对帧出深度，
-**只做同帧内比较**（手腕 5×5 中位 vs 货框多边形排除人体包围盒后的中位，再用该帧 P95−P5 归一化），
-规避单目深度的跨帧尺度漂移。产物 `output/depth/`（604K），全量跑 212s。
-
-特征方向完全符合预期：
-
-| | `depth_gap_norm` 中位 |
-|---|---|
-| 真拣货 | −0.008（手腕深度 ≈ 货框深度，手确实伸进去了） |
-| 误报 | +0.035（手腕明显更靠近相机，手悬在框外） |
-
-单特征判别力 AUC 0.66，进模型后 `depth_gap_norm` 系数 −0.64 排第三。但边际增益很小：
-
-| 特征组 | OOF AUC | AUC(正 vs 邻框负) |
-|--------|---------|------------------|
-| 上线 11 维 | 0.8379 | 0.8861 |
-| 上线 11 维 + 深度 | 0.8450 | 0.8936 |
-| 人体 + 深度（不含框内位置） | 0.7655 | 0.7024 |
-
-**+0.007 AUC，同召回下配对级 FP 只降 1.7%**，不值得在推理链路里挂一个 25M 参数的深度模型。
-根因：深度和「框内位置」回答的是同一个问题（手到底进没进框），而后者已经答得更好。
-最后一行说明深度单独用远不如框内位置，它是同类信息的弱化版本。
-
-补充时序特征后深度更边缘：17 维 0.9030 → 加深度 20 维 0.9071，仍是 +0.004。结论不变。
-
-代码保留在 `depth/` 与 `features/depth_geometry.py`，`build_pair_dataset.py --depth-dir` 可复现，
-但**未接入 pipeline**。
-
-## 关键诊断：误报到底来自哪
-
-对**前一代** `logistic-v1-t025` 的 306 个 FP 按原因分类（时间窗 ±45 帧 ≈ ±3s）：
-
-| 类型 | 数量 | 占比 |
-|------|------|------|
-| 同框、贴近标真段（判定边界） | 141 | 46% |
-| 邻框归属错（人在拣，算到隔壁格子） | 120 | 39% |
-| 时间外（真·拣货态误判） | 45 | 15% |
-
-配对判定就是冲第二类去的。注意在**精确帧**口径下邻框错只占配对负样本的 6.8%（221/3185），
-和这里的 39% 不矛盾——上表用了 ±45 帧时间窗，把「贴近标真段但框不同」也算进了邻框类。
-
-另外：FP 是逐帧计数，306 个 FP 实际只对应约 **150 次独立接触**（`cooldown_frames=0`）。
-该口径与团队 baseline 一致（比较公平），但绝对值被放大。
+图在 `output/viz/missed_segments/`，文件名前缀即根因分类，
+用 `scripts/render_missed_segments.py` 重出。
 
 ## 下一步
 
-1. **`BoxTrigger` 加手掌延伸探针**（`ext0.3`）— 攻剩下的零命中段。需改 `pipeline/box_trigger.py`
-   加 `probe_mode`，预计漏报能降到 3 段（98.08%）。注意延伸探针会同时抬高 FP，得连带重训配对模型。
-   这是目前唯一还没试的降漏报手段。
-2. **事件级去重口径**作辅助观察（主口径沿用团队现有的，保证可比）。逐帧 FP 把同一次误接触
-   重复计数约 2 倍，事件级更贴近人的感受。
-3. **扩标注**。28 条 record 是硬瓶颈，17 维模型在这个样本量上已经接近容量上限
-   （加深度 3 维只换来 +0.004），继续加特征的收益会越来越小。
+1. **定工作点** —— 需业务侧给出漏报/误报的可接受区间。
+2. **上游姿态精度是硬瓶颈** —— 更准的姿态模型或更高输入分辨率，是继续降漏报的唯一途径。
+3. **孤立误报（占 22.5%）尚未逐个定性** —— 用 `scripts/event_player.py` 在选定工作点下逐事件回放。
+4. **样本量仍是瓶颈** —— 26 条 record，加特征边际收益已很小（手腕置信度只换 +0.0006 AUC）。
 
-已做完并落地：配对判定、时序特征、`mcf` 3→2。
-已试过并否掉：免标定站位代理（零贡献）、单目深度（+0.004~0.007 AUC，不值推理成本）。
+## 常用命令
 
-**未定**：训练集只有 28 条 record 是硬瓶颈，扩标注的收益可能大于任何模型改动。
+```bash
+# 1) 生成 manifest（data.db 三标签 + 段级 5:5）
+.venv/bin/python scripts/build_tagged_manifest.py
 
-## 已验证的正确性
+# 2) 构建训练集（25fps 逐帧 + 手腕门槛 0.15）
+.venv/bin/python train/build_pair_dataset.py \
+  --manifest output/manifests/tagged_aug85_v1.json \
+  --wrist-score-min 0.15 --out output/train/pairs_v4_wscore.npz
 
-`BoxTrigger` 与 record 自带 `timeline.parquet` 逐帧比对：19369 帧中 19367 帧碰撞 token 完全一致。
-2 帧差异是本仓去掉了原实现「命中首框即 `break`」的限制，手腕落在重叠区时多记一个框——这是刻意的，
-邻框消歧需要这个信息。
+# 3) 训练
+.venv/bin/python train/fit_logistic.py \
+  --dataset output/train/pairs_v4_wscore.npz \
+  --out-dir output/train/v4_wscore --name v4_wscore --features <逗号分隔特征>
+
+# 4) 落分数（线上口径 15fps），跑一次即可
+.venv/bin/python scripts/dump_pair_scores.py \
+  --config configs/pipeline.pairwise_v4_wscore.json \
+  --split-role val --sample-fps 15 --out output/scores/v4_wscore_15fps
+
+# 5) 扫判定策略（秒级，任意组合）
+.venv/bin/python scripts/sweep_policy.py --scores output/scores/v4_wscore_15fps \
+  --thresholds 0.10,0.20,0.24,0.30,0.35 --min-frames 1,2,4,5,6 \
+  --out-dir output/sweep/v4_wscore_15fps
+
+# 6) 完整导出 + 段级评估（定下工作点后做）
+.venv/bin/python scripts/export_manifest28.py --config <config> \
+  --manifest output/manifests/tagged_aug85_v1.json --split-role val --out output/export/<包名>
+.venv/bin/python scripts/eval_tagged_val.py --pkg output/export/<包名>
+
+# 7) 漏段出图 / 事件回放
+.venv/bin/python scripts/render_missed_segments.py --wrist-min 0.15
+.venv/bin/python scripts/event_player.py --pkg output/export/<包名>   # 网页播放器
+```
 
 ## 产物位置
 
 | 内容 | 路径 |
 |------|------|
-| 导出包 + 评估报告 | `output/export/<包名>/`（含 `accuracy_report.md/.json`） |
-| 包间对比 | `output/compare/` |
-| 帧级（按人）数据与模型 | `output/train/dataset_v1.npz`、`output/train/logistic_v1/` |
-| 配对数据与模型 | `output/train/pairs_v2.npz`、`output/train/pair_logistic_v2/`（上线） |
-| 配对特征消融 | `output/train/pair_ablation_v2/ablation.md` |
-| 深度特征缓存 | `output/depth/`（未接入 pipeline） |
-| FN/FP 截图 | `output/viz/rule-v0-fn-fp/`（10 张 FN + 355 张 FP，另有 `.zip`） |
+| manifest | `output/manifests/tagged_aug85_v1.json` |
+| 训练集与模型 | `output/train/pairs_v4_wscore.npz`、`output/train/v4_wscore/` |
+| 配对分数（扫描输入） | `output/scores/<run>/` |
+| 策略扫描表 | `output/sweep/<run>/sweep.md` |
+| 导出包 + 段级评估 | `output/export/<包名>/eval_tagged_val.json` |
+| 漏段图 | `output/viz/missed_segments/` |
 
-## 坑（踩过的）
+## 坑
 
-- 导出必须按 baseline 帧号**全量**遍历，缺检测的帧也要产出空行。第一次漏了这点，
-  clip_0013 少了 1356 帧，告警连续帧计数与对照包错位。
-- 本仓货框取 record 自带 `manifest.annotation`，与 collector baseline 用的 reflection 临时标注
-  文件不是同一版本，所以 nogate 比团队 baseline 多 12 个 FP。**对照一律用本仓 nogate。**
-- collector 的评估脚本要用**系统 python3**（需 fastapi），本仓脚本要用 `.venv/bin/python`（需 pyarrow）。
-- 配对训练集只取 baseline 导出帧（`pose_frame_interval=2`），3185 条；若改用 record 全部帧会翻倍到
-  6354 条，但速度特征的采样间隔会和线上不一致。刻意保持与导出同口径。
-- 配对模式由 `configs/*.json` 的 `pair_state.enabled` 开关控制，不配置时 `runner.py` 走原路径。
-  改动后用 nogate 配置重导出 3 条与旧包逐字节 diff 验证过，输出完全一致。
+- **手腕门槛与角度特征门槛不是一回事**：`BoxTrigger` 用自己的 `wrist_score_min`（0.15），
+  角度特征仍走 `features/geometry.KPT_SCORE_MIN`（0.3）。混了会与训练口径不一致。
+- **抽帧必须在喂进 pipeline 之前做**：时序特征、平滑、连续帧计数都逐帧推进，
+  在全帧结果上后处理得到的参数搬不到线上。
+- 导出必须按 baseline 帧号全量遍历，无检测的帧也要产出空行，否则连续帧计数错位。
+- `build_pair_dataset.py` 与 `pipeline/runner.py` 两边的时序特征推进口径必须一致。
+- collector 评估脚本用**系统 python3**，本仓脚本用 `.venv/bin/python`。
+- 本仓段级评估（`eval_tagged_val.py`）中，误报判定用 **train+val 全部真值段**做覆盖检查，
+  否则会把 train 段上的正确告警算成误报。

@@ -25,64 +25,70 @@ python3 -m venv .venv   # 首次
 .venv/bin/python -m pytest tests/ -q
 ```
 
-## 标准回归流程
+## 标准评估流程
+
+数据集为 `output/manifests/tagged_aug85_v1.json`（`data.db` 中「8.3/8.4/8.5 新标注」三标签，
+26 条 record、210 段，段级 5:5）。**只看段（事件）级漏报与误报，不看帧级。**
+
+调参不要走完整导出——判定策略只影响「打完分之后怎么用分数」，落一次分数后秒级重放即可：
 
 ```bash
-# 1) 导出（本仓 venv）
-.venv/bin/python scripts/export_manifest28.py \
-  --config configs/pipeline.logistic_v1.json \
-  --out output/export/<包名>
+# 1) 落分数（线上口径 15fps），跑一次
+.venv/bin/python scripts/dump_pair_scores.py --config <config> \
+  --split-role val --sample-fps 15 --out output/scores/<run>
 
-# 2) 评估（collector 目录 + 系统 python）
-cd /home/hqit/workspace/visual-dps-data-collector
-python3 scripts/data/evaluate_inference_upload.py --in-place \
-  --dirs /home/hqit/workspace/visual-dps-pick-state/output/export/<包名>
+# 2) 扫阈值 / 连续帧（64 组合约 13 秒）
+.venv/bin/python scripts/sweep_policy.py --scores output/scores/<run> \
+  --thresholds 0.10,0.20,0.30 --min-frames 1,2,4,6 --out-dir output/sweep/<run>
 
-# 3) 对比（基准固定用 pickstate-nogate-prod-test）
-python3 scripts/data/compare_export_false_alarms.py \
-  --baseline /home/hqit/workspace/visual-dps-pick-state/output/export/pickstate-nogate-prod-test \
-  --experiment /home/hqit/workspace/visual-dps-pick-state/output/export/<包名> \
-  --out-dir /home/hqit/workspace/visual-dps-pick-state/output/compare
+# 3) 定下工作点后再完整导出 + 段级评估
+.venv/bin/python scripts/export_manifest28.py --config <config> \
+  --manifest output/manifests/tagged_aug85_v1.json --split-role val --out output/export/<包名>
+.venv/bin/python scripts/eval_tagged_val.py --pkg output/export/<包名>
 ```
+
+28-clip 时代那套（collector `evaluate_inference_upload.py` + `pickstate-nogate-prod-test` 基准）
+已作废，标注质量不可靠，别再拿来对照。
 
 ## 不变量（改代码时别破坏）
 
 - 导出帧号**必须**复用 baseline 导出包的 `frame_idx`；无检测的帧也要产出空行，否则告警连续帧计数与对照包错位
 - `is_picking` 等价于 `rule_alarm_collisions` 非空
 - 货框 token 格式 `Box_{box_id}`
-- 对照基准用本仓 `pickstate-nogate-prod-test`，**不要**直接对 collector 的 `rule-baseline-local-prod-test`（两者货框标注来源不同，会把标注差异算进算法效果）
+- **手腕门槛是两套，别混**：`BoxTrigger` 用自己的 `wrist_score_min`（当前 0.15）决定能否触发，
+  角度特征仍走 `features/geometry.KPT_SCORE_MIN`（0.3）。改任一边都要重建训练集
+- **抽帧必须在喂进 pipeline 之前做**（`adapters/frame_sampling.py`）。时序特征、分数平滑、
+  连续帧计数都逐帧推进，在全帧结果上后处理得到的参数搬不到线上
+- 段级评估算误报覆盖时要用 **train+val 全部真值段**，否则 train 段上的正确告警会被算成误报
 
 ## 训练
 
 ```bash
-# 按人判定（旧）
-.venv/bin/python train/build_dataset.py          # → output/train/dataset_v1.npz
-.venv/bin/python train/fit_logistic.py           # → output/train/logistic_v1/
-
-# 按「人-货框」对判定（当前）
-.venv/bin/python train/build_pair_dataset.py --out output/train/pairs_v2.npz \
-  [--depth-dir output/depth]                     # 深度维可选，未接入 pipeline
-.venv/bin/python train/eval_pair_features.py --dataset output/train/pairs_v2.npz \
-  --out-dir output/train/pair_ablation_v2        # 特征消融 + 阈值扫描
-.venv/bin/python train/fit_logistic.py \
-  --dataset output/train/pairs_v2.npz --out-dir output/train/pair_logistic_v2 \
-  --name pair_logistic_v2 --features <逗号分隔的特征子集>
+.venv/bin/python train/build_pair_dataset.py \
+  --manifest output/manifests/tagged_aug85_v1.json \
+  --wrist-score-min 0.15 --out output/train/pairs_v4_wscore.npz
+.venv/bin/python train/fit_logistic.py --dataset output/train/pairs_v4_wscore.npz \
+  --out-dir output/train/v4_wscore --name v4_wscore --features <逗号分隔的特征子集>
 ```
+
+**训练用 25fps 逐帧，推理用 15fps**：训练集按 15fps 重建过，样本少 30%，损失盖过口径一致的收益。
+所以 `build_pair_dataset.py` 不要传 `--sample-fps`，而 `dump_pair_scores.py` 必须传 `15`。
 
 时序特征（`features/pair_temporal.py`）有状态，**必须逐帧推进，包括没有骨架的空帧**，
 否则停留计数不清零。`build_pair_dataset.py` 与 `pipeline/runner.py` 两边口径必须一致。
 
-标签：按人时，帧号落在 `verified_true` 条目上为正；按对时，复刻 collector 的**区间**口径
-（连续同 token 的条目合并成段，配对落在段内且 token 匹配为正），与评估指标同口径。
+标签复刻 collector 的**区间**口径（连续同 token 的条目合并成段，配对落在段内且 token 匹配为正），
+与段级评估指标同口径。
 
-数据只有 **28 条 record**，分组泛化样本量就是 28，用 `GroupKFold(groups=record_id)`，慎用高容量模型。
+数据只有 **26 条 record**，分组泛化样本量就是 26，用 `GroupKFold(groups=record_id)`，慎用高容量模型。
+加特征的边际收益已经很小，别指望靠堆维度翻盘。
 
 ## 可视化
 
 ```bash
-.venv/bin/python scripts/render_fn_fp_frames.py \
-  --report output/export/<包名>/accuracy_report.json \
-  --out output/viz/<包名>
-```
+# 漏报段逐段出图（红框=标注框，黄框=手实际进的框，手腕标置信度，低于门槛画红圈）
+.venv/bin/python scripts/render_missed_segments.py --wrist-min 0.15
 
-输出「监控画面 + 骨架 + 货框」JPG，分 `fn/` 与 `fp/`。
+# 网页逐事件回放（正确/误报/漏报都停下等继续）
+.venv/bin/python scripts/event_player.py --pkg output/export/<包名>
+```
