@@ -7,9 +7,24 @@ from typing import Any
 
 import cv2
 
-from features.geometry import WRIST_LEFT, WRIST_RIGHT, read_kpt
+from features.geometry import WRIST_LEFT, WRIST_RIGHT
 
 WRIST_INDICES = (WRIST_LEFT, WRIST_RIGHT)
+
+
+def _raw_wrist(person: dict[str, Any], idx: int) -> tuple[float, float, float] | None:
+    """绕开 geometry.KPT_SCORE_MIN 直接取手腕。
+
+    触发门槛要能独立调低（漏报里有一批人手腕分数 0.19~0.29），
+    但角度特征仍走 0.3，否则与训练时的特征口径不一致。
+    """
+    kpts = person.get("keypoints") or []
+    if idx >= len(kpts):
+        return None
+    kp = kpts[idx]
+    if not isinstance(kp, (list, tuple)) or len(kp) < 2:
+        return None
+    return float(kp[0]), float(kp[1]), float(kp[2]) if len(kp) > 2 else 0.0
 
 
 class BoxTrigger:
@@ -22,7 +37,7 @@ class BoxTrigger:
         out: dict[str, dict[str, Any]] = {}
 
         for wrist_idx in WRIST_INDICES:
-            pt = read_kpt(person, wrist_idx)
+            pt = _raw_wrist(person, wrist_idx)
             if pt is None or pt[2] < self.wrist_score_min:
                 continue
             wx, wy = pt[0], pt[1]
@@ -42,6 +57,7 @@ class BoxTrigger:
                     "box": box,
                     "wrist_idx": wrist_idx,
                     "wrist_xy": (wx, wy),
+                    "wrist_score": pt[2],
                     "depth_ratio": depth_ratio,
                     "center_dist": center_dist,
                     "box_center": box.center,

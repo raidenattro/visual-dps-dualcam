@@ -15,8 +15,15 @@ from features.geometry import (
     KNEE_RIGHT,
     SHOULDER_LEFT,
     SHOULDER_RIGHT,
+    compute_side_angle_features,
     read_xy,
 )
+
+SIDE_FEATURE_KEYS = [
+    "arm_torso_angle_side",
+    "elbow_angle_side",
+    "wrist_elevation_angle_side",
+]
 
 PAIR_FEATURE_KEYS = [
     "depth_ratio",
@@ -29,6 +36,8 @@ PAIR_FEATURE_KEYS = [
     "stance_gap_norm",
     "person_height_norm",
     "stance_valid",
+    "wrist_score",
+    *SIDE_FEATURE_KEYS,
 ]
 
 
@@ -80,5 +89,9 @@ def compute_pair_features(
             (foot_y - shoulder_y) / h if foot_y is not None and shoulder_y is not None else None
         ),
         "stance_valid": 1.0 if used_ankle else 0.0,
+        # 触发这次命中的手腕有多可信。手被遮挡时姿态估计基本是猜的，
+        # 「在框里」这个证据的可靠性得让模型自己权衡，不能只靠一个硬门槛。
+        "wrist_score": float(hit.get("wrist_score") or 0.0),
     }
+    out.update(compute_side_angle_features(person, hit["wrist_idx"]))
     return out

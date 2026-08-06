@@ -51,6 +51,11 @@ def main() -> int:
     y = data["y"].astype(int)
     groups = data["groups"]
     feature_keys = [str(x) for x in data["feature_keys"].tolist()]
+    impute = (
+        np.asarray(data["impute"], dtype=np.float64)
+        if "impute" in data.files
+        else np.zeros(len(feature_keys))
+    )
 
     if args.features.strip():
         wanted = [k.strip() for k in args.features.split(",") if k.strip()]
@@ -59,6 +64,7 @@ def main() -> int:
             raise SystemExit(f"数据集中不存在这些特征：{unknown}")
         cols = [feature_keys.index(k) for k in wanted]
         X = X[:, cols]
+        impute = impute[cols]
         feature_keys = wanted
 
     out_dir = Path(args.out_dir)
@@ -112,6 +118,7 @@ def main() -> int:
         "feature_keys": feature_keys,
         "scaler_mean": [float(x) for x in scaler.mean_],
         "scaler_scale": [float(x) for x in scaler.scale_],
+        "impute": [float(x) for x in impute],
         "coef": [float(x) for x in coef],
         "intercept": float(clf.intercept_.ravel()[0]),
         "C": args.C,

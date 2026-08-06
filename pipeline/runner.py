@@ -225,6 +225,7 @@ class PickStatePipeline:
         record,
         *,
         frame_indices: set[int] | None = None,
+        on_frame=None,
     ) -> list[dict[str, Any]]:
         """跑完一条 record，返回与 collector 评估器兼容的 upload 行。"""
         infer_width = int(record.meta.get("infer_width") or record.ref.infer_width or 1)
@@ -270,6 +271,8 @@ class PickStatePipeline:
             result = self.process_frame(
                 ctx, feature_rows=rows, box_trigger=trigger, infer_height=infer_height
             )
+            if on_frame is not None:
+                on_frame(export_key, result)
 
             probs = [d.score_smooth for d in result.pick_decisions]
             out.append(

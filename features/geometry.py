@@ -73,6 +73,42 @@ def angle_from_downward(dx: float, dy: float) -> float | None:
     return math.degrees(math.acos(max(-1.0, min(1.0, dy / norm))))
 
 
+def compute_side_angle_features(
+    person: dict[str, Any], wrist_idx: int
+) -> dict[str, float | None]:
+    """只算伸进货框那一侧的手臂角度。
+
+    左右聚合版（max/mean）会把没伸手那条胳膊的姿态混进来——实测 98% 的命中帧
+    两条胳膊都可见，聚合等于常态性污染。
+    """
+    if int(wrist_idx) == WRIST_LEFT:
+        sh_idx, el_idx, wr_idx = SHOULDER_LEFT, ELBOW_LEFT, WRIST_LEFT
+    else:
+        sh_idx, el_idx, wr_idx = SHOULDER_RIGHT, ELBOW_RIGHT, WRIST_RIGHT
+
+    sh, el, wr = read_xy(person, sh_idx), read_xy(person, el_idx), read_xy(person, wr_idx)
+    hip_c = _center(person, HIP_LEFT, HIP_RIGHT)
+
+    out: dict[str, float | None] = {
+        "arm_torso_angle_side": None,
+        "elbow_angle_side": None,
+        "wrist_elevation_angle_side": None,
+    }
+    if hip_c is not None and sh is not None and el is not None:
+        ang = angle_at_joint(hip_c, sh, el)
+        if ang is not None:
+            out["arm_torso_angle_side"] = round(ang, 2)
+    if sh is not None and el is not None and wr is not None:
+        ang = angle_at_joint(sh, el, wr)
+        if ang is not None:
+            out["elbow_angle_side"] = round(ang, 2)
+    if sh is not None and wr is not None:
+        ang = angle_from_downward(wr[0] - sh[0], wr[1] - sh[1])
+        if ang is not None:
+            out["wrist_elevation_angle_side"] = round(ang, 2)
+    return out
+
+
 def compute_angle_features(person: dict[str, Any]) -> dict[str, float | None]:
     out: dict[str, float | None] = {}
     hip_c = _center(person, HIP_LEFT, HIP_RIGHT)
