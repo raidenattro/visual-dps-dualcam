@@ -6,8 +6,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from experts.action_gate import ActionGate
 from experts.linear_expert import LinearPickExpert
 from experts.rule_expert import RulePickExpert
+from features.action_temporal import ActionSequenceTracker
 from features.bank import FeatureBank
 from features.box_geometry import compute_pair_features
 from features.pair_temporal import PairTemporalTracker
@@ -62,11 +64,25 @@ class PickStatePipeline:
         )
         self._pair_temporal: PairTemporalTracker | None = None
 
+        # 动作门控（A）与邻框几何门控（B）：默认关闭，由配置开关
+        self.action_gate = ActionGate(pair_cfg.get("action_gate") or {})
+        box_gate = pair_cfg.get("box_gate") or {}
+        self.box_gate_enabled = bool(box_gate.get("enabled"))
+        self.box_depth_min = float(box_gate.get("depth_ratio_min", 0.0))
+        self.box_center_max = float(box_gate.get("center_dist_max", 99.0))
+        self._action_tracker: ActionSequenceTracker | None = None
+
     def configure_dims(self, *, infer_width: int, infer_height: int, video_fps: float) -> None:
         """时序 tracker 需要画面尺寸与帧率，run_record 里按 record 配置。"""
         self._pair_temporal = PairTemporalTracker(
             infer_width=infer_width, infer_height=infer_height, video_fps=video_fps
         )
+        if self.action_gate.enabled:
+            self._action_tracker = ActionSequenceTracker(
+                window_frames=self.action_gate.window_frames,
+                step=self.action_gate.step,
+                infer_height=infer_height,
+            )
 
     def reset_session(self) -> None:
         self._score_smoothers.clear()
@@ -76,6 +92,8 @@ class PickStatePipeline:
             self.pair_scorer.reset()
         if self._pair_temporal is not None:
             self._pair_temporal.reset()
+        if self._action_tracker is not None:
+            self._action_tracker.reset()
         self.alarm.reset()
 
     def _smoother(self, track_id: str) -> ScalarSmoother:
@@ -142,6 +160,17 @@ class PickStatePipeline:
 
         temporal_feats = self._pair_temporal.update(ctx.frame_idx, active_pairs)
 
+        # 动作门控：先更新每人骨架历史，再按人缓存是否放行
+        action_ok: dict[str, tuple[bool, float]] = {}
+        if self.action_gate.enabled and self._action_tracker is not None:
+            self._action_tracker.update(ctx.frame_idx, feature_rows)
+            for row, key, _hit, _pair in pending:
+                track_id = key.split("|", 1)[0]
+                if track_id in action_ok:
+                    continue
+                feat = self._action_tracker.features(ctx.frame_idx, track_id)
+                action_ok[track_id] = self.action_gate.allow(feat)
+
         for row, key, hit, pair in pending:
             pair_row = dict(row)
             pair_row.update(pair)
@@ -150,6 +179,25 @@ class PickStatePipeline:
             smooth = self._pair_smoother(key).update(raw)
             smooth_v = float(smooth if smooth is not None else raw)
             is_picking = smooth_v >= self.pair_threshold
+            track_id = key.split("|", 1)[0]
+            gate_detail: dict[str, Any] = {}
+            if is_picking and self.action_gate.enabled:
+                ok, act_p = action_ok.get(track_id, (True, 1.0))
+                gate_detail["action_score"] = act_p
+                if not ok:
+                    is_picking = False
+                    gate_detail["blocked_by"] = "action_gate"
+            if is_picking and self.box_gate_enabled:
+                depth = float(hit.get("depth_ratio") or pair.get("depth_ratio") or 0.0)
+                center = float(pair.get("center_dist_norm") or 99.0)
+                gate_detail["depth_ratio"] = depth
+                gate_detail["center_dist_norm"] = center
+                if depth < self.box_depth_min or center > self.box_center_max:
+                    is_picking = False
+                    gate_detail["blocked_by"] = "box_gate"
+            if gate_detail:
+                detail = dict(detail or {})
+                detail["gates"] = gate_detail
             decisions.append(
                 PickDecision(
                     person_track_id=key,
