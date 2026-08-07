@@ -27,26 +27,27 @@ python3 -m venv .venv   # 首次
 
 ## 标准评估流程
 
-数据集为 `output/manifests/tagged_aug85_v2.json`（`data.db` 中「8.3/8.4/8.5 新标注」三标签，
-28 条 record、477 次拣货，段级 5:5）。**只看事件级漏报与误报，不看帧级。**
-一段 = 同一货框、标注帧间隔 ≤15 帧；跟踪 ID 不参与切段。v1（210 段）已作废。
+数据集默认 `output/manifests/tagged_aug85_v4.json`（`data.db`「8.3–8.7 新标注」，
+36 条 record、862 段，段级 5:5）。对照可用 v2（28/477）。**只看事件级漏报与误报，不看帧级。**
+一段 = 同一货框、标注帧间隔 ≤15 帧；跟踪 ID 不参与切段。v1 已作废。
+门控配置：`configs/pipeline.v5_gated.json`（`action_gate` / `box_gate` 开关与阈值可配）。
 
 调参不要走完整导出——判定策略只影响「打完分之后怎么用分数」，落一次分数后秒级重放即可：
 
 ```bash
 # 1) 落分数（线上口径 15fps），跑一次
 .venv/bin/python scripts/dump_pair_scores.py --config configs/pipeline.v5.json \
-  --manifest output/manifests/tagged_aug85_v2.json --split-role val \
-  --sample-fps 15 --out output/scores/<run>
+  --manifest output/manifests/tagged_aug85_v4.json --split-role val \
+ --sample-fps 15 --out output/scores/<run>
 
 # 2) 扫阈值 / 连续帧
 .venv/bin/python scripts/sweep_policy.py --scores output/scores/<run> \
-  --manifest output/manifests/tagged_aug85_v2.json \
+  --manifest output/manifests/tagged_aug85_v4.json \
   --thresholds 0.10,0.20,0.30 --min-frames 1,2,4,6 --out-dir output/sweep/<run>
 
 # 3) 定下工作点后再完整导出 + 段级评估
 .venv/bin/python scripts/export_manifest28.py --config <config> \
-  --manifest output/manifests/tagged_aug85_v2.json --split-role val --out output/export/<包名>
+  --manifest output/manifests/tagged_aug85_v4.json --split-role val --out output/export/<包名>
 .venv/bin/python scripts/eval_tagged_val.py --pkg output/export/<包名>
 ```
 
@@ -68,7 +69,7 @@ python3 -m venv .venv   # 首次
 
 ```bash
 .venv/bin/python train/build_pair_dataset.py \
-  --manifest output/manifests/tagged_aug85_v2.json \
+  --manifest output/manifests/tagged_aug85_v4.json \
   --wrist-score-min 0.15 --sample-fps 15 --out output/train/pairs_v5.npz
 .venv/bin/python train/fit_logistic.py --dataset output/train/pairs_v5.npz \
   --out-dir output/train/v5_base --name pair_logistic_v5 --features <逗号分隔的特征子集>
@@ -81,8 +82,8 @@ python3 -m venv .venv   # 首次
 
 标签：配对落在一次拣货段内且货框匹配为正。勿用模型高分「误报」补正样本再训（自我确认）。
 
-数据只有 **28 条 record**，分组泛化样本量就是 28，用 `GroupKFold(groups=record_id)`，慎用高容量模型。
-加特征的边际收益已经很小；当前误报数字被标注漏标放大，先审完再调模型。
+分组泛化样本量按 record 数计（v4=36），用 `GroupKFold(groups=record_id)`，慎用高容量模型。
+加特征的边际收益已经很小；误报侧优先用可配门控（A/B），勿再靠补标重训翻盘。
 
 ## 可视化 / 审核
 
@@ -91,7 +92,7 @@ python3 -m venv .venv   # 首次
 .venv/bin/python scripts/render_missed_segments.py --wrist-min 0.15
 
 # 拣货事件播放器（确认一次拣货定义）
-.venv/bin/python scripts/event_player.py --manifest output/manifests/tagged_aug85_v2.json
+.venv/bin/python scripts/event_player.py --manifest output/manifests/tagged_aug85_v4.json
 
 # 误报人工审核（四档：拣这个框 / 拣别的框 / 没拣货 / 不确定）
 .venv/bin/python scripts/build_fp_audit_set.py
