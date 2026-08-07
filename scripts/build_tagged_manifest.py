@@ -25,7 +25,7 @@ from adapters.collector_paths import load_paths
 from adapters.record_reader import RecordRef, load_boxes, record_dir
 from adapters.review_labels import camera_review_aliases, normalize_box_token, normalize_verified_true
 
-TAG_NAMES = ("8.3新标注", "8.4新标注", "8.5新标注")
+TAG_NAMES = ("8.3新标注", "8.4新标注", "8.5新标注", "8.6新标注", "8.7新标注")
 
 
 def _data_db(paths) -> Path:
@@ -35,13 +35,14 @@ def _data_db(paths) -> Path:
 def _tagged_record_ids(db: Path) -> list[tuple[str, str]]:
     """返回 [(record_id, tag_name), ...]；一条 record 若多标签取第一个命中。"""
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    placeholders = ", ".join("?" for _ in TAG_NAMES)
     rows = list(
         con.execute(
-            """
+            f"""
             SELECT rt.record_id, t.name
             FROM record_tags rt
             JOIN tags t ON t.id = rt.tag_id
-            WHERE t.name IN (?, ?, ?)
+            WHERE t.name IN ({placeholders})
             ORDER BY t.name, rt.record_id
             """,
             TAG_NAMES,
@@ -129,8 +130,8 @@ def build_gt_segments(verified_true: list[Any], *, gap: int = 15) -> list[dict[s
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="三标签段级 5:5 manifest")
-    ap.add_argument("--out", default=str(ROOT / "output/manifests/tagged_aug85_v2.json"))
-    ap.add_argument("--name", default="tagged_aug85_v2")
+    ap.add_argument("--out", default=str(ROOT / "output/manifests/tagged_aug85_v4.json"))
+    ap.add_argument("--name", default="tagged_aug85_v4")
     ap.add_argument(
         "--gap",
         type=int,
