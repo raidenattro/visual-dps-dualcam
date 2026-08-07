@@ -1,11 +1,11 @@
 # 交接：当前进度与下一步
 
-更新时间：2026-08-07　分支：`exp/tagged-aug85-v1`
+更新时间：2026-08-07 晚　分支：`exp/event-confirm`（基线成果在 `exp/tagged-aug85-v1`）
 
 ## 一句话
 
-误报四档审完（真误报≈95%）；**A 动作门控 + B 邻框深度**已写入 pipeline（可配开关/阈值）。
-评估集扩到 8.6/8.7（`tagged_aug85_v4`）。工作点建议：**先开 A（稳）**，B 视召回预算。
+门控与 v4 评估已落地；**事件轨迹形态诊断**表明「像不像拣货」尚未明显独立于「分高/段长/A 门控」，
+骨架+框路径增量有限。生产仍建议 **先开 A**；下一阶段转向非逐帧配对路线（见文末）。
 
 ## 数据集
 
@@ -89,8 +89,24 @@ v1 作废；v3 补标重训（v6）端到端无收益，勿再推。
 
 离线扫门控：`scripts/eval_action_gate.py`、`scripts/eval_box_gate.py`。
 
-## 下一步
+## 事件轨迹诊断（`exp/event-confirm`，已做）
 
-1. 定生产默认：只 A vs A+B（看新摄像头召回预算）
-2. `v5_gated` 端到端导出核对
-3. 漏报若还要砍：上游姿态（NO_PAIR），不在本仓策略层
+脚本：`scripts/analyze_event_trajectories.py`、`scripts/analyze_rich_trajectories.py`  
+报告：`output/sweep/event_confirm/trajectory_*.md`（gitignore，需本地重跑）
+
+| 发现 | 含义 |
+|------|------|
+| FP 里 ~42% 为单帧命中事件；TP 几乎都是多帧 | 时序有油，但「连续帧」太粗 |
+| score/depth/center 平均曲线有结构 | 肉眼像拣货过程 |
+| 纯形态 AUC 多 <0.65；水平量（peak/span/action 均值）才强 | 形态未独立于分高段长 |
+| 富轨迹（腕速/臂角/动作分相位） | 动作包络、臂角水平强，与 A 门控同源；斜率增量有限 |
+
+结论：不宜再在骨架+框上堆连续帧/形态门控；换信息源。
+
+## 下一步（已入 backlog）
+
+1. **框 ROI 时序变化**（光流/帧差/纹理）— 不依赖腕点是否配对  
+2. **专用手/前臂检测** — 缓解全身 RTMPose 的 NO_PAIR / 抖腕  
+3. **事件级 Temporal Action Localization** — 片段输入，非逐帧人-框配对  
+
+残留（骨架路径收尾，可选）：定生产只 A vs A+B；`v5_gated` 端到端导出核对。
