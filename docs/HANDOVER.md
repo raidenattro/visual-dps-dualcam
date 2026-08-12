@@ -1,11 +1,11 @@
 # 交接：当前进度与下一步
 
-更新时间：2026-08-07 晚　分支：`exp/event-confirm`（基线成果在 `exp/tagged-aug85-v1`）
+更新时间：2026-08-12　分支：`exp/event-confirm`（基线成果在 `exp/tagged-aug85-v1`）
 
 ## 一句话
 
-门控与 v4 评估已落地；**事件轨迹形态诊断**表明「像不像拣货」尚未明显独立于「分高/段长/A 门控」，
-骨架+框路径增量有限。生产仍建议 **先开 A**；下一阶段转向非逐帧配对路线（见文末）。
+门控与 v4 评估已落地；轨迹诊断表明骨架+框再堆形态门控希望有限。生产仍建议 **先开 A**。  
+**算法/模型已并入产品仓** `/home/hqit/workspace/visual-dps-xugang-dev`（`app/pick_state` + `event-worker-2`，远程 HQIT `exp/event-worker-2`）；本仓继续作试验场，运行时勿再被产品依赖。
 
 ## 数据集
 
