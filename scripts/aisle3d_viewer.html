@@ -1,0 +1,1487 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8"/>
+<title>拣货巷道 3D</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; color: #ddd; font: 12px/1.35 system-ui, sans-serif; }
+  #c { display: block; width: 100%; height: 100%; }
+  #panel {
+    position: absolute; top: 10px; right: 10px; width: 280px; max-height: calc(100% - 70px);
+    overflow: auto; background: rgba(18,18,18,.9); border: 1px solid #333; padding: 10px 12px;
+  }
+  #panel h1 { margin: 0 0 6px; font-size: 14px; color: #fff; font-weight: 600; }
+  #panel .muted { color: #8a8a8a; margin-bottom: 8px; }
+  label { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+  label span { width: 92px; color: #bbb; flex-shrink: 0; }
+  label input[type=range] { flex: 1; min-width: 0; }
+  label b { width: 42px; text-align: right; font-weight: 500; color: #eee; }
+  #stats { margin-top: 8px; color: #9ad; }
+  #bar {
+    position: absolute; left: 12px; right: 304px; bottom: 12px;
+    background: rgba(18,18,18,.9); border: 1px solid #333; padding: 8px 12px;
+    display: flex; gap: 12px; align-items: center;
+  }
+  #bar input[type=range] { flex: 1; }
+  #vidwrap {
+    position: absolute; left: 12px; top: 12px;
+    width: var(--vidw, 360px); max-width: calc(100% - 328px);
+    background: rgba(18,18,18,.9); border: 1px solid #333; padding: 6px;
+  }
+  body.annot #vidwrap { width: calc(100% - 328px); }
+  body.annot #bar { right: 316px; }
+  #tabs { position: absolute; left: 12px; top: 12px; z-index: 5; display: none; }
+  #modeRow { display: flex; gap: 6px; margin-bottom: 6px; }
+  #modeRow button.on { background: #3a5a7a; border-color: #5c8; }
+  #annot { display: none; }
+  body.annot #annot { display: block; }
+  body.annot #panelMain { display: none; }
+  #annot input[type=number] { width: 62px; background: #222; color: #ddd; border: 1px solid #444; }
+  #annot table { border-collapse: collapse; width: 100%; margin: 4px 0; }
+  #annot th, #annot td { padding: 2px 3px; text-align: left; font-weight: 400; color: #bbb; }
+  #annot td input { width: 100%; }
+  .wallrow.active td { background: #24323d; }
+  #annotHint { color: #e0b060; min-height: 2.4em; }
+  #vidwrap video { display: block; width: 100%; background: #000; }
+  #vidbox { position: relative; background: #000; }
+  #skel2d { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  body.annot #skel2d { pointer-events: auto; cursor: crosshair; }
+  #vidwrap select { width: 100%; margin-bottom: 4px; background: #222; color: #ddd; border: 1px solid #444; font-size: 12px; }
+  #vidwrap .cap { color: #8a8a8a; margin-top: 4px; }
+  #layers { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 5px; }
+  #layers label { display: inline-flex; align-items: center; gap: 3px; margin: 0; cursor: pointer; }
+  #layers label span { width: auto; color: #bbb; }
+  #layers input { margin: 0; }
+  #zoom { display: inline-flex; gap: 2px; margin-left: auto; }
+  #zoom button { padding: 0 6px; font-size: 11px; line-height: 18px; }
+  #zoom button.on { background: #3a5a7a; border-color: #5c8; }
+  button { background: #2a2a2a; color: #eee; border: 1px solid #444; padding: 4px 10px; cursor: pointer; }
+  .dot { display: inline-block; width: 8px; height: 8px; margin-right: 4px; vertical-align: middle; }
+  #saveRow { display: flex; gap: 6px; margin: 8px 0 4px; }
+  #saveRow button { flex: 1; }
+  #saveMsg { color: #8c8; min-height: 1.2em; }
+</style>
+</head>
+<body>
+<div id="vidwrap">
+  <select id="selRecord"></select>
+  <div id="vidbox">
+    <video id="vid" playsinline muted></video>
+    <canvas id="skel2d"></canvas>
+  </div>
+  <div id="layers">
+    <label><input type="checkbox" data-ly="plane" checked><span>拣货面</span></label>
+    <label><input type="checkbox" data-ly="boxes" checked><span>货框</span></label>
+    <label><input type="checkbox" data-ly="gt" checked><span>GT高亮</span></label>
+    <label><input type="checkbox" data-ly="kpt2d" checked><span>2D骨架</span></label>
+    <label><input type="checkbox" data-ly="reproj" checked><span>3D反投影</span></label>
+    <span id="zoom">
+      <button data-z="1">×1</button>
+      <button data-z="2">×2</button>
+      <button data-z="3">×3</button>
+    </span>
+  </div>
+</div>
+<div id="panel">
+  <h1>拣货巷道 3D</h1>
+  <div id="meta" class="muted"></div>
+  <div id="modeRow">
+    <button type="button" id="mode3d" class="on">3D</button>
+    <button type="button" id="modeAnnot">标注拣货面</button>
+  </div>
+  <div id="panelMain">
+    <div class="muted">相机可由标注反解；也可用滑条手调。</div>
+    <div id="sliders"></div>
+    <div id="saveRow">
+      <button type="button" id="btnSave">保存到本机位</button>
+      <button type="button" id="btnReset">恢复默认</button>
+    </div>
+    <div id="saveMsg"></div>
+    <div id="stats"></div>
+    <div class="legend">
+      <span class="dot" style="background:#cc3344"></span>GT
+      <span class="dot" style="background:#2f6f9f"></span>右墙
+      <span class="dot" style="background:#3d8a5a"></span>左墙
+      <span class="dot" style="background:#66e0ff"></span>标注人
+      <span class="dot" style="background:#ff5fa8"></span>3D反投影
+      <span class="dot" style="background:#ffa23c"></span>朝向
+    </div>
+    <div class="muted">拖拽旋转 · 滚轮缩放 · 右键平移</div>
+  </div>
+  <div id="annot">
+    <div id="annotHint"></div>
+    <table>
+      <tr><th>墙</th><th>面宽 m</th><th>面高 m</th><th>底沿离地 m<br><span class="muted">贴地填 0</span></th><th></th></tr>
+      <tbody id="wallRows"></tbody>
+    </table>
+    <label><span>巷道净宽 m</span><input type="number" id="dimAisle" step="0.01" value="1.70"></label>
+    <div class="muted" style="margin-top:6px">卷尺初值（只作先验）</div>
+    <label><span>相机高 m</span><input type="number" id="priCamH" step="0.05" value="3.00"></label>
+    <label><span>离近端 m</span><input type="number" id="priDist" step="0.05" value="1.50"></label>
+    <label><span>俯仰 °</span><input type="number" id="priPitch" step="1" value="45"></label>
+    <label><span>偏航 °</span><input type="number" id="priYaw" step="1" value="0"></label>
+    <div id="saveRow">
+      <button type="button" id="btnUndo">撤销点</button>
+      <button type="button" id="btnClearWall">清空本墙</button>
+    </div>
+    <div id="saveRow">
+      <button type="button" id="btnSaveCalib">保存标注</button>
+      <button type="button" id="btnSolve">反解相机</button>
+    </div>
+    <div id="solveMsg" class="muted"></div>
+  </div>
+</div>
+<div id="bar">
+  <button id="play">播放</button>
+  <input id="frameSlider" type="range" min="0" max="0" value="0"/>
+  <span id="frameLabel"></span>
+</div>
+<canvas id="c"></canvas>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.1/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const LANK = 15, RANK = 16, LHIP = 11, RHIP = 12, NOSE = 0, LSHO = 5, RSHO = 6;
+const BONES = [
+  [LHIP, RHIP, 0.30], [LHIP, 13, 0.45], [13, LANK, 0.43],
+  [RHIP, 14, 0.45], [14, RANK, 0.43],
+  [LHIP, LSHO, 0.52], [RHIP, RSHO, 0.52], [LSHO, RSHO, 0.36],
+  [LSHO, 7, 0.28], [7, 9, 0.25], [RSHO, 8, 0.28], [8, 10, 0.25],
+  [LSHO, NOSE, 0.28], [RSHO, NOSE, 0.28],
+];
+const SLIDER_DEFS = [
+  ['camH', '相机高度 m', 1.5, 5, 0.05],
+  ['camDist', '离近端 m', 0.3, 4, 0.05],
+  ['camX', '相机横移 m', -1.2, 1.2, 0.01],
+  ['pitch', '俯仰低头 °', 0, 80, 1],
+  ['yaw', '偏航 °', -40, 40, 1],
+  ['roll', '滚转 °', -25, 25, 0.5],
+  ['fovH', '水平 FOV °', 40, 130, 1],
+  ['aisle', '巷道宽 m', 1.0, 2.8, 0.05],
+  ['boxW', '格沿巷道 m', 0.2, 0.8, 0.01],
+  ['boxH', '格高度 m', 0.2, 0.7, 0.01],
+  ['boxD', '格进深 m', 0.2, 0.9, 0.01],
+  ['baseY', '底层离地 m', 0, 0.6, 0.01],
+  ['kptMin', '关键点门槛', 0.05, 0.6, 0.01],
+  ['syncMs', '视频同步 ms', -1000, 1000, 10],
+];
+
+const DEFAULTS = {
+  camH: 3.0, camDist: 1.5, camX: 0.0, pitch: 45.0, yaw: 0.0, roll: 0.0, fovH: 90.0,
+  aisle: 1.7, boxW: 0.42, boxH: 0.36, boxD: 0.48, baseY: 0.12, kptMin: 0.25, syncMs: 0,
+};
+const INDEX = await fetch('/api/index.json').then((r) => r.json());
+let SCENE = {
+  defaults: DEFAULTS, frames: [], boxes: [], segments: [],
+  edges: [[0,1],[0,2],[1,3],[2,4],[5,6],[5,7],[7,9],[6,8],[8,10],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16],[0,5],[0,6]],
+  fps: 25, camera_slug: '', record_id: '', has_video: false, image_size: [852, 480],
+};
+let viewFrames = [];
+let currentSeg = null;
+const P = { ...DEFAULTS };
+function getStoreKey() { return `aisle3d.params.${SCENE.camera_slug || 'default'}`; }
+function loadParamsForCamera() {
+  Object.assign(P, DEFAULTS);
+  try {
+    const saved = JSON.parse(localStorage.getItem(getStoreKey()) || 'null');
+    if (saved && typeof saved === 'object') {
+      for (const k of Object.keys(DEFAULTS)) {
+        if (typeof saved[k] === 'number' && Number.isFinite(saved[k])) P[k] = saved[k];
+      }
+    }
+  } catch { /* ignore */ }
+  for (const [key, , , , step] of SLIDER_DEFS) {
+    const inp = document.querySelector(`input[data-k="${key}"]`);
+    if (!inp) continue;
+    inp.value = String(P[key]);
+    const b = inp.parentElement.querySelector('b');
+    if (b) b.textContent = Number(P[key]).toFixed(step < 1 ? 2 : 0);
+  }
+}
+
+function persistHint(text) {
+  const el = document.getElementById('saveMsg');
+  if (el) el.textContent = text;
+}
+function saveParams() {
+  localStorage.setItem(getStoreKey(), JSON.stringify(P));
+  persistHint(`已保存 · ${SCENE.camera_slug}`);
+}
+function resetParams() {
+  Object.assign(P, DEFAULTS);
+  localStorage.removeItem(getStoreKey());
+  loadParamsForCamera();
+  persistHint(`已恢复默认 · ${SCENE.camera_slug}`);
+  rebuild();
+}
+
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const viewCam = new THREE.PerspectiveCamera(50, 1, 0.05, 80);
+viewCam.position.set(4.2, 3.2, -3.6);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111111);
+const controls = new OrbitControls(viewCam, canvas);
+controls.target.set(0, 0.9, 1.0);
+controls.enableDamping = true;
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const dir = new THREE.DirectionalLight(0xffffff, 0.75);
+dir.position.set(2, 6, -2);
+scene.add(dir);
+scene.add(new THREE.GridHelper(10, 20, 0x3a3a3a, 0x2a2a2a));
+scene.add(new THREE.AxesHelper(0.9));
+
+const boxGroup = new THREE.Group();
+const skelGroup = new THREE.Group();
+const extraGroup = new THREE.Group();
+scene.add(boxGroup, skelGroup, extraGroup);
+const jointGeo = new THREE.SphereGeometry(0.035, 10, 10);
+
+document.getElementById('meta').textContent = '选择机位与拣货段';
+
+const slidersEl = document.getElementById('sliders');
+for (const [key, name, min, max, step] of SLIDER_DEFS) {
+  const lab = document.createElement('label');
+  lab.innerHTML = `<span>${name}</span><input type="range" min="${min}" max="${max}" step="${step}" data-k="${key}"><b></b>`;
+  slidersEl.appendChild(lab);
+  const inp = lab.querySelector('input');
+  inp.value = String(P[key]);
+  lab.querySelector('b').textContent = Number(P[key]).toFixed(step < 1 ? 2 : 0);
+  inp.addEventListener('input', () => {
+    P[key] = Number(inp.value);
+    lab.querySelector('b').textContent = P[key].toFixed(step < 1 ? 2 : 0);
+    persistHint('未保存');
+    rebuild();
+  });
+}
+document.getElementById('btnSave').onclick = saveParams;
+document.getElementById('btnReset').onclick = resetParams;
+
+function add(a, b) { return [a[0]+b[0], a[1]+b[1], a[2]+b[2]]; }
+function sub(a, b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+function mul(a, s) { return [a[0]*s, a[1]*s, a[2]*s]; }
+function dot(a, b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+function cross(a, b) {
+  return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+}
+function norm(a) {
+  const n = Math.hypot(a[0], a[1], a[2]) || 1;
+  return mul(a, 1 / n);
+}
+
+/** 世界系 X 横跨巷道、Y 向上、Z 沿巷道；相机无滚转，图像 u 向右、v 向下。 */
+function camAxes() {
+  const pitch = P.pitch * Math.PI / 180;
+  const yaw = P.yaw * Math.PI / 180;
+  const fwd = [
+    Math.sin(yaw) * Math.cos(pitch),
+    -Math.sin(pitch),
+    Math.cos(yaw) * Math.cos(pitch),
+  ];
+  const C = [P.camX, P.camH, -P.camDist];
+  const r0 = norm(cross(fwd, [0, 1, 0]));
+  const d0 = norm(cross(fwd, r0));
+  const roll = P.roll * Math.PI / 180;
+  const cr = Math.cos(roll), sr = Math.sin(roll);
+  const right = add(mul(r0, cr), mul(d0, sr));
+  const down = add(mul(r0, -sr), mul(d0, cr));
+  const [w, h] = SCENE.image_size;
+  const f = (w / 2) / Math.tan(P.fovH * Math.PI / 360);
+  return { C, fwd, right, down, f, cx: w / 2, cy: h / 2 };
+}
+
+function pixelRay(u, v, cam) {
+  const { C, fwd, right, down, f, cx, cy } = cam || camAxes();
+  const d = norm(add(add(mul(right, (u - cx) / f), mul(down, (v - cy) / f)), fwd));
+  return { C, d };
+}
+
+/** 世界点 → 像素；求解就是让它回到 2D 检测点上。 */
+function projectPix(p, cam) {
+  const { C, fwd, right, down, f, cx, cy } = cam;
+  const v = sub(p, C);
+  const zc = dot(v, fwd);
+  if (zc < 0.05) return null;
+  return [cx + f * dot(v, right) / zc, cy + f * dot(v, down) / zc];
+}
+
+function hitY(C, d, y) {
+  if (Math.abs(d[1]) < 1e-8) return null;
+  const s = (y - C[1]) / d[1];
+  if (s < 0.05) return null;
+  return add(C, mul(d, s));
+}
+
+function kptOk(kpts, i) {
+  const p = kpts[i];
+  if (!p || p[2] < P.kptMin) return null;
+  return [p[0], p[1]];
+}
+
+function avgIds(js, ids) {
+  const pts = ids.map((i) => js[i]).filter(Boolean);
+  if (!pts.length) return null;
+  return mul(pts.reduce((a, b) => add(a, b)), 1 / pts.length);
+}
+
+function estimateCOM(js) {
+  const hip = avgIds(js, [LHIP, RHIP]);
+  const sho = avgIds(js, [LSHO, RSHO]);
+  const head = js[NOSE] || sho;
+  const ank = avgIds(js, [LANK, RANK]);
+  if (!hip) return ank;
+  const sx = sho || hip, hx = head || hip;
+  return [
+    0.50 * hip[0] + 0.35 * sx[0] + 0.15 * hx[0],
+    0.50 * hip[1] + 0.35 * sx[1] + 0.15 * hx[1],
+    0.50 * hip[2] + 0.35 * sx[2] + 0.15 * hx[2],
+  ];
+}
+
+const LKNE = 13, RKNE = 14, LELB = 7, RELB = 8, LWRI = 9, RWRI = 10;
+const LEYE = 1, REYE = 2, LEAR = 3, REAR = 4;
+
+/**
+ * 从 2D 点判正背面，返回 [-1,1]，正为面向相机。
+ * 单目抬升有前后翻转歧义：两个镜像解的反投影误差几乎相等，不给朝向就会逐帧翻面。
+ * 主证据是左右点的画面横序——「左肩」是人的左边，面向相机时它落在画面右侧。
+ */
+function facingScore(kpts) {
+  const sc = (i) => (kpts[i] && kpts[i][2] > P.kptMin ? kpts[i][2] : 0);
+  // 归一尺度用肩中点到髋中点的距离：侧身时肩宽会塌缩，这个不会
+  let scale = 0;
+  if (sc(LSHO) && sc(RSHO) && sc(LHIP) && sc(RHIP)) {
+    scale = Math.hypot(
+      (kpts[LSHO][0] + kpts[RSHO][0] - kpts[LHIP][0] - kpts[RHIP][0]) / 2,
+      (kpts[LSHO][1] + kpts[RSHO][1] - kpts[LHIP][1] - kpts[RHIP][1]) / 2,
+    );
+  }
+  if (!(scale > 4)) scale = 60;
+  let s = 0, w = 0;
+  for (const [l, r, wt] of [[LSHO, RSHO, 1.0], [LHIP, RHIP, 0.7], [LEAR, REAR, 0.4], [LEYE, REYE, 0.3]]) {
+    const cl = sc(l), cr = sc(r);
+    if (!cl || !cr) continue;
+    const d = (kpts[l][0] - kpts[r][0]) / (0.55 * scale);
+    const c = wt * Math.min(cl, cr);
+    s += c * Math.max(-1, Math.min(1, d));
+    w += c;
+  }
+  // 五官可见性：看得见眼睛多半是面向，只剩耳朵多半是背向。检测器会硬猜五官，权重压低。
+  const eye = Math.max(sc(LEYE), sc(REYE)), ear = Math.max(sc(LEAR), sc(REAR));
+  if (eye || ear) {
+    s += 0.35 * Math.max(-1, Math.min(1, (eye - ear) * 1.5));
+    w += 0.35;
+  }
+  return w > 0 ? s / w : 0;
+}
+
+/** 解出的 3D 躯干朝向与「指向相机」的夹角余弦；正为面向。 */
+function facingOf3d(x, cam) {
+  const u = [x[LSHO*3] - x[RSHO*3], x[LSHO*3+1] - x[RSHO*3+1], x[LSHO*3+2] - x[RSHO*3+2]];
+  const fwdBody = cross(u, [0, 1, 0]);
+  const mid = [
+    0.25 * (x[LSHO*3] + x[RSHO*3] + x[LHIP*3] + x[RHIP*3]),
+    0.25 * (x[LSHO*3+1] + x[RSHO*3+1] + x[LHIP*3+1] + x[RHIP*3+1]),
+    0.25 * (x[LSHO*3+2] + x[RSHO*3+2] + x[LHIP*3+2] + x[RHIP*3+2]),
+  ];
+  const nf = Math.hypot(...fwdBody), toCam = sub(cam.C, mid);
+  const nc = Math.hypot(...toCam);
+  if (nf < 1e-6 || nc < 1e-6) return 0;
+  return dot(fwdBody, toCam) / (nf * nc);
+}
+const NJ = 17;
+const ANKLE_Y = 0.08;
+
+/** 1.70m 直立模板，只作初值。局部：x=人的侧向，y=上，z=朝货架。 */
+const STAND = {
+  15: [-0.09, 0.080, 0.00], 16: [0.09, 0.080, 0.00],
+  13: [-0.10, 0.485, 0.02], 14: [0.10, 0.485, 0.02],
+  11: [-0.095, 0.900, 0.00], 12: [0.095, 0.900, 0.00],
+  5: [-0.18, 1.380, 0.00], 6: [0.18, 1.380, 0.00],
+  0: [0.00, 1.580, 0.06], 1: [-0.03, 1.620, 0.04], 2: [0.03, 1.620, 0.04],
+  3: [-0.07, 1.600, -0.01], 4: [0.07, 1.600, -0.01],
+  7: [-0.21, 1.100, 0.04], 8: [0.21, 1.100, 0.04],
+  9: [-0.21, 0.860, 0.10], 10: [0.21, 0.860, 0.10],
+};
+
+/** 骨长（1.70m 成人，米）与权重；含躯干对角线，否则躯干会被剪成平行四边形。 */
+const BONE_L = [
+  [LSHO, RSHO, 0.360, 1.0], [LHIP, RHIP, 0.190, 1.0],
+  [LSHO, LHIP, 0.470, 1.0], [RSHO, RHIP, 0.470, 1.0],
+  [LSHO, RHIP, 0.540, 0.6], [RSHO, LHIP, 0.540, 0.6],
+  [LHIP, LKNE, 0.415, 1.0], [LKNE, LANK, 0.405, 1.0],
+  [RHIP, RKNE, 0.415, 1.0], [RKNE, RANK, 0.405, 1.0],
+  [LSHO, LELB, 0.300, 1.0], [LELB, LWRI, 0.250, 1.0],
+  [RSHO, RELB, 0.300, 1.0], [RELB, RWRI, 0.250, 1.0],
+  [NOSE, LSHO, 0.270, 0.5], [NOSE, RSHO, 0.270, 0.5],
+  [NOSE, 1, 0.055, 0.3], [NOSE, 2, 0.055, 0.3],
+  [1, 3, 0.080, 0.3], [2, 4, 0.080, 0.3], [3, 4, 0.150, 0.3],
+];
+const COM_W = [[LHIP, 0.25], [RHIP, 0.25], [LSHO, 0.175], [RSHO, 0.175], [NOSE, 0.15]];
+/** 肩后伸软限位：[肩, 远端关节, 允许落在胸口平面后方多少米]。 */
+const ARM_BACK = [
+  [LSHO, LELB, 0.10], [LSHO, LWRI, 0.18],
+  [RSHO, RELB, 0.10], [RSHO, RWRI, 0.18],
+];
+/**
+ * 头部前后：[点集, 相对耳中点至少往前多少米]。
+ * 头绕耳-耳轴翻过去，鼻-眼-耳的骨长一个都不变，必须另外钉住前后。
+ * 阈值取 1~2cm 而非解剖真值 5cm，是给转头留余地：转到 78° 时前后差就只剩 1cm。
+ */
+const HEAD_FWD = [[[LEYE, REYE], 0.01], [[NOSE], 0.02]];
+/** 肘只能朝身后弯：[肩, 肘, 腕]。模型里的肘是球窝的，绕肩-腕轴转一圈反投影几乎不变。 */
+const ELBOW_HINGE = [[LSHO, LELB, LWRI], [RSHO, RELB, RWRI]];
+/** 肘相对肩腕中点允许往身前鼓出多少米。 */
+const ELBOW_FWD_LIM = 0.02;
+/** 鼻子至少在肩中点前方多少米。阈值远小于实测中位数 10cm，是给低头、扭头留余地。 */
+const NOSE_FWD_MIN = 0.02;
+const PX = 60;
+const WT = {
+  bone: 12, ground: 6, com: 2, upright: 1.5,
+  scale: 3, time: 1, tpl: 0.5, floor: 60, behind: 40, face: 1.5, armBack: 8, headFwd: 40, elbowFwd: 8, noseFwd: 40,
+};
+
+/**
+ * 变量 x：17 个关节的世界坐标 + x[51] 身材缩放。
+ * 数据项是**反投影误差**：解出的 3D 点投回相机必须落在 2D 检测点上；
+ * 其余项（骨长、脚在地面、重心过支撑面、躯干铅垂、时序）只是先验。
+ */
+function poseEnergy(x, ctx, g) {
+  const { cam, obs, wv, tpl, prev } = ctx;
+  const { C, fwd, right, down, f, cx, cy } = cam;
+  const sig = x[51];
+  let E = 0;
+  for (let i = 0; i < NJ; i++) {
+    const w = wv[i];
+    if (w <= 0) continue;
+    const vx = x[i*3] - C[0], vy = x[i*3+1] - C[1], vz = x[i*3+2] - C[2];
+    const zc = vx*fwd[0] + vy*fwd[1] + vz*fwd[2];
+    if (zc < 0.2) {
+      const r = 0.2 - zc;
+      E += WT.behind * r * r;
+      if (g) {
+        const c = -2 * WT.behind * r;
+        g[i*3] += c*fwd[0]; g[i*3+1] += c*fwd[1]; g[i*3+2] += c*fwd[2];
+      }
+      continue;
+    }
+    const xc = vx*right[0] + vy*right[1] + vz*right[2];
+    const yc = vx*down[0] + vy*down[1] + vz*down[2];
+    const ru = (cx + f*xc/zc - obs[i*2]) / PX;
+    const rv = (cy + f*yc/zc - obs[i*2+1]) / PX;
+    E += w * (ru*ru + rv*rv);
+    if (g) {
+      const a = f/zc, bu = f*xc/(zc*zc), bv = f*yc/(zc*zc);
+      const cu = 2*w*ru/PX, cv = 2*w*rv/PX;
+      for (let k = 0; k < 3; k++) {
+        g[i*3+k] += cu*(a*right[k] - bu*fwd[k]) + cv*(a*down[k] - bv*fwd[k]);
+      }
+    }
+  }
+  for (const [a, b, L0, wb] of BONE_L) {
+    const w = wb * WT.bone;
+    const dx = x[a*3]-x[b*3], dy = x[a*3+1]-x[b*3+1], dz = x[a*3+2]-x[b*3+2];
+    const d = Math.sqrt(dx*dx + dy*dy + dz*dz) || 1e-6;
+    const r = d - sig*L0;
+    E += w*r*r;
+    if (g) {
+      const c = 2*w*r/d;
+      g[a*3] += c*dx; g[a*3+1] += c*dy; g[a*3+2] += c*dz;
+      g[b*3] -= c*dx; g[b*3+1] -= c*dy; g[b*3+2] -= c*dz;
+      g[51] -= 2*w*r*L0;
+    }
+  }
+  for (const i of [LANK, RANK]) {
+    const w = wv[i] > 0 ? WT.ground : WT.ground * 0.35;
+    const r = x[i*3+1] - ANKLE_Y*sig;
+    E += w*r*r;
+    if (g) { g[i*3+1] += 2*w*r; g[51] -= 2*w*r*ANKLE_Y; }
+  }
+  for (let i = 0; i < NJ; i++) {
+    const y = x[i*3+1];
+    if (y < 0) { E += WT.floor*y*y; if (g) g[i*3+1] += 2*WT.floor*y; }
+  }
+  let comx = 0, comz = 0;
+  for (const [i, cw] of COM_W) { comx += cw*x[i*3]; comz += cw*x[i*3+2]; }
+  const ex = comx - 0.5*(x[LANK*3] + x[RANK*3]);
+  const ez = comz - 0.5*(x[LANK*3+2] + x[RANK*3+2]);
+  E += WT.com*(ex*ex + ez*ez);
+  if (g) {
+    for (const [i, cw] of COM_W) { g[i*3] += 2*WT.com*ex*cw; g[i*3+2] += 2*WT.com*ez*cw; }
+    g[LANK*3] -= WT.com*ex; g[RANK*3] -= WT.com*ex;
+    g[LANK*3+2] -= WT.com*ez; g[RANK*3+2] -= WT.com*ez;
+  }
+  const ux = 0.5*(x[LSHO*3]+x[RSHO*3]) - 0.5*(x[LHIP*3]+x[RHIP*3]);
+  const uz = 0.5*(x[LSHO*3+2]+x[RSHO*3+2]) - 0.5*(x[LHIP*3+2]+x[RHIP*3+2]);
+  E += WT.upright*(ux*ux + uz*uz);
+  if (g) {
+    g[LSHO*3] += WT.upright*ux; g[RSHO*3] += WT.upright*ux;
+    g[LHIP*3] -= WT.upright*ux; g[RHIP*3] -= WT.upright*ux;
+    g[LSHO*3+2] += WT.upright*uz; g[RSHO*3+2] += WT.upright*uz;
+    g[LHIP*3+2] -= WT.upright*uz; g[RHIP*3+2] -= WT.upright*uz;
+  }
+  // 手臂与头部的前后先验。这两个方向 2D 数据几乎没意见（翻面前后残差一样），
+  // 不钉住就会随机甩到背后／把脸转到脑后。胸口朝向在本次求值内当常量，软先验不必求它的导数。
+  const sx = x[LSHO*3] - x[RSHO*3], sz = x[LSHO*3+2] - x[RSHO*3+2];
+  const fn = Math.hypot(sx, sz);
+  if (fn > 1e-6) {
+    const fx = -sz/fn, fz = sx/fn;
+    for (const [sh, jt, lim] of ARM_BACK) {
+      const back = -((x[jt*3] - x[sh*3])*fx + (x[jt*3+2] - x[sh*3+2])*fz);
+      const r = back - lim;
+      if (r <= 0) continue;
+      E += WT.armBack*r*r;
+      if (g) {
+        const c = 2*WT.armBack*r;
+        g[jt*3] -= c*fx; g[jt*3+2] -= c*fz;
+        g[sh*3] += c*fx; g[sh*3+2] += c*fz;
+      }
+    }
+    const earX = 0.5*(x[LEAR*3] + x[REAR*3]), earZ = 0.5*(x[LEAR*3+2] + x[REAR*3+2]);
+    for (const [ids, lim] of HEAD_FWD) {
+      let px = 0, pz = 0;
+      for (const i of ids) { px += x[i*3]; pz += x[i*3+2]; }
+      px /= ids.length; pz /= ids.length;
+      const r = lim - ((px - earX)*fx + (pz - earZ)*fz);
+      if (r <= 0) continue;
+      E += WT.headFwd*r*r;
+      if (g) {
+        const c = 2*WT.headFwd*r, w = c/ids.length;
+        for (const i of ids) { g[i*3] -= w*fx; g[i*3+2] -= w*fz; }
+        g[LEAR*3] += 0.5*c*fx; g[LEAR*3+2] += 0.5*c*fz;
+        g[REAR*3] += 0.5*c*fx; g[REAR*3+2] += 0.5*c*fz;
+      }
+    }
+    const shX = 0.5*(x[LSHO*3] + x[RSHO*3]), shZ = 0.5*(x[LSHO*3+2] + x[RSHO*3+2]);
+    const rn = NOSE_FWD_MIN - ((x[NOSE*3] - shX)*fx + (x[NOSE*3+2] - shZ)*fz);
+    if (rn > 0) {
+      E += WT.noseFwd*rn*rn;
+      if (g) {
+        const c = 2*WT.noseFwd*rn;
+        g[NOSE*3] -= c*fx; g[NOSE*3+2] -= c*fz;
+        g[LSHO*3] += 0.5*c*fx; g[LSHO*3+2] += 0.5*c*fz;
+        g[RSHO*3] += 0.5*c*fx; g[RSHO*3+2] += 0.5*c*fz;
+      }
+    }
+    // 手举过肩时肘朝前是合法的（手摸后脑），所以按腕低于肩的程度平滑淡出。
+    // gate 只读不求导：给它梯度等于允许求解器抬腕来逃避惩罚，那是本末倒置。
+    for (const [sh, el, wr] of ELBOW_HINGE) {
+      const gate = Math.max(0, Math.min(1, (x[sh*3+1] - x[wr*3+1])/0.10));
+      if (gate <= 0) continue;
+      const mx = 0.5*(x[sh*3] + x[wr*3]), mz = 0.5*(x[sh*3+2] + x[wr*3+2]);
+      const r = (x[el*3] - mx)*fx + (x[el*3+2] - mz)*fz - ELBOW_FWD_LIM;
+      if (r <= 0) continue;
+      const w = WT.elbowFwd*gate;
+      E += w*r*r;
+      if (g) {
+        const c = 2*w*r;
+        g[el*3] += c*fx; g[el*3+2] += c*fz;
+        g[sh*3] -= 0.5*c*fx; g[sh*3+2] -= 0.5*c*fz;
+        g[wr*3] -= 0.5*c*fx; g[wr*3+2] -= 0.5*c*fz;
+      }
+    }
+  }
+  const rs = sig - 1;
+  E += WT.scale*rs*rs;
+  if (g) g[51] += 2*WT.scale*rs;
+  for (let i = 0; i < NJ; i++) {
+    if (wv[i] > 0) continue;
+    for (let k = 0; k < 3; k++) {
+      const r = x[i*3+k] - tpl[i*3+k];
+      E += WT.tpl*r*r;
+      if (g) g[i*3+k] += 2*WT.tpl*r;
+    }
+  }
+  if (prev) {
+    for (let i = 0; i < 51; i++) {
+      const r = x[i] - prev[i];
+      E += WT.time*r*r;
+      if (g) g[i] += 2*WT.time*r;
+    }
+  }
+  return E;
+}
+
+function optimizePose(x, ctx, iters) {
+  const g = new Float64Array(52);
+  const xn = new Float64Array(52);
+  let e0 = poseEnergy(x, ctx, null);
+  let step = 0.03;
+  for (let it = 0; it < iters; it++) {
+    g.fill(0);
+    poseEnergy(x, ctx, g);
+    let gn = 0;
+    for (let i = 0; i < 52; i++) gn += g[i]*g[i];
+    gn = Math.sqrt(gn);
+    if (!(gn > 1e-9)) break;
+    let improved = false;
+    for (let t = 0; t < 8; t++) {
+      for (let i = 0; i < 52; i++) xn[i] = x[i] - step*g[i]/gn;
+      xn[51] = Math.min(1.18, Math.max(0.84, xn[51]));
+      const e1 = poseEnergy(xn, ctx, null);
+      if (e1 < e0) { x.set(xn); e0 = e1; step *= 1.7; improved = true; break; }
+      step *= 0.45;
+    }
+    if (!improved) break;
+  }
+  return e0;
+}
+
+function poseInit(kpts, cam, face) {
+  const hits = [];
+  for (const i of [LANK, RANK]) {
+    const uv = kptOk(kpts, i);
+    if (!uv) continue;
+    const ray = pixelRay(uv[0], uv[1], cam);
+    const hit = hitY(ray.C, ray.d, ANKLE_Y);
+    if (hit) hits.push(hit);
+  }
+  if (!hits.length) {
+    let lowest = null;
+    for (let i = 0; i < NJ; i++) {
+      const uv = kptOk(kpts, i);
+      if (uv && (!lowest || uv[1] > lowest[1])) lowest = uv;
+    }
+    if (!lowest) return null;
+    const ray = pixelRay(lowest[0], lowest[1], cam);
+    const hit = hitY(ray.C, ray.d, ANKLE_Y);
+    if (!hit) return null;
+    hits.push(hit);
+  }
+  const support = mul(hits.reduce((a, b) => add(a, b)), 1 / hits.length);
+  const x = new Float64Array(52);
+  for (const [idx, loc] of Object.entries(STAND)) {
+    const i = Number(idx);
+    x[i*3] = support[0] + face * loc[2];
+    x[i*3+1] = loc[1];
+    x[i*3+2] = support[2] + face * loc[0];
+  }
+  x[51] = 1;
+  return x;
+}
+
+function liftPerson(kpts, prev, fc = 0) {
+  const cam = camAxes();
+  const obs = new Float64Array(NJ * 2);
+  const wv = new Float64Array(NJ);
+  let nVis = 0;
+  for (let i = 0; i < NJ; i++) {
+    const p = kpts[i];
+    if (!p || p[2] < P.kptMin) continue;
+    obs[i*2] = p[0];
+    obs[i*2+1] = p[1];
+    wv[i] = Math.min(1, Math.max(0.2, p[2]));
+    nVis++;
+  }
+  if (nVis < 4) return null;
+  let best = null;
+  for (const face of [1, -1]) {
+    const x = poseInit(kpts, cam, face);
+    if (!x) continue;
+    const ctx = { cam, obs, wv, tpl: x.slice(0, 51), prev: null };
+    optimizePose(x, ctx, 70);
+    if (prev) {
+      ctx.prev = prev;
+      optimizePose(x, ctx, 50);
+    }
+    const e = poseEnergy(x, ctx, null);
+    // 朝向惩罚按比例加，不用绝对量：两个镜像解能量本就接近，弱证据不该压过数据
+    const align = facingOf3d(x, cam);
+    const bad = Math.max(0, 0.15 - Math.sign(fc || 0) * align);
+    const score = e * (1 + WT.face * Math.abs(fc) * bad);
+    if (!best || score < best.score) best = { score, e, x, align };
+  }
+  if (!best) return null;
+  const joints = [];
+  for (let i = 0; i < NJ; i++) joints.push([best.x[i*3], best.x[i*3+1], best.x[i*3+2]]);
+  let se = 0, n = 0;
+  for (let i = 0; i < NJ; i++) {
+    if (wv[i] <= 0) continue;
+    const q = projectPix(joints[i], cam);
+    if (!q) continue;
+    se += (q[0] - obs[i*2]) ** 2 + (q[1] - obs[i*2+1]) ** 2;
+    n++;
+  }
+  const com = estimateCOM(joints);
+  const supx = 0.5 * (joints[LANK][0] + joints[RANK][0]);
+  const supz = 0.5 * (joints[LANK][2] + joints[RANK][2]);
+  const cogOff = com ? Math.hypot(com[0] - supx, com[2] - supz) : 0;
+  joints._com = com;
+  joints._vis = Array.from(wv, (w) => w > 0);
+  return {
+    joints,
+    x: best.x,
+    height: best.x[51] * 1.70,
+    reproj: n ? Math.sqrt(se / n) : null,
+    cogOff,
+    cogOk: cogOff < 0.10,
+    align: best.align,
+  };
+}
+
+/** 货格贴哪面墙由它自己的中心射线决定，和相机模型自洽，不靠服务端猜左右。 */
+function projectPoly(b, cam) {
+  const center = pixelRay(b.center2d[0], b.center2d[1], cam);
+  const sign = center.d[0] >= 0 ? 1 : -1;
+  const xPlane = sign * (P.aisle / 2);
+  const pts = [];
+  for (const uv of (b.poly2d || [])) {
+    const { C, d } = pixelRay(uv[0], uv[1], cam);
+    if (Math.abs(d[0]) < 1e-6) continue;
+    const s = (xPlane - C[0]) / d[0];
+    if (s < 0.02) continue;
+    pts.push(add(C, mul(d, s)));
+  }
+  return { pts, sign };
+}
+
+function clearGroup(g) {
+  while (g.children.length) {
+    const ch = g.children[0];
+    g.remove(ch);
+    if (ch.geometry && ch.geometry !== jointGeo) ch.geometry.dispose();
+  }
+}
+
+function rebuildWorld() {
+  clearGroup(boxGroup);
+  clearGroup(extraGroup);
+  const gt = new Set((currentSeg && currentSeg.gt_tokens) || []);
+  const cam = camAxes();
+  let zmin = 0, zmax = 2;
+  for (const b of SCENE.boxes || []) {
+    const { pts, sign } = projectPoly(b, cam);
+    if (pts.length < 3) continue;
+    for (const p of pts) { zmin = Math.min(zmin, p[2]); zmax = Math.max(zmax, p[2]); }
+    const isGt = gt.has(b.token);
+    const pos = [];
+    for (let i = 1; i < pts.length - 1; i++) pos.push(...pts[0], ...pts[i], ...pts[i + 1]);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.computeVertexNormals();
+    boxGroup.add(new THREE.Mesh(
+      g,
+      new THREE.MeshPhongMaterial({
+        color: isGt ? 0xcc3344 : (sign > 0 ? 0x2f6f9f : 0x3d8a5a),
+        transparent: true, opacity: isGt ? 0.85 : 0.42, depthWrite: false, side: THREE.DoubleSide,
+      })
+    ));
+    const lp = [];
+    for (const p of pts) lp.push(...p);
+    lp.push(...pts[0]);
+    const lg = new THREE.BufferGeometry();
+    lg.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3));
+    boxGroup.add(new THREE.Line(lg, new THREE.LineBasicMaterial({ color: isGt ? 0xff8899 : 0x777777 })));
+  }
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(P.aisle, Math.max(4, zmax - zmin + 2)),
+    new THREE.MeshBasicMaterial({ color: 0x1a1a1a, transparent: true, opacity: 0.65, side: THREE.DoubleSide })
+  );
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.set(0, 0.002, (zmin + zmax) / 2);
+  extraGroup.add(floor);
+  const { C, fwd } = camAxes();
+  extraGroup.add(new THREE.ArrowHelper(
+    new THREE.Vector3(...fwd), new THREE.Vector3(...C), 0.8, 0xffcc66, 0.12, 0.08
+  ));
+  const camBall = new THREE.Mesh(
+    new THREE.SphereGeometry(0.06, 10, 10),
+    new THREE.MeshBasicMaterial({ color: 0xffcc66 })
+  );
+  camBall.position.set(...C);
+  extraGroup.add(camBall);
+}
+
+let frameIdx = 0;
+let lastSolved = [];
+const poseCache = new Map();
+const skel2d = document.getElementById('skel2d');
+const skel2dCtx = skel2d.getContext('2d');
+
+function resizeSkel2d() {
+  const [iw, ih] = SCENE.image_size || [852, 480];
+  const w = vid.clientWidth || 360;
+  const h = vid.clientHeight || Math.round(w * ih / iw);
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const cw = Math.max(1, Math.round(w * dpr));
+  const ch = Math.max(1, Math.round(h * dpr));
+  if (skel2d.width !== cw || skel2d.height !== ch) {
+    skel2d.width = cw;
+    skel2d.height = ch;
+  }
+}
+
+function drawSkel2d() {
+  resizeSkel2d();
+  const ctx = skel2dCtx;
+  ctx.clearRect(0, 0, skel2d.width, skel2d.height);
+  const fr = viewFrames[frameIdx];
+  if (!fr) return;
+  const [iw, ih] = SCENE.image_size;
+  const sx = skel2d.width / iw;
+  const sy = skel2d.height / ih;
+  const tracks = new Set((currentSeg && currentSeg.tracks) || []);
+  const r = Math.max(2, skel2d.width / 160);
+  if (LAYERS.boxes) drawBoxes2d(ctx, sx, sy);
+  if (LAYERS.plane || annotOn()) drawCalib(ctx, sx, sy);
+  ctx.lineWidth = Math.max(1.5, skel2d.width / 260);
+  ctx.lineCap = 'round';
+  for (const p of (LAYERS.kpt2d ? fr.people : [])) {
+    const focus = !tracks.size || tracks.has(p.track);
+    const color = focus ? '#66e0ff' : '#ddaa44';
+    const k = p.kpts || [];
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    for (const [a, b] of SCENE.edges) {
+      const pa = k[a], pb = k[b];
+      if (!pa || !pb || pa[2] < P.kptMin || pb[2] < P.kptMin) continue;
+      ctx.beginPath();
+      ctx.moveTo(pa[0] * sx, pa[1] * sy);
+      ctx.lineTo(pb[0] * sx, pb[1] * sy);
+      ctx.stroke();
+    }
+    for (let i = 0; i < k.length; i++) {
+      const kp = k[i];
+      if (!kp || kp[2] < P.kptMin) continue;
+      ctx.beginPath();
+      ctx.arc(kp[0] * sx, kp[1] * sy, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  const cam = camAxes();
+  ctx.strokeStyle = '#ff5fa8';
+  ctx.fillStyle = '#ff5fa8';
+  for (const sol of (LAYERS.reproj ? lastSolved : [])) {
+    const uv = sol.joints.map((j) => projectPix(j, cam));
+    for (const [a, b] of SCENE.edges) {
+      if (!uv[a] || !uv[b]) continue;
+      ctx.beginPath();
+      ctx.moveTo(uv[a][0] * sx, uv[a][1] * sy);
+      ctx.lineTo(uv[b][0] * sx, uv[b][1] * sy);
+      ctx.stroke();
+    }
+    for (const q of uv) {
+      if (!q) continue;
+      ctx.beginPath();
+      ctx.arc(q[0] * sx, q[1] * sy, r * 0.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+function drawFrame() {
+  clearGroup(skelGroup);
+  lastSolved = [];
+  updateSegForFrame();
+  const fr = viewFrames[frameIdx];
+  if (!fr) {
+    drawSkel2d();
+    return;
+  }
+  const tracks = new Set((currentSeg && currentSeg.tracks) || []);
+  let heightTxt = [];
+  for (const p of fr.people) {
+    const focus = !tracks.size || tracks.has(p.track);
+    const cached = poseCache.get(p.track);
+    const near = cached && Math.abs(cached.frame - fr.frame) <= 3;
+    const prev = near ? cached.x.slice(0, 51) : null;
+    const raw = facingScore(p.kpts);
+    // 朝向按 track 做 EMA：单帧检测抖一下不该让整个人翻面
+    const fc = near ? 0.7 * cached.fc + 0.3 * raw : raw;
+    const sol = liftPerson(p.kpts, prev, fc);
+    if (!sol) continue;
+    poseCache.set(p.track, { frame: fr.frame, x: sol.x, fc });
+    lastSolved.push(sol);
+    const { joints, height, cogOk, cogOff, reproj } = sol;
+    if (focus) {
+      heightTxt.push(
+        `track ${p.track} 身高≈${height.toFixed(2)} m · 反投影残差 ${reproj === null ? '—' : reproj.toFixed(1)} px` +
+        ` · 重心${cogOk ? '在支撑面内' : `偏出 ${(cogOff * 100).toFixed(0)}cm`}` +
+        ` · ${fc >= 0 ? '面向' : '背向'} ${Math.abs(fc).toFixed(2)}` +
+        (Math.sign(sol.align || 0) !== Math.sign(fc) ? `（3D 取了${sol.align >= 0 ? '面向' : '背向'}）` : '')
+      );
+    }
+    const color = focus ? 0x66e0ff : 0xbb9944;
+    for (let i = 0; i < joints.length; i++) {
+      const j = joints[i];
+      if (!j) continue;
+      const s = new THREE.Mesh(jointGeo, new THREE.MeshPhongMaterial({
+        color, transparent: !joints._vis[i], opacity: joints._vis[i] ? 1 : 0.35,
+      }));
+      s.position.set(...j);
+      skelGroup.add(s);
+    }
+    if (joints._com) {
+      const c = new THREE.Mesh(
+        new THREE.SphereGeometry(0.045, 10, 10),
+        new THREE.MeshBasicMaterial({ color: 0xffee66 })
+      );
+      c.position.set(...joints._com);
+      skelGroup.add(c);
+    }
+    if (joints[LSHO] && joints[RSHO] && joints[LHIP] && joints[RHIP]) {
+      const chest = [0, 1, 2].map((k) =>
+        0.35 * (joints[LSHO][k] + joints[RSHO][k]) + 0.15 * (joints[LHIP][k] + joints[RHIP][k]));
+      const u = sub(joints[LSHO], joints[RSHO]);
+      const d = norm(cross(u, [0, 1, 0]));
+      skelGroup.add(new THREE.ArrowHelper(
+        new THREE.Vector3(...d), new THREE.Vector3(...chest), 0.45, 0xffa23c, 0.12, 0.08));
+    }
+    const pos = [];
+    for (const [a, b] of SCENE.edges) {
+      if (!joints[a] || !joints[b]) continue;
+      pos.push(...joints[a], ...joints[b]);
+    }
+    if (!pos.length) continue;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    skelGroup.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color })));
+  }
+  document.getElementById('frameLabel').textContent =
+    `帧 ${fr.frame}  (${frameIdx + 1}/${viewFrames.length})`;
+  document.getElementById('stats').textContent = heightTxt.join('　') || '当前帧未解出骨架';
+  drawSkel2d();
+}
+
+function rebuild() {
+  poseCache.clear();
+  rebuildWorld();
+  drawFrame();
+}
+
+const frameSlider = document.getElementById('frameSlider');
+const vid = document.getElementById('vid');
+const selRecord = document.getElementById('selRecord');
+let seekingVid = false;
+let playing = false;
+let vidBound = false;
+
+function fps() { return Number(SCENE.fps || 25); }
+/** 骨架帧的时间用数据里的 timestamp_sec，不要拿 fps 反推。 */
+function frameT(fr) {
+  return fr.t !== undefined ? fr.t : (fr.frame - 1) / fps();
+}
+/**
+ * 部分录像容器首帧 PTS 不为 0（本仓样本是 2.297s），浏览器不归零，
+ * 而 seekable.start(0) 又谎报 0，只能 seek 到 0 看落在哪来测真实起点。
+ */
+let videoT0 = 0;
+let probingT0 = false;
+function probeVideoT0() {
+  return new Promise((resolve) => {
+    videoT0 = 0;
+    if (!SCENE.has_video || !vid.src) { resolve(); return; }
+    let fired = false;
+    probingT0 = true;
+    const done = () => {
+      if (fired) return;
+      fired = true;
+      clearTimeout(timer);
+      vid.removeEventListener('seeked', done);
+      videoT0 = vid.currentTime;
+      probingT0 = false;
+      resolve();
+    };
+    const timer = setTimeout(done, 800);
+    vid.addEventListener('seeked', done);
+    seekingVid = true;
+    vid.currentTime = 0;
+  });
+}
+function frameToVideoTime(fr) {
+  return Math.max(0, videoT0 + frameT(fr) + P.syncMs / 1000);
+}
+function videoTimeToIndex(t) {
+  const n = viewFrames.length;
+  if (!n) return 0;
+  const target = t - videoT0 - P.syncMs / 1000;
+  let lo = 0, hi = n - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (frameT(viewFrames[mid]) < target) lo = mid + 1; else hi = mid;
+  }
+  if (lo > 0 && Math.abs(frameT(viewFrames[lo - 1]) - target) < Math.abs(frameT(viewFrames[lo]) - target)) lo -= 1;
+  return lo;
+}
+function syncVideo() {
+  if (!SCENE.has_video || !vid.src) return;
+  const fr = viewFrames[frameIdx];
+  if (!fr) return;
+  const t = frameToVideoTime(fr);
+  if (Math.abs(vid.currentTime - t) > 0.5 / fps()) {
+    seekingVid = true;
+    vid.currentTime = t;
+  }
+}
+
+/** 3D 求解比视频出帧慢，播放时限频；2D 叠图每一帧都跟。 */
+let last3dAt = 0;
+function renderFrame(force = false) {
+  const now = performance.now();
+  if (force || now - last3dAt > 120) {
+    last3dAt = now;
+    drawFrame();
+  } else {
+    updateSegForFrame();
+    drawSkel2d();
+  }
+}
+
+/** 段只决定 GT 高亮与跳转位置，不限制回放范围：整条录像都能播。 */
+/** 标注段不再手选：当前帧落在哪一段，就高亮那一段的 GT。 */
+let lastGtKey = null;
+function updateSegForFrame() {
+  const fr = viewFrames[frameIdx];
+  currentSeg = fr
+    ? (SCENE.segments || []).find((s) => fr.frame >= s.frame_start && fr.frame <= s.frame_end) || null
+    : null;
+  const key = currentSeg ? currentSeg.seg_id : '';
+  if (key !== lastGtKey) {
+    lastGtKey = key;
+    rebuildWorld();
+  }
+  document.getElementById('meta').textContent =
+    `${SCENE.camera_slug} · ${SCENE.clip_name}`
+    + (fr ? ` · 帧 ${fr.frame}` : '')
+    + (currentSeg ? ` · ${currentSeg.split}段 ${currentSeg.frame_start}–${currentSeg.frame_end} GT ${currentSeg.gt_tokens.join(',')}` : '');
+}
+
+function applyRecord() {
+  viewFrames = SCENE.frames || [];
+  frameIdx = 0;
+  frameSlider.max = Math.max(0, viewFrames.length - 1);
+  frameSlider.value = '0';
+  lastGtKey = null;
+  currentSeg = null;
+  try {
+    localStorage.setItem('aisle3d.sel', JSON.stringify({ record_id: SCENE.record_id }));
+  } catch { /* ignore */ }
+  rebuild();
+  syncVideo();
+}
+
+async function loadRecord(rid) {
+  SCENE = await fetch('/api/scene.json?record_id=' + encodeURIComponent(rid)).then((r) => r.json());
+  loadParamsForCamera();
+  vid.src = SCENE.has_video ? ('/api/video?record_id=' + encodeURIComponent(rid)) : '';
+  await loadCalib();
+  applyRecord();
+}
+
+function followVideo(mediaTime) {
+  const i = videoTimeToIndex(mediaTime);
+  if (i === frameIdx) return;
+  frameIdx = i;
+  frameSlider.value = String(i);
+  renderFrame();
+}
+
+if (!vidBound) {
+  vidBound = true;
+  vid.addEventListener('seeked', () => {
+    seekingVid = false;
+    if (vid.paused && !probingT0) followVideo(vid.currentTime);
+  });
+  vid.addEventListener('loadedmetadata', () => { probeVideoT0().then(() => { syncVideo(); drawSkel2d(); }); });
+  vid.addEventListener('ended', () => stopPlay());
+  // rVFC 拿到的是「真正显示出来的那一帧」的时间，比 timeupdate（约 4Hz）准得多
+  if (typeof vid.requestVideoFrameCallback === 'function') {
+    const onVideoFrame = (_now, meta) => {
+      if (!seekingVid && !probingT0) followVideo(meta.mediaTime);
+      vid.requestVideoFrameCallback(onVideoFrame);
+    };
+    vid.requestVideoFrameCallback(onVideoFrame);
+  } else {
+    vid.addEventListener('timeupdate', () => {
+      if (seekingVid || vid.paused) return;
+      followVideo(vid.currentTime);
+    });
+  }
+}
+new ResizeObserver(() => drawSkel2d()).observe(document.getElementById('vidbox'));
+
+frameSlider.addEventListener('input', () => {
+  frameIdx = Number(frameSlider.value);
+  renderFrame(true);
+  syncVideo();
+});
+function stopPlay() {
+  playing = false;
+  document.getElementById('play').textContent = '播放';
+  if (SCENE.has_video && vid.src) vid.pause();
+}
+
+function seekVideo(t) {
+  return new Promise((resolve) => {
+    if (Math.abs(vid.currentTime - t) <= 1 / fps()) { resolve(); return; }
+    seekingVid = true;
+    const done = () => { vid.removeEventListener('seeked', done); resolve(); };
+    vid.addEventListener('seeked', done);
+    vid.currentTime = t;
+  });
+}
+
+/** 从当前位置播到录像结束；已在结尾则从头重来。 */
+async function startPlay() {
+  playing = true;
+  document.getElementById('play').textContent = '暂停';
+  if (SCENE.has_video && vid.src) {
+    const dur = vid.duration;
+    if (vid.ended || (Number.isFinite(dur) && vid.currentTime >= dur - 0.05)) {
+      await seekVideo(viewFrames.length ? frameToVideoTime(viewFrames[0]) : 0);
+    }
+    if (playing) vid.play();
+    return;
+  }
+  if (!viewFrames.length) return;
+  if (frameIdx >= viewFrames.length - 1) {
+    frameIdx = 0;
+    frameSlider.value = '0';
+    renderFrame(true);
+  }
+}
+
+document.getElementById('play').onclick = () => {
+  if (playing) stopPlay();
+  else startPlay();
+};
+
+// ---- 拣货面标注 ----
+const CORNER_HINT = ['① 顶沿·远端', '② 顶沿·近端', '③ 底沿·近端', '④ 底沿·远端'];
+let calib = { aisle: 1.7, prior: {}, walls: [] };
+let activeWall = 0;
+let dragIdx = -1;
+
+function annotOn() { return document.body.classList.contains('annot'); }
+
+function wallIds() {
+  const ids = [...new Set((SCENE.boxes || []).map((b) => b.wall))].sort((a, b) => a - b);
+  return ids.length ? ids : [1, 2];
+}
+
+function ensureWalls() {
+  const ids = wallIds();
+  const byId = new Map(calib.walls.map((w) => [w.wall_id, w]));
+  calib.walls = ids.map((id) => byId.get(id) || { wall_id: id, width: 2.4, height: 1.7, base: 0, quad: [] });
+  if (activeWall >= calib.walls.length) activeWall = 0;
+}
+
+function renderWallRows() {
+  const tb = document.getElementById('wallRows');
+  tb.innerHTML = calib.walls.map((w, i) => `
+    <tr class="wallrow ${i === activeWall ? 'active' : ''}" data-i="${i}">
+      <td>墙${w.wall_id}</td>
+      <td><input type="number" step="0.01" data-k="width" value="${w.width}"></td>
+      <td><input type="number" step="0.01" data-k="height" value="${w.height}"></td>
+      <td><input type="number" step="0.01" data-k="base" value="${w.base}"></td>
+      <td>${w.quad.length}/4</td>
+    </tr>`).join('');
+  for (const tr of tb.querySelectorAll('tr')) {
+    const i = Number(tr.dataset.i);
+    tr.addEventListener('click', (e) => {
+      if (e.target.tagName === 'INPUT') return;
+      activeWall = i;
+      renderWallRows();
+      drawSkel2d();
+    });
+    for (const inp of tr.querySelectorAll('input')) {
+      inp.addEventListener('change', () => {
+        calib.walls[i][inp.dataset.k] = Number(inp.value);
+      });
+    }
+  }
+  const w = calib.walls[activeWall];
+  const missing = calib.walls.filter((x) => x.quad.length < 4);
+  const el = document.getElementById('annotHint');
+  if (!w) { el.textContent = ''; return; }
+  if (w.quad.length < 4) {
+    el.textContent = `墙${w.wall_id}：点第 ${CORNER_HINT[w.quad.length]}`;
+  } else if (missing.length) {
+    el.textContent = `墙${w.wall_id} 已齐。还差 ${missing.map((x) => '墙' + x.wall_id).join('、')}，点表格那一行接着标`;
+  } else {
+    el.textContent = '四角都齐了 → 核对上面的尺寸，然后点【反解相机】（会一并保存）';
+  }
+}
+
+const LAYERS = { plane: true, boxes: true, gt: true, kpt2d: true, reproj: true };
+for (const inp of document.querySelectorAll('#layers input')) {
+  inp.addEventListener('change', () => {
+    LAYERS[inp.dataset.ly] = inp.checked;
+    drawSkel2d();
+  });
+}
+
+const ZOOM_KEY = 'aisle3d.vidZoom';
+function applyZoom(z) {
+  document.documentElement.style.setProperty('--vidw', 360 * z + 'px');
+  for (const b of document.querySelectorAll('#zoom button')) b.classList.toggle('on', Number(b.dataset.z) === z);
+  localStorage.setItem(ZOOM_KEY, String(z));
+}
+for (const b of document.querySelectorAll('#zoom button')) {
+  b.onclick = () => applyZoom(Number(b.dataset.z));
+}
+applyZoom(Number(localStorage.getItem(ZOOM_KEY)) || 1);
+
+/** 货框碰撞窗（标注 video_polygon），本段 GT 加亮。 */
+function drawBoxes2d(ctx, sx, sy) {
+  const gt = new Set(LAYERS.gt && currentSeg ? currentSeg.gt_tokens || [] : []);
+  ctx.lineWidth = Math.max(1, skel2d.width / 700);
+  ctx.font = `${Math.max(8, Math.round(skel2d.width / 90))}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const b of SCENE.boxes || []) {
+    const poly = b.poly2d || [];
+    if (poly.length < 3) continue;
+    const isGt = gt.has(b.token);
+    ctx.strokeStyle = isGt ? '#ff4d5e' : 'rgba(150,150,160,.55)';
+    ctx.lineWidth = isGt ? Math.max(1.6, skel2d.width / 420) : Math.max(1, skel2d.width / 700);
+    ctx.beginPath();
+    poly.forEach((p, i) => {
+      const x = p[0] * sx, y = p[1] * sy;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.closePath();
+    ctx.stroke();
+    if (isGt) {
+      ctx.fillStyle = 'rgba(255,77,94,.18)';
+      ctx.fill();
+      ctx.fillStyle = '#ff9aa5';
+      ctx.fillText(b.token, b.center2d[0] * sx, b.center2d[1] * sy);
+    }
+  }
+}
+
+function drawCalib(ctx, sx, sy) {
+  const r = Math.max(4, skel2d.width / 110);
+  ctx.lineWidth = Math.max(1.5, skel2d.width / 400);
+  calib.walls.forEach((w, wi) => {
+    if (!w.quad.length) return;
+    const on = wi === activeWall;
+    ctx.strokeStyle = on ? '#5cf08a' : '#4a8a5f';
+    ctx.fillStyle = on ? '#5cf08a' : '#4a8a5f';
+    ctx.beginPath();
+    w.quad.forEach((p, i) => {
+      const x = p[0] * sx, y = p[1] * sy;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    if (w.quad.length === 4) {
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(92,240,138,.10)';
+      ctx.fill();
+      ctx.fillStyle = on ? '#5cf08a' : '#4a8a5f';
+    }
+    ctx.stroke();
+    if (!annotOn()) return;
+    w.quad.forEach((p, i) => {
+      ctx.beginPath();
+      ctx.arc(p[0] * sx, p[1] * sy, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#04150a';
+      ctx.font = `${Math.round(r * 1.6)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(i + 1), p[0] * sx, p[1] * sy);
+      ctx.fillStyle = on ? '#5cf08a' : '#4a8a5f';
+    });
+  });
+}
+
+function evtToImage(e) {
+  const rect = skel2d.getBoundingClientRect();
+  const [iw, ih] = SCENE.image_size;
+  return [
+    (e.clientX - rect.left) / rect.width * iw,
+    (e.clientY - rect.top) / rect.height * ih,
+  ];
+}
+
+skel2d.addEventListener('pointerdown', (e) => {
+  if (!annotOn()) return;
+  const w = calib.walls[activeWall];
+  if (!w) return;
+  const [x, y] = evtToImage(e);
+  const [iw] = SCENE.image_size;
+  const tol = iw / 60;
+  let hit = -1;
+  w.quad.forEach((p, i) => {
+    if (Math.hypot(p[0] - x, p[1] - y) < tol) hit = i;
+  });
+  if (hit >= 0) {
+    dragIdx = hit;
+    skel2d.setPointerCapture(e.pointerId);
+  } else if (w.quad.length < 4) {
+    w.quad.push([x, y]);
+    renderWallRows();
+  }
+  drawSkel2d();
+});
+skel2d.addEventListener('pointermove', (e) => {
+  if (dragIdx < 0) return;
+  calib.walls[activeWall].quad[dragIdx] = evtToImage(e);
+  drawSkel2d();
+});
+skel2d.addEventListener('pointerup', () => { dragIdx = -1; });
+
+document.getElementById('btnUndo').onclick = () => {
+  const w = calib.walls[activeWall];
+  if (w && w.quad.length) w.quad.pop();
+  renderWallRows();
+  drawSkel2d();
+};
+document.getElementById('btnClearWall').onclick = () => {
+  const w = calib.walls[activeWall];
+  if (w) w.quad = [];
+  renderWallRows();
+  drawSkel2d();
+};
+
+function collectCalib() {
+  calib.aisle = Number(document.getElementById('dimAisle').value);
+  calib.prior = {
+    camH: Number(document.getElementById('priCamH').value),
+    camDist: Number(document.getElementById('priDist').value),
+    pitch: Number(document.getElementById('priPitch').value),
+    yaw: Number(document.getElementById('priYaw').value),
+  };
+  calib.image_size = SCENE.image_size;
+  calib.camera_slug = SCENE.camera_slug;
+  return calib;
+}
+
+async function postCalib(path) {
+  const body = JSON.stringify(collectCalib());
+  const r = await fetch(`${path}?camera_slug=${encodeURIComponent(SCENE.camera_slug)}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+  });
+  return r.json();
+}
+
+document.getElementById('btnSaveCalib').onclick = async () => {
+  const res = await postCalib('/api/calib');
+  document.getElementById('solveMsg').textContent = res.ok ? `已存 ${res.path}` : '保存失败';
+};
+
+function adoptSolved(s) {
+  P.fovH = s.camera.fovH;
+  P.camH = s.camera.camH;
+  P.camDist = s.camera.camDist;
+  P.camX = s.camera.camX;
+  P.pitch = s.camera.pitch;
+  P.yaw = s.camera.yaw;
+  P.roll = s.camera.roll;
+  P.aisle = s.aisle;
+  for (const [key, , , , step] of SLIDER_DEFS) {
+    const inp = document.querySelector(`input[data-k="${key}"]`);
+    if (!inp) continue;
+    inp.value = String(P[key]);
+    const b = inp.parentElement.querySelector('b');
+    if (b) b.textContent = Number(P[key]).toFixed(step < 1 ? 2 : 0);
+  }
+  rebuild();
+}
+
+document.getElementById('btnSolve').onclick = async () => {
+  const msg = document.getElementById('solveMsg');
+  const need = calib.walls.filter((w) => w.quad.length === 4);
+  if (!need.length) { msg.textContent = '至少标完一面墙的四角'; return; }
+  msg.textContent = '求解中…';
+  const res = await postCalib('/api/solve');
+  if (!res.ok) { msg.textContent = res.error || '求解失败'; return; }
+  msg.textContent =
+    `残差 ${res.resid_px}px · FOV ${res.camera.fovH}° · 高 ${res.camera.camH}m · ` +
+    `俯 ${res.camera.pitch}° 偏 ${res.camera.yaw}° 滚 ${res.camera.roll}° · ` +
+    `各角 ${res.corner_resid_px.join('/')}px`;
+  adoptSolved(res);
+  saveParams();
+};
+
+document.getElementById('mode3d').onclick = () => {
+  document.body.classList.remove('annot');
+  document.getElementById('mode3d').classList.add('on');
+  document.getElementById('modeAnnot').classList.remove('on');
+  resize();
+  drawSkel2d();
+};
+document.getElementById('modeAnnot').onclick = () => {
+  document.body.classList.add('annot');
+  document.getElementById('modeAnnot').classList.add('on');
+  document.getElementById('mode3d').classList.remove('on');
+  ensureWalls();
+  renderWallRows();
+  resize();
+  drawSkel2d();
+};
+
+async function loadCalib() {
+  let saved = {};
+  try {
+    saved = await fetch('/api/calib?camera_slug=' + encodeURIComponent(SCENE.camera_slug)).then((r) => r.json());
+  } catch { /* ignore */ }
+  calib = {
+    aisle: saved.aisle || 1.7,
+    prior: saved.prior || {},
+    walls: saved.walls || [],
+    solved: saved.solved,
+  };
+  ensureWalls();
+  document.getElementById('dimAisle').value = String(calib.aisle);
+  document.getElementById('priCamH').value = String(calib.prior.camH ?? 3.0);
+  document.getElementById('priDist').value = String(calib.prior.camDist ?? 1.5);
+  document.getElementById('priPitch').value = String(calib.prior.pitch ?? 45);
+  document.getElementById('priYaw').value = String(calib.prior.yaw ?? 0);
+  renderWallRows();
+  if (calib.solved && calib.solved.ok) {
+    document.getElementById('solveMsg').textContent = `已有标定：残差 ${calib.solved.resid_px}px`;
+    adoptSolved(calib.solved);
+  }
+}
+
+selRecord.innerHTML = (INDEX.records || []).map((r) =>
+  `<option value="${r.record_id}">${r.camera_slug} · ${r.clip_name} · ${r.n_segments}段</option>`
+).join('');
+selRecord.onchange = () => loadRecord(selRecord.value);
+let savedSel = {};
+try { savedSel = JSON.parse(localStorage.getItem('aisle3d.sel') || '{}'); } catch { /* ignore */ }
+if (savedSel.record_id) selRecord.value = savedSel.record_id;
+if (!selRecord.value && INDEX.records[0]) selRecord.value = INDEX.records[0].record_id;
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  viewCam.aspect = w / h;
+  viewCam.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+await loadRecord(selRecord.value);
+
+function loop() {
+  requestAnimationFrame(loop);
+  if (playing && viewFrames.length && !SCENE.has_video) {
+    if (!loop._last || performance.now() - loop._last > 90) {
+      if (frameIdx >= viewFrames.length - 1) {
+        stopPlay();
+      } else {
+        frameIdx += 1;
+        frameSlider.value = String(frameIdx);
+        drawFrame();
+      }
+      loop._last = performance.now();
+    }
+  }
+  controls.update();
+  renderer.render(scene, viewCam);
+}
+loop();
+</script>
+</body>
+</html>
