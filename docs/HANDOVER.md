@@ -1,6 +1,6 @@
 # 交接：当前进度与下一步
 
-更新时间：2026-08-12　分支：`exp/event-confirm`（基线成果在 `exp/tagged-aug85-v1`）
+更新时间：2026-08-13　分支：`exp/event-confirm`（基线成果在 `exp/tagged-aug85-v1`）
 
 ## 一句话
 
@@ -102,6 +102,28 @@ v1 作废；v3 补标重训（v6）端到端无收益，勿再推。
 | 富轨迹（腕速/臂角/动作分相位） | 动作包络、臂角水平强，与 A 门控同源；斜率增量有限 |
 
 结论：不宜再在骨架+框上堆连续帧/形态门控；换信息源。
+
+## aisle3d 3D 查看器（2026-08-13，验证工具，未进推理链路）
+
+把 2D 骨架抬成 3D，用来看清人到底在做什么动作。详见 `docs/daily/DAILY-2026-08-13.md`。
+
+```bash
+.venv/bin/python scripts/serve_aisle3d.py   # 默认 8765，浏览器打开根路径
+```
+
+| 项 | 内容 |
+|----|------|
+| 查看器 | `scripts/aisle3d_viewer.html`（Three.js + 求解器全在这一个文件里） |
+| 场景/标定服务 | `scripts/serve_aisle3d.py` |
+| 四角反解 | `scripts/solve_scene.py`；批量重跑 `scripts/resolve_calib.py` |
+| 标定结果 | `output/calib/<摄像头>.json`（**手工标注，已入库**，勿删） |
+
+**坑**：拣货面底沿贴地时 `base` 必须填 **0**。填 0.3 会让整个场景连同相机竖直平移 30cm，
+而反投影残差一点都不变，画面上看不出来。
+
+**解剖先验**：反投影对若干自由度完全不敏感（翻过去残差一样），全靠 `poseEnergy` 里的软先验钉住——
+`armBack` 肩后伸、`headFwd` 眼在耳前、`noseFwd` 鼻在肩线前、`elbowFwd` 肘不反折。
+动权重前先量化再验残差，别凭手感调。
 
 ## 下一步（已入 backlog）
 
