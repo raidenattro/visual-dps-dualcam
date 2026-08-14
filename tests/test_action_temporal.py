@@ -71,6 +71,14 @@ def test_frame_lazy_skips_cold_tracks_without_hits():
     assert "2" not in tr._hist
 
 
+def test_hit_plus_warm_skips_bystanders_on_hit_frame():
+    tr = ActionSequenceTracker(window_frames=10, step=1, infer_height=480)
+    tr.update(1, [_row("1", 1)], track_ids={"1"})
+    tr.update(2, [_row("1", 2), _row("2", 2)], track_ids={"1"} | tr._warm_tracks(2))
+    assert 2 in tr._hist["1"]
+    assert "2" not in tr._hist
+
+
 def test_window_features_unchanged():
     frames = {i: [float(i)] * 9 for i in range(0, 11, 2)}
     feat, cov = window_features(frames, 10, win=10, step=2)

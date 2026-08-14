@@ -160,17 +160,15 @@ class PickStatePipeline:
 
         temporal_feats = self._pair_temporal.update(ctx.frame_idx, active_pairs)
 
-        # 动作门控 A：无进框时只维护 warm track；有进框时本帧所有人仍写入（与改前进框帧一致）
+        # 动作门控 A：只维护进框 track + warm track（路人无 picking 链，不写历史）
         # GBDT 仅在 smooth >= 阈值后计算（方案 6）
         action_ok: dict[str, tuple[bool, float]] = {}
         hit_track_ids = {key.split("|", 1)[0] for _, key, _, _ in pending}
         if self.action_gate.enabled and self._action_tracker is not None:
-            if hit_track_ids:
-                self._action_tracker.update(ctx.frame_idx, feature_rows, track_ids=None)
-            else:
-                warm = self._action_tracker._warm_tracks(ctx.frame_idx)
-                if warm:
-                    self._action_tracker.update(ctx.frame_idx, feature_rows, track_ids=warm)
+            warm = self._action_tracker._warm_tracks(ctx.frame_idx)
+            targets = hit_track_ids | warm
+            if targets:
+                self._action_tracker.update(ctx.frame_idx, feature_rows, track_ids=targets)
 
         for row, key, hit, pair in pending:
             pair_row = dict(row)
