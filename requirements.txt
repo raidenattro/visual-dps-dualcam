@@ -4,3 +4,7 @@ pyarrow>=17.0
 scikit-learn>=1.5
 opencv-python-headless>=4.10
 pytest>=8.0
+# action_gate ONNX 导出与推理（可选；训练机需 skl2onnx，线上仅需 onnxruntime）
+onnxruntime>=1.16
+skl2onnx>=1.16
+onnx>=1.16
