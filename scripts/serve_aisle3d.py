@@ -28,12 +28,12 @@ MANIFEST = ROOT / "output/manifests/tagged_aug85_v4.json"
 VIEWER = ROOT / "scripts" / "aisle3d_viewer.html"
 CALIB_DIR = ROOT / "output/calib"
 DEFAULTS = {
-    "camH": 3.0,
-    "camDist": 1.5,
+    "camH": 2.84,
+    "camDist": 1.56,
     "pitch": 45.0,
     "yaw": 0.0,
     "fovH": 90.0,
-    "aisle": 1.7,
+    "aisle": 2.0,
     "boxW": 0.42,
     "boxH": 0.36,
     "boxD": 0.48,

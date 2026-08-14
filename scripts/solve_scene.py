@@ -80,7 +80,7 @@ def solve(calib: dict, img_w: int, img_h: int) -> dict:
     walls = [w for w in calib.get("walls") or [] if len(w.get("quad") or []) == 4]
     if not walls:
         return {"ok": False, "error": "没有完整的四角标注"}
-    aisle = float(calib.get("aisle") or 1.7)
+    aisle = float(calib.get("aisle") or 2.0)
     prior = calib.get("prior") or {}
     cx, cy = img_w / 2.0, img_h / 2.0
     obs = np.array([p for w in walls for p in w["quad"]], float)
@@ -99,7 +99,7 @@ def solve(calib: dict, img_w: int, img_h: int) -> dict:
             uv = _project(pts, z, cx, cy)
             r = np.nan_to_num(uv - obs, nan=400.0).ravel().tolist()
             # 卷尺值作软先验：偏离才罚，不钉死
-            r.append(2.0 * (z[2] - float(prior.get("camH", 3.0))))
+            r.append(2.0 * (z[2] - float(prior.get("camH", 2.84))))
             r.append(1.0 * (math.degrees(z[4]) - float(prior.get("pitch", 45.0))) / 10.0)
             r.append(1.0 * (math.degrees(z[5]) - float(prior.get("yaw", 0.0))) / 10.0)
             r.append(3.0 * z[1])
@@ -115,8 +115,8 @@ def solve(calib: dict, img_w: int, img_h: int) -> dict:
                 z0 = np.zeros(n)
                 z0[0] = (img_w / 2) / math.tan(math.radians(fov0 / 2))
                 z0[1] = 0.0
-                z0[2] = float(prior.get("camH", 3.0))
-                z0[3] = -float(prior.get("camDist", 1.5))
+                z0[2] = float(prior.get("camH", 2.84))
+                z0[3] = -float(prior.get("camDist", 1.56))
                 z0[4] = math.radians(pitch0)
                 z0[5] = math.radians(float(prior.get("yaw", 0.0)))
                 z0[6] = 0.0

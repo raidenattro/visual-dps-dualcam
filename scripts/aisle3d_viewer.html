@@ -90,11 +90,11 @@
     <button type="button" id="modeAnnot">标注拣货面</button>
   </div>
   <div id="panelMain">
-    <div class="muted">相机可由标注反解；也可用滑条手调。</div>
+    <div class="muted">相机可由标注反解；滑条手调。「恢复反解」回到该机位反算结果，不是卷尺初值。</div>
     <div id="sliders"></div>
     <div id="saveRow">
       <button type="button" id="btnSave">保存到本机位</button>
-      <button type="button" id="btnReset">恢复默认</button>
+      <button type="button" id="btnReset">恢复反解</button>
     </div>
     <div id="saveMsg"></div>
     <div id="stats"></div>
@@ -114,10 +114,10 @@
       <tr><th>墙</th><th>面宽 m</th><th>面高 m</th><th>底沿离地 m<br><span class="muted">贴地填 0</span></th><th></th></tr>
       <tbody id="wallRows"></tbody>
     </table>
-    <label><span>巷道净宽 m</span><input type="number" id="dimAisle" step="0.01" value="1.70"></label>
+    <label><span>巷道净宽 m</span><input type="number" id="dimAisle" step="0.01" value="2.00"></label>
     <div class="muted" style="margin-top:6px">卷尺初值（只作先验）</div>
-    <label><span>相机高 m</span><input type="number" id="priCamH" step="0.05" value="3.00"></label>
-    <label><span>离近端 m</span><input type="number" id="priDist" step="0.05" value="1.50"></label>
+    <label><span>相机高 m</span><input type="number" id="priCamH" step="0.05" value="2.84"></label>
+    <label><span>离近端 m</span><input type="number" id="priDist" step="0.05" value="1.56"></label>
     <label><span>俯仰 °</span><input type="number" id="priPitch" step="1" value="45"></label>
     <label><span>偏航 °</span><input type="number" id="priYaw" step="1" value="0"></label>
     <div id="saveRow">
@@ -175,8 +175,8 @@ const SLIDER_DEFS = [
 ];
 
 const DEFAULTS = {
-  camH: 3.0, camDist: 1.5, camX: 0.0, pitch: 45.0, yaw: 0.0, roll: 0.0, fovH: 90.0,
-  aisle: 1.7, boxW: 0.42, boxH: 0.36, boxD: 0.48, baseY: 0.12, kptMin: 0.25, syncMs: 0,
+  camH: 2.84, camDist: 1.56, camX: 0.0, pitch: 45.0, yaw: 0.0, roll: 0.0, fovH: 90.0,
+  aisle: 2.0, boxW: 0.42, boxH: 0.36, boxD: 0.48, baseY: 0.12, kptMin: 0.25, syncMs: 0,
 };
 const INDEX = await fetch('/api/index.json').then((r) => r.json());
 let SCENE = {
@@ -217,9 +217,15 @@ function saveParams() {
 }
 function resetParams() {
   Object.assign(P, DEFAULTS);
+  if (calib.solved && calib.solved.ok) {
+    adoptSolved(calib.solved);
+    saveParams();
+    persistHint(`已恢复反解 · ${SCENE.camera_slug}`);
+    return;
+  }
   localStorage.removeItem(getStoreKey());
   loadParamsForCamera();
-  persistHint(`已恢复默认 · ${SCENE.camera_slug}`);
+  persistHint(`无反解，已恢复卷尺基准 · ${SCENE.camera_slug}`);
   rebuild();
 }
 
@@ -1157,7 +1163,7 @@ document.getElementById('play').onclick = () => {
 
 // ---- 拣货面标注 ----
 const CORNER_HINT = ['① 顶沿·远端', '② 顶沿·近端', '③ 底沿·近端', '④ 底沿·远端'];
-let calib = { aisle: 1.7, prior: {}, walls: [] };
+let calib = { aisle: 2.0, prior: {}, walls: [] };
 let activeWall = 0;
 let dragIdx = -1;
 
@@ -1171,7 +1177,7 @@ function wallIds() {
 function ensureWalls() {
   const ids = wallIds();
   const byId = new Map(calib.walls.map((w) => [w.wall_id, w]));
-  calib.walls = ids.map((id) => byId.get(id) || { wall_id: id, width: 2.4, height: 1.7, base: 0, quad: [] });
+  calib.walls = ids.map((id) => byId.get(id) || { wall_id: id, width: 2.2, height: 2.0, base: 0, quad: [] });
   if (activeWall >= calib.walls.length) activeWall = 0;
 }
 
@@ -1427,15 +1433,15 @@ async function loadCalib() {
     saved = await fetch('/api/calib?camera_slug=' + encodeURIComponent(SCENE.camera_slug)).then((r) => r.json());
   } catch { /* ignore */ }
   calib = {
-    aisle: saved.aisle || 1.7,
+    aisle: saved.aisle || 2.0,
     prior: saved.prior || {},
     walls: saved.walls || [],
     solved: saved.solved,
   };
   ensureWalls();
   document.getElementById('dimAisle').value = String(calib.aisle);
-  document.getElementById('priCamH').value = String(calib.prior.camH ?? 3.0);
-  document.getElementById('priDist').value = String(calib.prior.camDist ?? 1.5);
+  document.getElementById('priCamH').value = String(calib.prior.camH ?? 2.84);
+  document.getElementById('priDist').value = String(calib.prior.camDist ?? 1.56);
   document.getElementById('priPitch').value = String(calib.prior.pitch ?? 45);
   document.getElementById('priYaw').value = String(calib.prior.yaw ?? 0);
   renderWallRows();

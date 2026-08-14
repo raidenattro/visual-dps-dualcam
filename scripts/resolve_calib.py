@@ -27,6 +27,8 @@ def main() -> None:
     ap.add_argument("--width", type=float, help="面宽 m")
     ap.add_argument("--height", type=float, help="面高 m")
     ap.add_argument("--aisle", type=float, help="巷道净宽 m")
+    ap.add_argument("--cam-h", type=float, help="相机高先验 m")
+    ap.add_argument("--cam-dist", type=float, help="相机到近端水平距离先验 m")
     ap.add_argument("--slug", help="只处理这个机位")
     ap.add_argument("--dry-run", action="store_true", help="只打印，不写回")
     args = ap.parse_args()
@@ -46,6 +48,13 @@ def main() -> None:
             continue
         if args.aisle is not None:
             calib["aisle"] = args.aisle
+        prior = dict(calib.get("prior") or {})
+        if args.cam_h is not None:
+            prior["camH"] = args.cam_h
+        if args.cam_dist is not None:
+            prior["camDist"] = args.cam_dist
+        if prior:
+            calib["prior"] = prior
         for w in walls:
             for key, val in (("base", args.base), ("width", args.width), ("height", args.height)):
                 if val is not None:
