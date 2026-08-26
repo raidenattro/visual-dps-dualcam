@@ -178,3 +178,117 @@ def solve(calib: dict, img_w: int, img_h: int) -> dict:
         },
         "walls": out_walls,
     }
+
+
+# 对向双机：每路按「相对本机 顶远/顶近/底近/底远」标同一面墙。
+# 路 B 的近端 = 路 A 的远端，对应角序 [1, 0, 3, 2]。
+_OPP_CORNER = (1, 0, 3, 2)
+
+
+def _umeyama(src: np.ndarray, dst: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+    """刚体+均匀缩放：dst ≈ s R src + t。"""
+    mu_s, mu_d = src.mean(0), dst.mean(0)
+    x, y = src - mu_s, dst - mu_d
+    var = float(np.mean(np.sum(x * x, axis=1)))
+    u, s, vt = np.linalg.svd(y.T @ x / len(src))
+    d = np.ones(3)
+    if np.linalg.det(u @ vt) < 0:
+        d[-1] = -1
+    R = u @ np.diag(d) @ vt
+    scale = float(np.sum(s * d) / var) if var > 1e-12 else 1.0
+    t = mu_d - scale * R @ mu_s
+    return R, t, scale
+
+
+def _cam_center(sol: dict) -> np.ndarray:
+    c = sol["camera"]
+    # solve() 把近端挪到 z=0 后 camDist = -(camZ - shift)，故 camZ = -camDist
+    return np.array([c["camX"], c["camH"], -c["camDist"]], float)
+
+
+def _cam_bundle(sol: dict, img_w: int, img_h: int, R=None, t=None, scale: float = 1.0) -> dict:
+    c = sol["camera"]
+    right, down, fwd = cam_axes(
+        math.radians(c["pitch"]), math.radians(c["yaw"]), math.radians(c["roll"])
+    )
+    C = _cam_center(sol)
+    if R is not None:
+        right, down, fwd = R @ right, R @ down, R @ fwd
+        C = scale * (R @ C) + t
+    f = (img_w / 2.0) / math.tan(math.radians(c["fovH"] / 2.0))
+    return {
+        "f": round(float(f), 3),
+        "cx": round(img_w / 2.0, 2),
+        "cy": round(img_h / 2.0, 2),
+        "C": [round(float(v), 4) for v in C],
+        "right": [round(float(v), 6) for v in right],
+        "down": [round(float(v), 6) for v in down],
+        "fwd": [round(float(v), 6) for v in fwd],
+        "fovH": c["fovH"],
+        "camH": round(float(C[1]), 4),
+        "resid_px": sol["resid_px"],
+        "corner_resid_px": sol.get("corner_resid_px") or [],
+    }
+
+
+def solve_dual(payload: dict) -> dict:
+    """两路各自反解，再把路 B 对到路 A 的巷道坐标。"""
+    views = payload.get("views") or []
+    if len(views) != 2:
+        return {"ok": False, "error": "需要恰好两路"}
+    sols = []
+    for v in views:
+        w, h = (v.get("image_size") or [1280, 720])[:2]
+        cal = {
+            "aisle": payload.get("aisle"),
+            "prior": v.get("prior") or payload.get("prior") or {},
+            "walls": v.get("walls") or [],
+        }
+        res = solve(cal, int(w), int(h))
+        if not res.get("ok"):
+            return {"ok": False, "error": f"{v.get('name')}: {res.get('error')}"}
+        sols.append(res)
+
+    wa = {w["wall_id"]: w for w in sols[0]["walls"]}
+    wb = {w["wall_id"]: w for w in sols[1]["walls"]}
+    common = [k for k in wa if k in wb]
+    if not common:
+        return {"ok": False, "error": "两路没有同 id 的墙，无法对齐"}
+    wid = 1 if 1 in common else common[0]
+    A = np.array(wa[wid]["corners"], float)
+    B = np.array(wb[wid]["corners"], float)[list(_OPP_CORNER)]
+    R, t, scale = _umeyama(B, A)
+    fit = float(np.sqrt(np.mean(np.sum((scale * (R @ B.T).T + t - A) ** 2, axis=1))))
+    if abs(scale - 1.0) > 0.15:
+        return {
+            "ok": False,
+            "error": f"对齐尺度 {scale:.3f} 偏离 1 太多，检查是否标的同一面、尺寸是否一致",
+            "align_scale": round(scale, 3),
+            "align_rms_m": round(fit, 4),
+        }
+
+    size_a = (views[0].get("image_size") or [1280, 720])[:2]
+    size_b = (views[1].get("image_size") or [1280, 720])[:2]
+    cam_a = _cam_bundle(sols[0], int(size_a[0]), int(size_a[1]))
+    cam_b = _cam_bundle(sols[1], int(size_b[0]), int(size_b[1]), R, t, scale)
+    walls = []
+    for w in sols[0]["walls"]:
+        walls.append({
+            "wall_id": w["wall_id"],
+            "sign": w["sign"],
+            "z_near": w["z_near"],
+            "corners": w["corners"],
+        })
+    return {
+        "ok": True,
+        "aisle": sols[0]["aisle"],
+        "align_scale": round(scale, 4),
+        "align_rms_m": round(fit, 4),
+        "align_wall_id": wid,
+        "cameras": {views[0].get("name") or "L": cam_a, views[1].get("name") or "R": cam_b},
+        "walls": walls,
+        "per_view": {
+            views[0].get("name") or "L": {"resid_px": sols[0]["resid_px"], "camera": sols[0]["camera"]},
+            views[1].get("name") or "R": {"resid_px": sols[1]["resid_px"], "camera": sols[1]["camera"]},
+        },
+    }
