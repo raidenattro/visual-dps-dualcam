@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8"/>
+<title>双路 3D 骨架回放</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; color: #ddd; font: 13px/1.4 system-ui, sans-serif; }
+  #app { display: grid; grid-template-columns: 1fr 1.1fr 1fr; grid-template-rows: 1fr 64px; height: 100%; }
+  .pane {
+    position: relative; background: #000; min-width: 0; min-height: 0;
+    border-right: 1px solid #222; container-type: size;
+    display: grid; place-items: center;
+  }
+  .stage {
+    position: relative;
+    width: min(100cqw, calc(100cqh * 16 / 9));
+    aspect-ratio: 16 / 9;
+    background: #000;
+  }
+  .stage video, .stage canvas.ov { display: block; width: 100%; height: 100%; }
+  .stage video { object-fit: cover; }
+  .stage video.L { object-position: left center; }
+  .stage video.R { object-position: right center; }
+  .stage canvas.ov { position: absolute; inset: 0; pointer-events: none; }
+  #view3d { position: relative; min-width: 0; min-height: 0; }
+  #c { display: block; width: 100%; height: 100%; }
+  .tag { position: absolute; left: 8px; top: 8px; background: rgba(0,0,0,.7); padding: 2px 8px; z-index: 2; }
+  #hud {
+    position: absolute; left: 8px; bottom: 8px; z-index: 2;
+    background: rgba(0,0,0,.7); padding: 4px 8px; font-variant-numeric: tabular-nums;
+  }
+  #hud .near { color: #3dd68c; }
+  #hud .far { color: #8ab4ff; }
+  #bar {
+    grid-column: 1 / -1;
+    display: flex; gap: 10px; align-items: center;
+    padding: 8px 14px; border-top: 1px solid #333; background: #181818;
+  }
+  #bar input[type=range] { flex: 1; }
+  button { background: #2a2a2a; color: #eee; border: 1px solid #444; padding: 5px 12px; cursor: pointer; }
+  #tlab { width: 92px; color: #bbb; font-variant-numeric: tabular-nums; }
+  #hint { color: #777; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="pane">
+    <span class="tag">左路 · 1-3组-1</span>
+    <div class="stage">
+      <video id="vidL" class="L" playsinline muted></video>
+      <canvas class="ov" id="ovL"></canvas>
+    </div>
+  </div>
+  <div id="view3d">
+    <span class="tag">巷道 3D · 拖拽旋转</span>
+    <div id="hud">—</div>
+    <canvas id="c"></canvas>
+  </div>
+  <div class="pane">
+    <span class="tag">右路 · 1-3组-2</span>
+    <div class="stage">
+      <video id="vidR" class="R" playsinline muted></video>
+      <canvas class="ov" id="ovR"></canvas>
+    </div>
+  </div>
+  <div id="bar">
+    <button id="btnPlay">播放</button>
+    <input type="range" id="seek" min="0" max="1000" value="0" step="0.04">
+    <span id="tlab">0:00</span>
+    <span id="hint">空格播放 · ←→ 跳 2 秒</span>
+  </div>
+</div>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.1/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const DATA = await fetch('/api/skel3d').then((r) => r.json());
+const vidL = document.getElementById('vidL');
+const vidR = document.getElementById('vidR');
+const ovL = document.getElementById('ovL');
+const ovR = document.getElementById('ovR');
+const seek = document.getElementById('seek');
+const tlab = document.getElementById('tlab');
+const hud = document.getElementById('hud');
+const btn = document.getElementById('btnPlay');
+const frames = DATA.frames;
+const times = frames.map((f) => f.t);
+
+function fmt(t) {
+  const m = Math.floor(t / 60);
+  const s = Math.floor(t % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+function nearest(t) {
+  let lo = 0, hi = times.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (times[mid] < t) lo = mid + 1;
+    else hi = mid;
+  }
+  if (lo > 0 && Math.abs(times[lo - 1] - t) < Math.abs(times[lo] - t)) return lo - 1;
+  return lo;
+}
+function dClass(d) {
+  if (d == null) return '';
+  return d <= 0.10 ? 'near' : 'far';
+}
+function dTxt(d) {
+  return d == null ? '—' : `${d.toFixed(2)}m`;
+}
+
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const viewCam = new THREE.PerspectiveCamera(50, 1, 0.05, 40);
+viewCam.position.set(3.6, 3.4, 1.1);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111111);
+const controls = new OrbitControls(viewCam, canvas);
+controls.target.set(0, 0.9, 1.1);
+controls.enableDamping = true;
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const dir = new THREE.DirectionalLight(0xffffff, 0.7);
+dir.position.set(2, 6, 1);
+scene.add(dir);
+scene.add(new THREE.GridHelper(8, 16, 0x3a3a3a, 0x2a2a2a));
+
+const wallMat = [
+  new THREE.MeshPhongMaterial({ color: 0x3d8a5a, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }),
+  new THREE.MeshPhongMaterial({ color: 0x2f6f9f, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }),
+];
+for (const w of DATA.walls) {
+  const c = w.corners;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute([
+    ...c[0], ...c[1], ...c[2], ...c[0], ...c[2], ...c[3],
+  ], 3));
+  scene.add(new THREE.Mesh(geo, wallMat[w.wall_id === 1 ? 0 : 1]));
+  const lg = new THREE.BufferGeometry();
+  lg.setAttribute('position', new THREE.Float32BufferAttribute([...c[0], ...c[1], ...c[1], ...c[2], ...c[2], ...c[3], ...c[3], ...c[0]], 3));
+  scene.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: w.wall_id === 1 ? 0x5c8 : 0x6af })));
+}
+
+function addCam(cam, color) {
+  const g = new THREE.Group();
+  const ball = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 10), new THREE.MeshBasicMaterial({ color }));
+  ball.position.set(...cam.C);
+  g.add(ball);
+  g.add(new THREE.ArrowHelper(new THREE.Vector3(...cam.fwd), new THREE.Vector3(...cam.C), 0.55, color, 0.12, 0.08));
+  scene.add(g);
+}
+addCam(DATA.cameras.L, 0xffcc66);
+addCam(DATA.cameras.R, 0xff8866);
+
+const skelGroup = new THREE.Group();
+scene.add(skelGroup);
+const jointGeo = new THREE.SphereGeometry(0.032, 10, 10);
+const boneMat = new THREE.LineBasicMaterial({ color: 0x66e0ff });
+const jointMat = new THREE.MeshPhongMaterial({ color: 0x66e0ff });
+const wristMats = {
+  near: new THREE.MeshPhongMaterial({ color: 0x3dd68c }),
+  far: new THREE.MeshPhongMaterial({ color: 0xffa23c }),
+};
+
+function resize3d() {
+  const box = canvas.parentElement.getBoundingClientRect();
+  const w = Math.max(1, box.width), h = Math.max(1, box.height);
+  renderer.setSize(w, h, false);
+  viewCam.aspect = w / h;
+  viewCam.updateProjectionMatrix();
+}
+new ResizeObserver(resize3d).observe(canvas.parentElement);
+
+function draw3d(fr) {
+  while (skelGroup.children.length) skelGroup.remove(skelGroup.children[0]);
+  if (!fr || !fr.ok) return;
+  const xyz = fr.xyz;
+  for (let i = 0; i < 17; i++) {
+    const p = xyz[i];
+    if (!p) continue;
+    const isW = i === 9 || i === 10;
+    const d = i === 9 ? fr.dL : fr.dR;
+    const mat = isW ? (d != null && d <= 0.10 ? wristMats.near : wristMats.far) : jointMat;
+    const s = new THREE.Mesh(jointGeo, mat);
+    s.position.set(...p);
+    skelGroup.add(s);
+  }
+  const pos = [];
+  for (const [a, b] of DATA.edges) {
+    if (!xyz[a] || !xyz[b]) continue;
+    pos.push(...xyz[a], ...xyz[b]);
+  }
+  if (pos.length) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    skelGroup.add(new THREE.LineSegments(g, boneMat));
+  }
+}
+
+function draw2d(cv, kpts, scores, side) {
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if (!w || !h) return;
+  if (cv.width !== w) cv.width = w;
+  if (cv.height !== h) cv.height = h;
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, w, h);
+  if (!kpts) return;
+  const sx = w / 1280, sy = h / 720;
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#66e0ff';
+  ctx.fillStyle = '#66e0ff';
+  for (const [a, b] of DATA.edges) {
+    if (scores[a] < DATA.kpt_min || scores[b] < DATA.kpt_min) continue;
+    ctx.beginPath();
+    ctx.moveTo(kpts[a][0] * sx, kpts[a][1] * sy);
+    ctx.lineTo(kpts[b][0] * sx, kpts[b][1] * sy);
+    ctx.stroke();
+  }
+  for (let i = 0; i < 17; i++) {
+    if (scores[i] < DATA.kpt_min) continue;
+    ctx.beginPath();
+    ctx.arc(kpts[i][0] * sx, kpts[i][1] * sy, i === 9 || i === 10 ? 5 : 3, 0, Math.PI * 2);
+    ctx.fillStyle = (i === 9 || i === 10) ? '#ffa23c' : '#66e0ff';
+    ctx.fill();
+  }
+}
+
+let lastIdx = -1;
+function show(t) {
+  tlab.textContent = fmt(t);
+  if (Math.abs(Number(seek.value) - t) > 0.05) seek.value = String(t);
+  const idx = nearest(t);
+  const fr = frames[idx];
+  if (idx !== lastIdx) {
+    lastIdx = idx;
+    draw3d(fr);
+    draw2d(ovL, fr && fr.L, fr && fr.sL, 'L');
+    draw2d(ovR, fr && fr.R, fr && fr.sR, 'R');
+    if (!fr || !fr.ok) {
+      hud.textContent = '未配对';
+      hud.className = '';
+    } else {
+      hud.innerHTML =
+        `交会 ${fr.gap.toFixed(2)}m<br>` +
+        `<span class="${dClass(fr.dL)}">左腕 ${dTxt(fr.dL)}</span>　` +
+        `<span class="${dClass(fr.dR)}">右腕 ${dTxt(fr.dR)}</span>`;
+    }
+  }
+}
+
+function setTime(t, play) {
+  t = Math.max(0, Math.min(vidL.duration || 1000, t));
+  vidL.currentTime = t;
+  vidR.currentTime = t;
+  if (!play) show(t);
+}
+
+vidL.src = vidR.src = '/api/video';
+vidL.addEventListener('loadedmetadata', () => {
+  seek.max = String(vidL.duration);
+  show(0);
+});
+btn.onclick = () => {
+  if (vidL.paused) {
+    vidR.currentTime = vidL.currentTime;
+    vidL.play(); vidR.play();
+    btn.textContent = '暂停';
+  } else {
+    vidL.pause(); vidR.pause();
+    btn.textContent = '播放';
+  }
+};
+seek.oninput = () => {
+  vidL.pause(); vidR.pause();
+  btn.textContent = '播放';
+  setTime(Number(seek.value), false);
+};
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') { e.preventDefault(); btn.click(); }
+  if (e.code === 'ArrowLeft') setTime(vidL.currentTime - 2, false);
+  if (e.code === 'ArrowRight') setTime(vidL.currentTime + 2, false);
+});
+
+function tick() {
+  if (!vidL.paused) {
+    if (Math.abs(vidR.currentTime - vidL.currentTime) > 0.08) vidR.currentTime = vidL.currentTime;
+    show(vidL.currentTime);
+  }
+  controls.update();
+  renderer.render(scene, viewCam);
+  requestAnimationFrame(tick);
+}
+for (const el of document.querySelectorAll('.stage')) {
+  new ResizeObserver(() => { lastIdx = -1; show(vidL.currentTime || 0); }).observe(el);
+}
+resize3d();
+tick();
+</script>
+</body>
+</html>

@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8"/>
+<title>双路拣货面标注</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; color: #ddd; font: 13px/1.4 system-ui, sans-serif; }
+  #app { display: grid; grid-template-columns: 1fr 300px; height: 100%; }
+  #views { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 10px 10px 70px; min-width: 0; }
+  .pane { position: relative; background: #000; border: 1px solid #333; min-height: 0; }
+  .pane.on { border-color: #5c8; }
+  .pane video, .pane canvas { display: block; width: 100%; aspect-ratio: 1280 / 720; height: auto; }
+  .pane video { object-fit: cover; background: #000; }
+  .pane video.L { object-position: left center; }
+  .pane video.R { object-position: right center; }
+  .pane canvas { position: absolute; left: 0; top: 0; cursor: crosshair; }
+  .tag { position: absolute; left: 8px; top: 8px; background: rgba(0,0,0,.7); padding: 2px 8px; color: #fff; }
+  #panel { border-left: 1px solid #333; padding: 12px; overflow: auto; }
+  h1 { margin: 0 0 8px; font-size: 15px; color: #fff; }
+  .muted { color: #8a8a8a; }
+  .hint { color: #e0b060; min-height: 3.2em; margin: 8px 0; }
+  label { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+  label span { width: 96px; color: #bbb; flex-shrink: 0; }
+  input[type=number] { width: 72px; background: #222; color: #ddd; border: 1px solid #444; padding: 2px 4px; }
+  table { border-collapse: collapse; width: 100%; margin: 6px 0; }
+  th, td { padding: 3px 4px; text-align: left; font-weight: 400; color: #bbb; }
+  tr.active td { background: #24323d; }
+  button { background: #2a2a2a; color: #eee; border: 1px solid #444; padding: 5px 10px; cursor: pointer; }
+  button.pri { background: #2a4a3a; border-color: #5c8; }
+  #bar {
+    position: fixed; left: 10px; right: 310px; bottom: 10px;
+    background: rgba(18,18,18,.95); border: 1px solid #333; padding: 8px 12px;
+    display: flex; gap: 10px; align-items: center;
+  }
+  #bar input[type=range] { flex: 1; }
+  #msg { margin-top: 8px; color: #9ad; white-space: pre-wrap; }
+  #btns { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="views">
+    <div class="pane on" data-view="L">
+      <span class="tag">左路 · 1-3组-1</span>
+      <video id="vidL" class="L" playsinline muted></video>
+      <canvas id="cvL"></canvas>
+    </div>
+    <div class="pane" data-view="R">
+      <span class="tag">右路 · 1-3组-2</span>
+      <video id="vidR" class="R" playsinline muted></video>
+      <canvas id="cvR"></canvas>
+    </div>
+  </div>
+  <div id="panel">
+    <h1>双路拣货面</h1>
+    <div class="muted">墙1 = 人伸手那一面，两路都标这一面。<br>墙2 = 对面货架。<br>点序相对<strong>这一路相机</strong>：①顶远 ②顶近 ③底近 ④底远。底边贴地，底沿离地填 0。</div>
+    <div class="hint" id="hint"></div>
+    <table>
+      <tr><th>墙</th><th>面宽</th><th>面高</th><th>底沿</th><th>L</th><th>R</th></tr>
+      <tbody id="rows"></tbody>
+    </table>
+    <label><span>巷道净宽 m</span><input type="number" id="aisle" step="0.01" value="2.00"></label>
+    <div class="muted" style="margin-top:8px">卷尺初值（先验，可改）</div>
+    <label><span>相机高 m</span><input type="number" id="camH" step="0.05" value="2.84"></label>
+    <label><span>离近端 m</span><input type="number" id="camDist" step="0.05" value="1.56"></label>
+    <label><span>俯仰 °</span><input type="number" id="pitch" step="1" value="45"></label>
+    <div id="btns">
+      <button id="btnUndo">撤销点</button>
+      <button id="btnClear">清空本墙本路</button>
+      <button id="btnSave">保存标注</button>
+      <button class="pri" id="btnSolve">反解并对齐</button>
+    </div>
+    <div id="msg"></div>
+  </div>
+</div>
+<div id="bar">
+  <button id="btnPlay">播放</button>
+  <input type="range" id="seek" min="0" max="1000" value="0" step="1">
+  <span id="tlab">0:00</span>
+</div>
+<script>
+const IW = 1280, IH = 720;
+const HINT = ['① 顶沿·远端', '② 顶沿·近端', '③ 底沿·近端', '④ 底沿·远端'];
+const vidL = document.getElementById('vidL');
+const vidR = document.getElementById('vidR');
+const vid = vidL;
+const cvs = { L: document.getElementById('cvL'), R: document.getElementById('cvR') };
+const ctx = { L: cvs.L.getContext('2d'), R: cvs.R.getContext('2d') };
+let activeView = 'L';
+let activeWall = 0;
+let drag = -1;
+let state = {
+  aisle: 2.0,
+  prior: { camH: 2.84, camDist: 1.56, pitch: 45, yaw: 0 },
+  views: {
+    L: { name: 'L', image_size: [IW, IH], walls: emptyWalls() },
+    R: { name: 'R', image_size: [IW, IH], walls: emptyWalls() },
+  },
+};
+
+function emptyWalls() {
+  return [
+    { wall_id: 1, width: 2.2, height: 2.0, base: 0, quad: [] },
+    { wall_id: 2, width: 2.2, height: 2.0, base: 0, quad: [] },
+  ];
+}
+
+function wallsOf(v) { return state.views[v].walls; }
+
+function renderRows() {
+  const tb = document.getElementById('rows');
+  const wL = wallsOf('L'), wR = wallsOf('R');
+  tb.innerHTML = wL.map((w, i) => `
+    <tr class="${i === activeWall ? 'active' : ''}" data-i="${i}">
+      <td>墙${w.wall_id}</td>
+      <td><input type="number" step="0.01" data-k="width" value="${w.width}"></td>
+      <td><input type="number" step="0.01" data-k="height" value="${w.height}"></td>
+      <td><input type="number" step="0.01" data-k="base" value="${w.base}"></td>
+      <td>${wL[i].quad.length}/4</td>
+      <td>${wR[i].quad.length}/4</td>
+    </tr>`).join('');
+  for (const tr of tb.querySelectorAll('tr')) {
+    const i = Number(tr.dataset.i);
+    tr.addEventListener('click', (e) => {
+      if (e.target.tagName === 'INPUT') return;
+      activeWall = i;
+      renderRows();
+      hint();
+      draw();
+    });
+    for (const inp of tr.querySelectorAll('input')) {
+      inp.addEventListener('change', () => {
+        const k = inp.dataset.k, val = Number(inp.value);
+        wL[i][k] = val;
+        wR[i][k] = val;
+      });
+    }
+  }
+  hint();
+}
+
+function hint() {
+  const w = wallsOf(activeView)[activeWall];
+  const el = document.getElementById('hint');
+  if (!w) { el.textContent = ''; return; }
+  const side = activeView === 'L' ? '左路' : '右路';
+  if (w.quad.length < 4) {
+    el.textContent = `${side} 墙${w.wall_id}：点 ${HINT[w.quad.length]}（相对这一路的远/近）`;
+  } else {
+    el.textContent = `${side} 墙${w.wall_id} 已齐。点另一路画面，或点表格换墙。`;
+  }
+}
+
+function fitCanvas(cv) {
+  const r = cv.getBoundingClientRect();
+  const w = Math.max(2, Math.floor(r.width));
+  const h = Math.max(2, Math.floor(w * IH / IW));
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+}
+
+function draw() {
+  for (const v of ['L', 'R']) {
+    fitCanvas(cvs[v]);
+    const c = ctx[v];
+    c.clearRect(0, 0, cvs[v].width, cvs[v].height);
+    const k = cvs[v].width / IW;
+    wallsOf(v).forEach((w, wi) => {
+      if (!w.quad.length) return;
+      const on = v === activeView && wi === activeWall;
+      c.strokeStyle = on ? '#5cf08a' : '#4a8a5f';
+      c.fillStyle = on ? '#5cf08a' : '#4a8a5f';
+      c.lineWidth = on ? 2.2 : 1.4;
+      c.beginPath();
+      w.quad.forEach((p, i) => {
+        const x = p[0] * k, y = p[1] * k;
+        if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
+      });
+      if (w.quad.length === 4) {
+        c.closePath();
+        c.fillStyle = 'rgba(92,240,138,.12)';
+        c.fill();
+        c.fillStyle = on ? '#5cf08a' : '#4a8a5f';
+      }
+      c.stroke();
+      w.quad.forEach((p, i) => {
+        const x = p[0] * k, y = p[1] * k;
+        c.beginPath();
+        c.arc(x, y, 7, 0, Math.PI * 2);
+        c.fillStyle = on ? '#5cf08a' : '#4a8a5f';
+        c.fill();
+        c.fillStyle = '#04150a';
+        c.font = '11px sans-serif';
+        c.textAlign = 'center';
+        c.textBaseline = 'middle';
+        c.fillText(String(i + 1), x, y);
+      });
+    });
+  }
+  document.querySelectorAll('.pane').forEach((p) => p.classList.toggle('on', p.dataset.view === activeView));
+}
+
+function evtToImg(e, v) {
+  const r = cvs[v].getBoundingClientRect();
+  return [
+    (e.clientX - r.left) / r.width * IW,
+    (e.clientY - r.top) / r.height * IH,
+  ];
+}
+
+for (const v of ['L', 'R']) {
+  const cv = cvs[v];
+  cv.addEventListener('pointerdown', (e) => {
+    activeView = v;
+    const w = wallsOf(v)[activeWall];
+    if (!w) return;
+    const [x, y] = evtToImg(e, v);
+    let hit = -1;
+    w.quad.forEach((p, i) => { if (Math.hypot(p[0] - x, p[1] - y) < 24) hit = i; });
+    if (hit >= 0) {
+      drag = hit;
+      cv.setPointerCapture(e.pointerId);
+    } else if (w.quad.length < 4) {
+      w.quad.push([x, y]);
+      renderRows();
+    }
+    draw();
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (drag < 0 || activeView !== v) return;
+    wallsOf(v)[activeWall].quad[drag] = evtToImg(e, v);
+    draw();
+  });
+  cv.addEventListener('pointerup', () => { drag = -1; });
+}
+
+function collect() {
+  state.aisle = Number(document.getElementById('aisle').value);
+  state.prior = {
+    camH: Number(document.getElementById('camH').value),
+    camDist: Number(document.getElementById('camDist').value),
+    pitch: Number(document.getElementById('pitch').value),
+    yaw: 0,
+  };
+  for (const v of ['L', 'R']) state.views[v].prior = state.prior;
+  return state;
+}
+
+async function post(path) {
+  const r = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(collect()),
+  });
+  return r.json();
+}
+
+document.getElementById('btnUndo').onclick = () => {
+  const q = wallsOf(activeView)[activeWall].quad;
+  if (q.length) q.pop();
+  renderRows(); draw();
+};
+document.getElementById('btnClear').onclick = () => {
+  wallsOf(activeView)[activeWall].quad = [];
+  renderRows(); draw();
+};
+document.getElementById('btnSave').onclick = async () => {
+  const res = await post('/api/calib');
+  document.getElementById('msg').textContent = res.ok ? `已存 ${res.path}` : (res.error || '保存失败');
+};
+document.getElementById('btnSolve').onclick = async () => {
+  document.getElementById('msg').textContent = '求解中…';
+  const res = await post('/api/solve');
+  if (!res.ok) {
+    document.getElementById('msg').textContent = res.error || '失败';
+    return;
+  }
+  const a = res.per_view.L, b = res.per_view.R;
+  document.getElementById('msg').textContent =
+    `左路残差 ${a.resid_px}px · 右路 ${b.resid_px}px\n` +
+    `对齐误差 ${res.align_rms_m} m · 尺度 ${res.align_scale}\n` +
+    `左相机高 ${res.cameras.L.camH} m · 右 ${res.cameras.R.camH} m`;
+};
+
+function fmt(t) {
+  const m = Math.floor(t / 60), s = Math.floor(t % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+const seek = document.getElementById('seek');
+vid.addEventListener('loadedmetadata', () => {
+  seek.max = Math.floor(vid.duration * 25);
+  draw();
+});
+vid.addEventListener('timeupdate', () => {
+  seek.value = Math.round(vid.currentTime * 25);
+  document.getElementById('tlab').textContent = fmt(vid.currentTime);
+});
+seek.oninput = () => {
+  const t = Number(seek.value) / 25;
+  vidL.currentTime = t;
+  vidR.currentTime = t;
+};
+document.getElementById('btnPlay').onclick = () => {
+  if (vidL.paused) {
+    vidL.play(); vidR.play();
+    document.getElementById('btnPlay').textContent = '暂停';
+  } else {
+    vidL.pause(); vidR.pause();
+    document.getElementById('btnPlay').textContent = '播放';
+  }
+};
+
+vid.addEventListener('seeked', draw);
+vidL.addEventListener('error', () => {
+  const e = vidL.error;
+  document.getElementById('msg').textContent = '视频加载失败：' + (e ? e.message || e.code : 'unknown');
+});
+window.addEventListener('resize', draw);
+
+(async () => {
+  const saved = await fetch('/api/calib').then((r) => r.json()).catch(() => ({}));
+  if (saved && saved.views) {
+    state = saved;
+    if (saved.aisle) document.getElementById('aisle').value = saved.aisle;
+    const p = saved.prior || {};
+    if (p.camH) document.getElementById('camH').value = p.camH;
+    if (p.camDist) document.getElementById('camDist').value = p.camDist;
+    if (p.pitch) document.getElementById('pitch').value = p.pitch;
+  }
+  renderRows();
+  vidL.src = '/api/video';
+  vidR.src = '/api/video';
+  draw();
+})();
+</script>
+</body>
+</html>
