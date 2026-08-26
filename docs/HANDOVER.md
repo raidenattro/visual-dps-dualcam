@@ -1,6 +1,6 @@
 # 交接：当前进度与下一步
 
-更新时间：2026-08-26　分支：`exp/rzy`（基线成果在 `exp/tagged-aug85-v1`；门控在 `exp/action-gate-perf`）
+更新时间：2026-08-26　分支：`exp/dualcam-1-3`（基线成果在 `exp/tagged-aug85-v1`；门控在 `exp/action-gate-perf`）
 
 ## 一句话
 
