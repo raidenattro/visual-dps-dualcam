@@ -98,4 +98,7 @@ python3 -m venv .venv   # 首次
 .venv/bin/python scripts/build_fp_audit_set.py
 .venv/bin/python scripts/fp_audit.py --events output/audit/fp_audit_set.json \
   --min-peak 0 --out output/audit/fp_audit.json
+
+# 双路 3D 回放（1-3 组对打片；姿态推理用 visual-dps conda，见日报 8.26）
+.venv/bin/python scripts/serve_dualcam.py   # http://<lan>:8767/  标注；/play 同步骨架
 ```

@@ -1,6 +1,6 @@
 # 交接：当前进度与下一步
 
-更新时间：2026-08-14　分支：`exp/action-gate-perf`（基线成果在 `exp/tagged-aug85-v1`）
+更新时间：2026-08-26　分支：`exp/rzy`（基线成果在 `exp/tagged-aug85-v1`；门控在 `exp/action-gate-perf`）
 
 ## 一句话
 
@@ -129,10 +129,35 @@ v1 作废；v3 补标重训（v6）端到端无收益，勿再推。
 `armBack` 肩后伸、`headFwd` 眼在耳前、`noseFwd` 鼻在肩线前、`elbowFwd` 肘不反折。
 动权重前先量化再验残差，别凭手感调。
 
+## 双路三角化（2026-08-26，验证，未进推理）
+
+1-3 组巷道两端对打拼接片，两路标同一拣货面，各自反解后 Umeyama 对到 A 的巷道系，再三角化 17 点。  
+详见 `docs/daily/DAILY-2026-08-26.md`。
+
+```bash
+.venv/bin/python scripts/serve_dualcam.py   # 8767  / 标注  /play 3D回放
+# 姿态须 visual-dps conda + LD_LIBRARY_PATH（本仓 .venv 无 rtmlib）
+# /home/hqit/miniconda3/envs/visual-dps/bin/python scripts/dualcam_lift.py 10
+.venv/bin/python scripts/dump_skel3d.py
+```
+
+| 项 | 内容 |
+|----|------|
+| 标定 | `output/calib/dual_1-3.json`（**手工标注，已入库**，勿删） |
+| 残差 | L 7.66 px / R 6.01 px；相机高 ≈2.95 m，基线 ≈5 m |
+| 全片 2.5fps | 2558 帧、1565 配对；三角缝中位 **4 cm** |
+| 腕到面 | p50 0.56 m；15.5% 贴面/伸进（d≤0.10）；71% 停在通道（d>0.40） |
+| 产物 | `output/dualcam/`（gitignore，视频/npz/skel3d 本地重跑） |
+
+结论：双路能把「伸进筐」和「停在框前」在深度上分开；单路射线∩面做不到。还没到改线上的时候。
+
+**坑**：`align_rms=0` 只说明墙矩形尺寸一致，不证明点的是同一物理角。左右路必须按 16:9 显示半幅，格子拉满会裁歪。
+
 ## 下一步（已入 backlog）
 
-1. **框 ROI 时序变化**（光流/帧差/纹理）— 不依赖腕点是否配对  
-2. **专用手/前臂检测** — 缓解全身 RTMPose 的 NO_PAIR / 抖腕  
-3. **事件级 Temporal Action Localization** — 片段输入，非逐帧人-框配对  
+1. **双路验收** — `/play` 上对照伸进筐 vs 路过的 `d_stereo`；残差大再微调四角重解（不必重跑姿态）
+2. **框 ROI 时序变化**（光流/帧差/纹理）— 不依赖腕点是否配对
+3. **专用手/前臂检测** — 缓解全身 RTMPose 的 NO_PAIR / 抖腕
+4. **事件级 Temporal Action Localization** — 片段输入，非逐帧人-框配对
 
 残留（骨架路径收尾，可选）：定生产只 A vs A+B；`v5_gated` 端到端导出核对。
