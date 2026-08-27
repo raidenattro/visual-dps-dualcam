@@ -18,6 +18,7 @@ from scripts.solve_scene import solve_dual
 
 PAGE = ROOT / "scripts" / "dualcam_annot.html"
 PLAYER = ROOT / "scripts" / "dualcam_player.html"
+GEOM = ROOT / "scripts" / "dualcam_geom.js"
 VIDEO = ROOT / "output" / "dualcam" / "src.mp4"
 CALIB = ROOT / "output" / "calib" / "dual_1-3.json"
 SKEL = ROOT / "output" / "dualcam" / "skel3d.json"
@@ -67,6 +68,10 @@ class Handler(BaseHTTPRequestHandler):
         if u.path in ("/play", "/player.html"):
             raw = PLAYER.read_bytes()
             self._bytes(raw, "text/html; charset=utf-8", head_only)
+            return
+        if u.path == "/dualcam_geom.js":
+            raw = GEOM.read_bytes()
+            self._bytes(raw, "text/javascript; charset=utf-8", head_only)
             return
         if u.path == "/api/skel3d":
             if not SKEL.is_file():

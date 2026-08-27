@@ -31,6 +31,7 @@
   }
   #hud .near { color: #3dd68c; }
   #hud .far { color: #8ab4ff; }
+  #hud .alarm { color: #ff6677; font-weight: 600; }
   #bar {
     grid-column: 1 / -1;
     display: flex; gap: 10px; align-items: center;
@@ -67,7 +68,7 @@
     <button id="btnPlay">播放</button>
     <input type="range" id="seek" min="0" max="1000" value="0" step="0.04">
     <span id="tlab">0:00</span>
-    <span id="hint">空格播放 · ←→ 跳 2 秒</span>
+    <span id="hint">空格播放 · ←→ 跳 2 秒 · 腕点贴墙（≤10cm）对应货位变红</span>
   </div>
 </div>
 <script type="importmap">
@@ -81,8 +82,10 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { contactSlots, makeGridVertices, meshCells, projectCorners } from '/dualcam_geom.js';
 
 const DATA = await fetch('/api/skel3d').then((r) => r.json());
+const CALIB = await fetch('/api/calib').then((r) => r.json()).catch(() => ({}));
 const vidL = document.getElementById('vidL');
 const vidR = document.getElementById('vidR');
 const ovL = document.getElementById('ovL');
@@ -160,6 +163,72 @@ function addCam(cam, color) {
 addCam(DATA.cameras.L, 0xffcc66);
 addCam(DATA.cameras.R, 0xff8866);
 
+const CONTACT_M = 0.10;
+const solved = (CALIB.solved && CALIB.solved.ok) ? CALIB.solved : { walls: DATA.walls || [] };
+const slotMeshes = (CALIB.slot_meshes && CALIB.slot_meshes.length)
+  ? CALIB.slot_meshes
+  : (DATA.walls || []).map((w) => ({
+    wall_id: w.wall_id,
+    rows: 4,
+    cols: 4,
+    vertices: makeGridVertices(w.corners, 4, 4),
+  }));
+
+const idleFill = new THREE.MeshPhongMaterial({
+  color: 0x3a6a88, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false,
+});
+const alarmFill = new THREE.MeshPhongMaterial({
+  color: 0xff3344, transparent: true, opacity: 0.78, side: THREE.DoubleSide, depthWrite: false,
+});
+const idleLine = new THREE.LineBasicMaterial({ color: 0x7ec8ff });
+const alarmLine = new THREE.LineBasicMaterial({ color: 0xff5566 });
+const slotObjs = [];
+for (const mesh of slotMeshes) {
+  for (const cell of meshCells(mesh)) {
+    const c = cell.corners;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute([
+      ...c[0], ...c[1], ...c[2], ...c[0], ...c[2], ...c[3],
+    ], 3));
+    const fill = new THREE.Mesh(geo, idleFill);
+    scene.add(fill);
+    const lg = new THREE.BufferGeometry();
+    lg.setAttribute('position', new THREE.Float32BufferAttribute(
+      [...c[0], ...c[1], ...c[1], ...c[2], ...c[2], ...c[3], ...c[3], ...c[0]], 3));
+    const line = new THREE.LineSegments(lg, idleLine);
+    scene.add(line);
+    slotObjs.push({ key: `${mesh.wall_id}:${cell.box_id}`, fill, line });
+  }
+}
+
+function alarmKeys(fr) {
+  const keys = new Set();
+  if (!fr || !fr.ok) return keys;
+  for (const idx of [9, 10]) {
+    for (const h of contactSlots(fr.xyz && fr.xyz[idx], slotMeshes, solved, CONTACT_M)) {
+      keys.add(`${h.wall_id}:${h.box_id}`);
+    }
+  }
+  return keys;
+}
+
+function hitsOf(fr) {
+  const all = [];
+  if (!fr || !fr.ok) return all;
+  for (const idx of [9, 10]) {
+    all.push(...contactSlots(fr.xyz && fr.xyz[idx], slotMeshes, solved, CONTACT_M));
+  }
+  return all;
+}
+
+function paintSlots(keys) {
+  for (const s of slotObjs) {
+    const on = keys.has(s.key);
+    s.fill.material = on ? alarmFill : idleFill;
+    s.line.material = on ? alarmLine : idleLine;
+  }
+}
+
 const skelGroup = new THREE.Group();
 scene.add(skelGroup);
 const jointGeo = new THREE.SphereGeometry(0.032, 10, 10);
@@ -179,16 +248,22 @@ function resize3d() {
 }
 new ResizeObserver(resize3d).observe(canvas.parentElement);
 
-function draw3d(fr) {
+function draw3d(fr, keys) {
   while (skelGroup.children.length) skelGroup.remove(skelGroup.children[0]);
+  paintSlots(keys);
   if (!fr || !fr.ok) return;
   const xyz = fr.xyz;
+  const hitL = keys.size && contactSlots(xyz[9], slotMeshes, solved, CONTACT_M).length > 0;
+  const hitR = keys.size && contactSlots(xyz[10], slotMeshes, solved, CONTACT_M).length > 0;
   for (let i = 0; i < 17; i++) {
     const p = xyz[i];
     if (!p) continue;
     const isW = i === 9 || i === 10;
+    const alarm = i === 9 ? hitL : hitR;
     const d = i === 9 ? fr.dL : fr.dR;
-    const mat = isW ? (d != null && d <= 0.10 ? wristMats.near : wristMats.far) : jointMat;
+    const mat = isW
+      ? (alarm || (d != null && d <= CONTACT_M) ? wristMats.near : wristMats.far)
+      : jointMat;
     const s = new THREE.Mesh(jointGeo, mat);
     s.position.set(...p);
     skelGroup.add(s);
@@ -205,18 +280,53 @@ function draw3d(fr) {
   }
 }
 
-function draw2d(cv, kpts, scores, side) {
+function drawSlots2d(ctx, w, h, side, keys) {
+  const cam = DATA.cameras[side];
+  if (!cam) return;
+  const sx = w / 1280, sy = h / 720;
+  for (const mesh of slotMeshes) {
+    for (const cell of meshCells(mesh)) {
+      const poly = projectCorners(cell.corners, cam);
+      if (!poly) continue;
+      const alarm = keys.has(`${mesh.wall_id}:${cell.box_id}`);
+      ctx.beginPath();
+      poly.forEach((p, i) => {
+        const x = p[0] * sx, y = p[1] * sy;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.closePath();
+      ctx.fillStyle = alarm ? 'rgba(255,50,60,.45)' : 'rgba(80,160,220,.10)';
+      ctx.fill();
+      ctx.strokeStyle = alarm ? '#ff4455' : 'rgba(120,180,220,.55)';
+      ctx.lineWidth = alarm ? 3 : 1;
+      ctx.stroke();
+      if (alarm) {
+        const cx = poly.reduce((s, p) => s + p[0], 0) / 4 * sx;
+        const cy = poly.reduce((s, p) => s + p[1], 0) / 4 * sy;
+        ctx.fillStyle = '#ff99a6';
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`墙${mesh.wall_id} ${cell.box_id}`, cx, cy);
+      }
+    }
+  }
+}
+
+function draw2d(cv, fr, side, keys) {
   const w = cv.clientWidth, h = cv.clientHeight;
   if (!w || !h) return;
   if (cv.width !== w) cv.width = w;
   if (cv.height !== h) cv.height = h;
   const ctx = cv.getContext('2d');
   ctx.clearRect(0, 0, w, h);
-  if (!kpts) return;
+  drawSlots2d(ctx, w, h, side, keys);
+  const kpts = fr && (side === 'L' ? fr.L : fr.R);
+  const scores = fr && (side === 'L' ? fr.sL : fr.sR);
+  if (!kpts || !scores) return;
   const sx = w / 1280, sy = h / 720;
   ctx.lineWidth = 2;
   ctx.strokeStyle = '#66e0ff';
-  ctx.fillStyle = '#66e0ff';
   for (const [a, b] of DATA.edges) {
     if (scores[a] < DATA.kpt_min || scores[b] < DATA.kpt_min) continue;
     ctx.beginPath();
@@ -226,9 +336,11 @@ function draw2d(cv, kpts, scores, side) {
   }
   for (let i = 0; i < 17; i++) {
     if (scores[i] < DATA.kpt_min) continue;
+    const wristHit = (i === 9 || i === 10)
+      && contactSlots(fr.xyz && fr.xyz[i], slotMeshes, solved, CONTACT_M).length > 0;
     ctx.beginPath();
     ctx.arc(kpts[i][0] * sx, kpts[i][1] * sy, i === 9 || i === 10 ? 5 : 3, 0, Math.PI * 2);
-    ctx.fillStyle = (i === 9 || i === 10) ? '#ffa23c' : '#66e0ff';
+    ctx.fillStyle = (i === 9 || i === 10) ? (wristHit ? '#3dd68c' : '#ffa23c') : '#66e0ff';
     ctx.fill();
   }
 }
@@ -241,17 +353,23 @@ function show(t) {
   const fr = frames[idx];
   if (idx !== lastIdx) {
     lastIdx = idx;
-    draw3d(fr);
-    draw2d(ovL, fr && fr.L, fr && fr.sL, 'L');
-    draw2d(ovR, fr && fr.R, fr && fr.sR, 'R');
+    const keys = alarmKeys(fr);
+    draw3d(fr, keys);
+    draw2d(ovL, fr, 'L', keys);
+    draw2d(ovR, fr, 'R', keys);
     if (!fr || !fr.ok) {
       hud.textContent = '未配对';
       hud.className = '';
     } else {
+      const hits = hitsOf(fr);
+      const uniq = [...new Set(hits.map((h) => `墙${h.wall_id} ${h.box_id}`))];
       hud.innerHTML =
         `交会 ${fr.gap.toFixed(2)}m<br>` +
         `<span class="${dClass(fr.dL)}">左腕 ${dTxt(fr.dL)}</span>　` +
-        `<span class="${dClass(fr.dR)}">右腕 ${dTxt(fr.dR)}</span>`;
+        `<span class="${dClass(fr.dR)}">右腕 ${dTxt(fr.dR)}</span><br>` +
+        (uniq.length
+          ? `<span class="alarm">报警 ${uniq.join(' · ')}</span>`
+          : '报警 无');
     }
   }
 }
