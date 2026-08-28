@@ -160,36 +160,6 @@ def equal_row_ys(y_bottom: float, y_top: float, n_layers: int) -> list[float]:
     return [y_top - i * h / n for i in range(n + 1)]
 
 
-def default_row_heights(
-    n_layers: int, wall_h: float, riser: float = DEFAULT_LAYER_PITCH,
-) -> list[float]:
-    """从顶到底的层高。下层钉 riser（默认 0.45m），最上层吃剩余；塞不下则均分。"""
-    n = max(1, int(n_layers))
-    h = float(wall_h)
-    riser = float(riser)
-    if riser < 0.05:
-        riser = DEFAULT_LAYER_PITCH
-    if n == 1:
-        return [h]
-    n_eq = n - 1
-    if n_eq * riser >= h - 0.02:
-        return [h / n] * n
-    return [h - n_eq * riser] + [riser] * n_eq
-
-
-def row_ys_from_heights(base: float, wall_h: float, heights: list[float]) -> list[float]:
-    """层高（从顶到底）→ 行界 Y（从顶到底，含顶沿底沿）。末条钉在底沿。"""
-    base, wall_h = float(base), float(wall_h)
-    y_top = base + wall_h
-    ys = [y_top]
-    acc = 0.0
-    for ht in heights:
-        acc += float(ht)
-        ys.append(y_top - acc)
-    ys[-1] = base
-    return ys
-
-
 def row_ys_from_mesh(mesh: dict, corners: Any = None) -> list[float]:
     ys = mesh.get("row_ys")
     if isinstance(ys, list) and len(ys) >= 2:
@@ -251,15 +221,10 @@ def make_layer_mesh(
     n_layers: int = 4,
     cols: int = 4,
 ) -> dict:
-    """按实测层高生成网格：下层 pitch 米，最上层吃剩余。"""
+    """生成初始行线：墙面按层数均分，随后用 move_layer_row 逐条拖。pitch 仅兼容旧调用。"""
     y_bot, y_top = wall_y_span(corners)
-    wall_h = y_top - y_bot
-    heights = default_row_heights(n_layers, wall_h, pitch)
-    ys = row_ys_from_heights(y_bot, wall_h, heights)
-    mesh = mesh_from_row_ys(wall_id, corners, ys, cols)
-    mesh["riser_m"] = round(float(pitch) if float(pitch) >= 0.05 else DEFAULT_LAYER_PITCH, 4)
-    mesh["row_heights"] = [round(h, 4) for h in heights]
-    return mesh
+    ys = equal_row_ys(y_bot, y_top, n_layers)
+    return mesh_from_row_ys(wall_id, corners, ys, cols)
 
 
 def vert_index(rows: int, cols: int, r: int, c: int) -> int:
