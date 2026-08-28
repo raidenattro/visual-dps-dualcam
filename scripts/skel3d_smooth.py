@@ -127,6 +127,18 @@ def assign_tracks(
     return next_id
 
 
+def _drop_short_tracks(frames: list[dict], min_frames: int = 4) -> None:
+    """闪现 1～3 帧的幽灵骨架丢掉。"""
+    tracks = _tracks_from_ids(frames)
+    drop = {tid for tid, mem in tracks.items() if len(mem) < min_frames}
+    if not drop:
+        return
+    for fr in frames:
+        fr["persons"] = [
+            p for p in (fr.get("persons") or []) if int(p.get("track_id") or -1) not in drop
+        ]
+
+
 def _reject_speed(values: np.ndarray, mask: np.ndarray, times: np.ndarray, vmax: float) -> None:
     last = -1
     for i in range(len(mask)):
@@ -266,7 +278,10 @@ def smooth_frames(frames: list[dict], plane: dict | None = None) -> dict:
     already = any(
         p.get("track_id") is not None for fr in frames for p in (fr.get("persons") or [])
     )
-    n_tracks = len(_tracks_from_ids(frames)) if already else assign_tracks(frames)
+    if not already:
+        assign_tracks(frames)
+    _drop_short_tracks(frames, min_frames=4)
+    n_tracks = len(_tracks_from_ids(frames))
     tracks = _tracks_from_ids(frames)
     n_wrist_in = n_wrist_out = 0
     for tid, members in tracks.items():

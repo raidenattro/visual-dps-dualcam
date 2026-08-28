@@ -88,7 +88,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { contactSlots, makeLayerMesh, meshCells, projectCorners, DEFAULT_LAYER_PITCH, DEFAULT_CONTACT_M } from '/dualcam_geom.js';
+import { contactSlots, makeLayerMesh, meshCells, projectCorners, pointInPolygon, DEFAULT_LAYER_PITCH, DEFAULT_CONTACT_M } from '/dualcam_geom.js';
 
 const DATA = await fetch('/api/skel3d').then((r) => r.json());
 const CALIB = await fetch('/api/calib').then((r) => r.json()).catch(() => ({}));
@@ -222,6 +222,30 @@ function personsOf(fr) {
   return [];
 }
 
+function viewConfirmsSlot(person, idx, hit, side) {
+  const scores = side === 'L' ? person.sL : person.sR;
+  const kpts = side === 'L' ? person.L : person.R;
+  if (!scores || !kpts || scores[idx] < DATA.kpt_min) return null;
+  const cell = slotProj[side].find((c) => c.key === `${hit.wall_id}:${hit.box_id}`);
+  if (!cell || !cell.poly) return false;
+  return pointInPolygon(kpts[idx], cell.poly);
+}
+
+function wristContactOk(person, idx, hit) {
+  if (person.held) return false;
+  const jg = person.jg;
+  if (Array.isArray(jg) && jg[idx] != null && jg[idx] > 0.20) return false;
+  const sl = (person.sL && person.sL[idx]) || 0;
+  const sr = (person.sR && person.sR[idx]) || 0;
+  const inL = viewConfirmsSlot(person, idx, hit, 'L');
+  const inR = viewConfirmsSlot(person, idx, hit, 'R');
+  // 左路看得见腕却不在该格 → 右路误检，不报
+  if (sl >= DATA.kpt_min && inL === false) return false;
+  if (sr >= DATA.kpt_min && inR === false) return false;
+  // 贴墙至少要左路 2D 也落在格内（墙1 拣货面左路看得清）
+  return inL === true;
+}
+
 function frameHits(fr) {
   const hits = [];
   const wristHits = [];
@@ -229,7 +253,8 @@ function frameHits(fr) {
     const w = { 9: [], 10: [] };
     if (person.xyz) {
       for (const idx of [9, 10]) {
-        const h = contactSlots(person.xyz[idx], slotMeshes, solved, contactM);
+        const raw = contactSlots(person.xyz[idx], slotMeshes, solved, contactM);
+        const h = raw.filter((hit) => wristContactOk(person, idx, hit));
         w[idx] = h;
         hits.push(...h);
       }
@@ -334,8 +359,7 @@ function draw3d(fr, keys, wristHits) {
       m.position.set(pt[0], pt[1], pt[2]);
       if (i === 9 || i === 10) {
         const alarm = w[i] && w[i].length > 0;
-        const d = i === 9 ? person.dL : person.dR;
-        m.material = (alarm || (d != null && d < contactM)) ? wristMats.near : wristMats.far;
+        m.material = alarm ? wristMats.near : wristMats.far;
       } else {
         m.material = slot.jointMat;
       }
@@ -391,10 +415,10 @@ function draw2d(cv, fr, side, keys, wristHits) {
   drawSlots2d(ctx, w, h, side, keys);
   const sx = w / 1280, sy = h / 720;
   const people = personsOf(fr);
-  people.forEach((person, pi) => {
+    people.forEach((person, pi) => {
     const kpts = side === 'L' ? person.L : person.R;
     const scores = side === 'L' ? person.sL : person.sR;
-    if (!kpts || !scores) return;
+    if (!kpts || !scores || person.held) return;
     const col = PERSON_CSS[personTint(person, pi)];
     const wr = wristHits[pi] || { 9: [], 10: [] };
     ctx.lineWidth = 2;

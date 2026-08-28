@@ -142,45 +142,164 @@ def infer_video(stride: int, max_keep: int = 0) -> dict:
     return {"fps": fps, "stride": stride, "n_src": i, "frames": frames}
 
 
-# 交会缝大于此则不当成同一个人（避免把两路不同人硬配上）。
-PAIR_GAP_MAX = 0.5
-_PAIR_JOINTS = (5, 6, 11, 12, LWRIST, RWRIST)
+# 交会缝。0.5 太松，假人/双检也能配上；真配对中位约 6cm。
+PAIR_GAP_MAX = 0.18
+JOINT_GAP_MAX = 0.20  # 单关节三角缝超过则该点作废
+_PAIR_TORSO = (5, 6, 11, 12)
+_PAIR_JOINTS = _PAIR_TORSO + (LWRIST, RWRIST)
+PAIR_MIN_VIS = 10  # 单路过少关键点（画面顶上残缺框）不参与
+PAIR_MIN_JOINTS = 3
+NMS_TORSO_PX = 50.0
+PREFER_PX = 90.0
+DUPLICATE_M = 0.40  # 两个 3D 躯干近于此则只留缝更小的（双检）
+# 巷道 AABB：墙 x=±1、货架高 2.2、进深 z=0~2.2。挡住镜头前幽灵和棚顶误检。
+AISLE_AABB = {"x": (-1.35, 1.35), "y": (0.50, 1.65), "z": (-0.12, 2.50)}
+
+
+def _torso_xy(k, s) -> np.ndarray | None:
+    pts = [np.asarray(k[i][:2], float) for i in _PAIR_TORSO if s[i] >= KPT_MIN]
+    if not pts:
+        return None
+    return np.mean(pts, axis=0)
+
+
+def _nvis(s) -> int:
+    return int(np.sum(np.asarray(s, float) >= KPT_MIN))
+
+
+def nms_indices(k, s, dist_px: float = NMS_TORSO_PX) -> list[int]:
+    """同路双检：躯干 2D 过近则留均分更高的。"""
+    n = len(k)
+    xy = [_torso_xy(k[i], s[i]) for i in range(n)]
+    order = sorted(range(n), key=lambda i: -float(np.mean(s[i])))
+    kept: list[int] = []
+    for i in order:
+        if _nvis(s[i]) < PAIR_MIN_VIS or xy[i] is None:
+            continue
+        if any(
+            float(np.linalg.norm(xy[i] - xy[j])) < dist_px
+            for j in kept
+            if xy[j] is not None
+        ):
+            continue
+        kept.append(i)
+    return kept
 
 
 def _pair_gap(kl, sl, kr, sr, cams: dict) -> float | None:
     gap = []
+    n_torso = 0
     for k in _PAIR_JOINTS:
         if sl[k] < KPT_MIN or sr[k] < KPT_MIN:
             continue
         _p, g = triangulate(kl[k], kr[k], cams)
+        if g > JOINT_GAP_MAX * 2:  # 配对阶段略松，单点仍在 lift 里卡 0.20
+            continue
         gap.append(g)
-    if len(gap) < 2:
+        if k in _PAIR_TORSO:
+            n_torso += 1
+    if n_torso < 1 or len(gap) < PAIR_MIN_JOINTS:
         return None
     return float(np.median(gap))
 
 
+def _torso_xyz(kl, sl, kr, sr, cams: dict) -> np.ndarray | None:
+    pts = []
+    for i in _PAIR_TORSO:
+        if sl[i] < KPT_MIN or sr[i] < KPT_MIN:
+            continue
+        p, g = triangulate(kl[i], kr[i], cams)
+        if g > JOINT_GAP_MAX:
+            continue
+        pts.append(p)
+    if len(pts) < 2:
+        return None
+    return np.mean(pts, axis=0)
+
+
+def in_aisle(p: np.ndarray | None) -> bool:
+    if p is None:
+        return False
+    for ax, (lo, hi) in AISLE_AABB.items():
+        v = float(p[{"x": 0, "y": 1, "z": 2}[ax]])
+        if v < lo or v > hi:
+            return False
+    return True
+
+
 def pick_pairs(
-    fl: dict, fr: dict, cams: dict, gap_max: float = PAIR_GAP_MAX,
+    fl: dict,
+    fr: dict,
+    cams: dict,
+    gap_max: float = PAIR_GAP_MAX,
+    prefer: list[tuple[np.ndarray, np.ndarray]] | None = None,
 ) -> list[tuple[int, int, float]]:
-    """左右路多人贪心匹配：缝从小到大，每人只用一次。"""
+    """左右路匹配：先 NMS，再续上帧，再贪心；丢掉巷道外和 3D 重叠的对。"""
+    li = nms_indices(fl["k"], fl["s"])
+    ri = nms_indices(fr["k"], fr["s"])
+    lxy = {i: _torso_xy(fl["k"][i], fl["s"][i]) for i in li}
+    rxy = {j: _torso_xy(fr["k"][j], fr["s"][j]) for j in ri}
+
+    def gap_ij(i: int, j: int) -> float | None:
+        return _pair_gap(fl["k"][i], fl["s"][i], fr["k"][j], fr["s"][j], cams)
+
+    used_l: set[int] = set()
+    used_r: set[int] = set()
+    out: list[tuple[int, int, float]] = []
+
+    def _nearest(xy: np.ndarray, pool: dict[int, np.ndarray | None], used: set[int], max_px: float) -> int | None:
+        best, best_d = None, max_px
+        for idx, p in pool.items():
+            if idx in used or p is None:
+                continue
+            d = float(np.linalg.norm(xy - p))
+            if d < best_d:
+                best, best_d = idx, d
+        return best
+
+    # 上一帧的人优先锁住，避免单路丢检时贪心跳到另一个 2D 框
+    for pl, pr in prefer or []:
+        i = _nearest(pl, lxy, used_l, PREFER_PX)
+        j = _nearest(pr, rxy, used_r, PREFER_PX)
+        if i is None or j is None:
+            continue
+        g = gap_ij(i, j)
+        if g is None or g > gap_max:
+            continue
+        used_l.add(i)
+        used_r.add(j)
+        out.append((i, j, g))
+
     cands: list[tuple[float, int, int]] = []
-    for i, (kl, sl) in enumerate(zip(fl["k"], fl["s"])):
-        for j, (kr, sr) in enumerate(zip(fr["k"], fr["s"])):
-            g = _pair_gap(kl, sl, kr, sr, cams)
+    for i in li:
+        if i in used_l:
+            continue
+        for j in ri:
+            if j in used_r:
+                continue
+            g = gap_ij(i, j)
             if g is None or g > gap_max:
                 continue
             cands.append((g, i, j))
     cands.sort()
-    used_l: set[int] = set()
-    used_r: set[int] = set()
-    out: list[tuple[int, int, float]] = []
     for g, i, j in cands:
         if i in used_l or j in used_r:
             continue
         used_l.add(i)
         used_r.add(j)
         out.append((i, j, g))
-    return out
+
+    kept: list[tuple[int, int, float]] = []
+    cents: list[np.ndarray] = []
+    for i, j, g in sorted(out, key=lambda x: x[2]):
+        c = _torso_xyz(fl["k"][i], fl["s"][i], fr["k"][j], fr["s"][j], cams)
+        if not in_aisle(c):
+            continue
+        if any(float(np.linalg.norm(c - p)) < DUPLICATE_M for p in cents):
+            continue
+        kept.append((i, j, g))
+        cents.append(c)
+    return kept
 
 
 def pick_pair(fl: dict, fr: dict, cams: dict) -> tuple[int, int, float] | None:
