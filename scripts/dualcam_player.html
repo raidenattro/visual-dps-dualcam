@@ -213,17 +213,30 @@ for (const mesh of slotMeshes) {
   }
 }
 
+function personsOf(fr) {
+  if (!fr) return [];
+  if (Array.isArray(fr.persons)) return fr.persons;
+  if (fr.ok && fr.xyz) {
+    return [{ xyz: fr.xyz, L: fr.L, R: fr.R, sL: fr.sL, sR: fr.sR, gap: fr.gap, dL: fr.dL, dR: fr.dR }];
+  }
+  return [];
+}
+
 function frameHits(fr) {
   const hits = [];
-  const wrist = { 9: [], 10: [] };
-  if (fr && fr.ok) {
-    for (const idx of [9, 10]) {
-      const h = contactSlots(fr.xyz && fr.xyz[idx], slotMeshes, solved, contactM);
-      wrist[idx] = h;
-      hits.push(...h);
+  const wristHits = [];
+  for (const person of personsOf(fr)) {
+    const w = { 9: [], 10: [] };
+    if (person.xyz) {
+      for (const idx of [9, 10]) {
+        const h = contactSlots(person.xyz[idx], slotMeshes, solved, contactM);
+        w[idx] = h;
+        hits.push(...h);
+      }
     }
+    wristHits.push(w);
   }
-  return { hits, keys: new Set(hits.map((h) => `${h.wall_id}:${h.box_id}`)), wrist };
+  return { hits, keys: new Set(hits.map((h) => `${h.wall_id}:${h.box_id}`)), wristHits };
 }
 
 let lastPaintSig = null;
@@ -238,27 +251,34 @@ function paintSlots(keys) {
   }
 }
 
-const skelGroup = new THREE.Group();
-scene.add(skelGroup);
+const PERSON_HEX = [0x66e0ff, 0xffcc66, 0xc9a0ff, 0x5cf08a, 0xff8866, 0x8ab4ff, 0xf0a0c0, 0xd0d060];
+const PERSON_CSS = ['#66e0ff', '#ffcc66', '#c9a0ff', '#5cf08a', '#ff8866', '#8ab4ff', '#f0a0c0', '#d0d060'];
+const MAX_PERSONS = PERSON_HEX.length;
 const jointGeo = new THREE.SphereGeometry(0.032, 8, 8);
-const boneMat = new THREE.LineBasicMaterial({ color: 0x66e0ff });
-const jointMat = new THREE.MeshBasicMaterial({ color: 0x66e0ff });
 const wristMats = {
   near: new THREE.MeshBasicMaterial({ color: 0x3dd68c }),
   far: new THREE.MeshBasicMaterial({ color: 0xffa23c }),
 };
-const joints = [];
-for (let i = 0; i < 17; i++) {
-  const m = new THREE.Mesh(jointGeo, jointMat);
-  m.visible = false;
-  skelGroup.add(m);
-  joints.push(m);
+const skelPeople = [];
+for (let p = 0; p < MAX_PERSONS; p++) {
+  const jointMat = new THREE.MeshBasicMaterial({ color: PERSON_HEX[p] });
+  const boneMat = new THREE.LineBasicMaterial({ color: PERSON_HEX[p] });
+  const g = new THREE.Group();
+  const joints = [];
+  for (let i = 0; i < 17; i++) {
+    const m = new THREE.Mesh(jointGeo, jointMat);
+    m.visible = false;
+    g.add(m);
+    joints.push(m);
+  }
+  const boneAttr = new THREE.Float32BufferAttribute(new Float32Array(DATA.edges.length * 6), 3);
+  const boneGeo = new THREE.BufferGeometry();
+  boneGeo.setAttribute('position', boneAttr);
+  g.add(new THREE.LineSegments(boneGeo, boneMat));
+  g.visible = false;
+  scene.add(g);
+  skelPeople.push({ g, joints, boneAttr, boneGeo, jointMat });
 }
-const boneAttr = new THREE.Float32BufferAttribute(new Float32Array(DATA.edges.length * 6), 3);
-const boneGeo = new THREE.BufferGeometry();
-boneGeo.setAttribute('position', boneAttr);
-const boneLine = new THREE.LineSegments(boneGeo, boneMat);
-skelGroup.add(boneLine);
 
 const slotProj = { L: [], R: [] };
 for (const side of ['L', 'R']) {
@@ -283,37 +303,43 @@ function resize3d() {
 }
 new ResizeObserver(resize3d).observe(canvas.parentElement);
 
-function draw3d(fr, keys, wrist) {
+function draw3d(fr, keys, wristHits) {
   paintSlots(keys);
-  if (!fr || !fr.ok) {
-    skelGroup.visible = false;
-    return;
-  }
-  skelGroup.visible = true;
-  const xyz = fr.xyz;
-  for (let i = 0; i < 17; i++) {
-    const p = xyz[i];
-    const m = joints[i];
-    if (!p) { m.visible = false; continue; }
-    m.visible = true;
-    m.position.set(p[0], p[1], p[2]);
-    if (i === 9 || i === 10) {
-      const alarm = wrist[i] && wrist[i].length > 0;
-      const d = i === 9 ? fr.dL : fr.dR;
-      m.material = (alarm || (d != null && d < contactM)) ? wristMats.near : wristMats.far;
-    } else {
-      m.material = jointMat;
+  const people = personsOf(fr);
+  for (let p = 0; p < MAX_PERSONS; p++) {
+    const slot = skelPeople[p];
+    const person = people[p];
+    if (!person || !person.xyz) {
+      slot.g.visible = false;
+      continue;
     }
+    slot.g.visible = true;
+    const xyz = person.xyz;
+    const w = wristHits[p] || { 9: [], 10: [] };
+    for (let i = 0; i < 17; i++) {
+      const pt = xyz[i];
+      const m = slot.joints[i];
+      if (!pt) { m.visible = false; continue; }
+      m.visible = true;
+      m.position.set(pt[0], pt[1], pt[2]);
+      if (i === 9 || i === 10) {
+        const alarm = w[i] && w[i].length > 0;
+        const d = i === 9 ? person.dL : person.dR;
+        m.material = (alarm || (d != null && d < contactM)) ? wristMats.near : wristMats.far;
+      } else {
+        m.material = slot.jointMat;
+      }
+    }
+    const arr = slot.boneAttr.array;
+    let n = 0;
+    for (const [a, b] of DATA.edges) {
+      if (!xyz[a] || !xyz[b]) continue;
+      arr[n++] = xyz[a][0]; arr[n++] = xyz[a][1]; arr[n++] = xyz[a][2];
+      arr[n++] = xyz[b][0]; arr[n++] = xyz[b][1]; arr[n++] = xyz[b][2];
+    }
+    slot.boneAttr.needsUpdate = true;
+    slot.boneGeo.setDrawRange(0, n / 3);
   }
-  const arr = boneAttr.array;
-  let n = 0;
-  for (const [a, b] of DATA.edges) {
-    if (!xyz[a] || !xyz[b]) continue;
-    arr[n++] = xyz[a][0]; arr[n++] = xyz[a][1]; arr[n++] = xyz[a][2];
-    arr[n++] = xyz[b][0]; arr[n++] = xyz[b][1]; arr[n++] = xyz[b][2];
-  }
-  boneAttr.needsUpdate = true;
-  boneGeo.setDrawRange(0, n / 3);
 }
 
 function drawSlots2d(ctx, w, h, side, keys) {
@@ -345,7 +371,7 @@ function drawSlots2d(ctx, w, h, side, keys) {
   }
 }
 
-function draw2d(cv, fr, side, keys, wrist) {
+function draw2d(cv, fr, side, keys, wristHits) {
   const w = cv.clientWidth, h = cv.clientHeight;
   if (!w || !h) return;
   if (cv.width !== w) cv.width = w;
@@ -353,27 +379,32 @@ function draw2d(cv, fr, side, keys, wrist) {
   const ctx = cv.getContext('2d');
   ctx.clearRect(0, 0, w, h);
   drawSlots2d(ctx, w, h, side, keys);
-  const kpts = fr && (side === 'L' ? fr.L : fr.R);
-  const scores = fr && (side === 'L' ? fr.sL : fr.sR);
-  if (!kpts || !scores) return;
   const sx = w / 1280, sy = h / 720;
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = '#66e0ff';
-  for (const [a, b] of DATA.edges) {
-    if (scores[a] < DATA.kpt_min || scores[b] < DATA.kpt_min) continue;
-    ctx.beginPath();
-    ctx.moveTo(kpts[a][0] * sx, kpts[a][1] * sy);
-    ctx.lineTo(kpts[b][0] * sx, kpts[b][1] * sy);
-    ctx.stroke();
-  }
-  for (let i = 0; i < 17; i++) {
-    if (scores[i] < DATA.kpt_min) continue;
-    const wristHit = (i === 9 || i === 10) && wrist[i] && wrist[i].length > 0;
-    ctx.beginPath();
-    ctx.arc(kpts[i][0] * sx, kpts[i][1] * sy, i === 9 || i === 10 ? 5 : 3, 0, Math.PI * 2);
-    ctx.fillStyle = (i === 9 || i === 10) ? (wristHit ? '#3dd68c' : '#ffa23c') : '#66e0ff';
-    ctx.fill();
-  }
+  const people = personsOf(fr);
+  people.forEach((person, pi) => {
+    const kpts = side === 'L' ? person.L : person.R;
+    const scores = side === 'L' ? person.sL : person.sR;
+    if (!kpts || !scores) return;
+    const col = PERSON_CSS[pi % PERSON_CSS.length];
+    const wr = wristHits[pi] || { 9: [], 10: [] };
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = col;
+    for (const [a, b] of DATA.edges) {
+      if (scores[a] < DATA.kpt_min || scores[b] < DATA.kpt_min) continue;
+      ctx.beginPath();
+      ctx.moveTo(kpts[a][0] * sx, kpts[a][1] * sy);
+      ctx.lineTo(kpts[b][0] * sx, kpts[b][1] * sy);
+      ctx.stroke();
+    }
+    for (let i = 0; i < 17; i++) {
+      if (scores[i] < DATA.kpt_min) continue;
+      const wristHit = (i === 9 || i === 10) && wr[i] && wr[i].length > 0;
+      ctx.beginPath();
+      ctx.arc(kpts[i][0] * sx, kpts[i][1] * sy, i === 9 || i === 10 ? 5 : 3, 0, Math.PI * 2);
+      ctx.fillStyle = (i === 9 || i === 10) ? (wristHit ? '#3dd68c' : '#ffa23c') : col;
+      ctx.fill();
+    }
+  });
 }
 
 function blitRight() {
@@ -393,19 +424,19 @@ function show(t) {
   const fr = frames[idx];
   if (idx !== lastIdx) {
     lastIdx = idx;
-    const { hits, keys, wrist } = frameHits(fr);
-    draw3d(fr, keys, wrist);
-    draw2d(ovL, fr, 'L', keys, wrist);
-    draw2d(ovR, fr, 'R', keys, wrist);
-    if (!fr || !fr.ok) {
+    const { hits, keys, wristHits } = frameHits(fr);
+    draw3d(fr, keys, wristHits);
+    draw2d(ovL, fr, 'L', keys, wristHits);
+    draw2d(ovR, fr, 'R', keys, wristHits);
+    const people = personsOf(fr);
+    if (!people.length) {
       hud.textContent = '未配对';
       hud.className = '';
     } else {
       const uniq = [...new Set(hits.map((h) => `墙${h.wall_id} ${h.box_id}`))];
+      const gaps = people.map((p) => (p.gap != null ? p.gap.toFixed(2) : '—')).join('/');
       hud.innerHTML =
-        `交会 ${fr.gap.toFixed(2)}m<br>` +
-        `<span class="${dClass(fr.dL)}">左腕 ${dTxt(fr.dL)}</span>　` +
-        `<span class="${dClass(fr.dR)}">右腕 ${dTxt(fr.dR)}</span><br>` +
+        `${people.length} 人 · 交会 ${gaps}m<br>` +
         (uniq.length
           ? `<span class="alarm">报警 ${uniq.join(' · ')}</span>`
           : '报警 无');

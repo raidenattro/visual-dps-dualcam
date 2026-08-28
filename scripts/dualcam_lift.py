@@ -142,24 +142,51 @@ def infer_video(stride: int, max_keep: int = 0) -> dict:
     return {"fps": fps, "stride": stride, "n_src": i, "frames": frames}
 
 
-def pick_pair(fl: dict, fr: dict, cams: dict) -> tuple[int, int, float] | None:
-    best = None
+# 交会缝大于此则不当成同一个人（避免把两路不同人硬配上）。
+PAIR_GAP_MAX = 0.5
+_PAIR_JOINTS = (5, 6, 11, 12, LWRIST, RWRIST)
+
+
+def _pair_gap(kl, sl, kr, sr, cams: dict) -> float | None:
+    gap = []
+    for k in _PAIR_JOINTS:
+        if sl[k] < KPT_MIN or sr[k] < KPT_MIN:
+            continue
+        _p, g = triangulate(kl[k], kr[k], cams)
+        gap.append(g)
+    if len(gap) < 2:
+        return None
+    return float(np.median(gap))
+
+
+def pick_pairs(
+    fl: dict, fr: dict, cams: dict, gap_max: float = PAIR_GAP_MAX,
+) -> list[tuple[int, int, float]]:
+    """左右路多人贪心匹配：缝从小到大，每人只用一次。"""
+    cands: list[tuple[float, int, int]] = []
     for i, (kl, sl) in enumerate(zip(fl["k"], fl["s"])):
         for j, (kr, sr) in enumerate(zip(fr["k"], fr["s"])):
-            mid = []
-            gap = []
-            for k in (5, 6, 11, 12, LWRIST, RWRIST):
-                if sl[k] < KPT_MIN or sr[k] < KPT_MIN:
-                    continue
-                p, g = triangulate(kl[k], kr[k], cams)
-                mid.append(p)
-                gap.append(g)
-            if len(gap) < 2:
+            g = _pair_gap(kl, sl, kr, sr, cams)
+            if g is None or g > gap_max:
                 continue
-            score = float(np.median(gap))
-            if best is None or score < best[2]:
-                best = (i, j, score)
-    return best
+            cands.append((g, i, j))
+    cands.sort()
+    used_l: set[int] = set()
+    used_r: set[int] = set()
+    out: list[tuple[int, int, float]] = []
+    for g, i, j in cands:
+        if i in used_l or j in used_r:
+            continue
+        used_l.add(i)
+        used_r.add(j)
+        out.append((i, j, g))
+    return out
+
+
+def pick_pair(fl: dict, fr: dict, cams: dict) -> tuple[int, int, float] | None:
+    """兼容：只取缝最小的一对。"""
+    pairs = pick_pairs(fl, fr, cams)
+    return pairs[0] if pairs else None
 
 
 def analyze(pack: dict, cams: dict, plane: dict) -> dict:
