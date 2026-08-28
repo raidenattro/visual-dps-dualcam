@@ -2,10 +2,12 @@
 """从已落的两路 2D 姿态三角化 17 点，写出播放器用 JSON。不重跑 RTMPose。
 
 每帧可有多个人：左右路按交会缝贪心匹配，只保留两路都看见的人。
+默认对 3D 做时序平滑（腕/肘更强），贴墙判定与画面用同一套坐标。
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -19,6 +21,7 @@ if str(ROOT) not in sys.path:
 from scripts.dualcam_lift import (
     KPT_MIN, LWRIST, RWRIST, load_cams, pick_pairs, signed_x, triangulate,
 )
+from scripts.skel3d_smooth import assign_tracks, smooth_frames, wrist_jump_stats
 
 NPZ = ROOT / "output/dualcam/poses_5fps.npz"
 OUT = ROOT / "output/dualcam/skel3d.json"
@@ -76,6 +79,10 @@ def _lift_person(kl, sl, kr, sr, gap: float, cams: dict, plane: dict) -> dict:
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(description="从已落姿态三角化 17 点，默认对腕/肘做时序平滑")
+    ap.add_argument("--no-smooth", action="store_true", help="不平滑，写出原始三角化")
+    args = ap.parse_args()
+
     cams, plane, sol = load_cams()
     pack = np.load(NPZ, allow_pickle=True)["frames"]
     stride = _infer_stride(pack)
@@ -96,6 +103,14 @@ def main() -> int:
         if persons:
             n_paired += 1
             n_people += len(persons)
+
+    smooth_info = None
+    jump_before = jump_after = None
+    if not args.no_smooth:
+        assign_tracks(frames)
+        jump_before = {"L": wrist_jump_stats(frames, LWRIST), "R": wrist_jump_stats(frames, RWRIST)}
+        smooth_info = smooth_frames(frames, plane)
+        jump_after = {"L": wrist_jump_stats(frames, LWRIST), "R": wrist_jump_stats(frames, RWRIST)}
 
     def cam_pub(name: str) -> dict:
         c = cams[name]
@@ -120,6 +135,7 @@ def main() -> int:
         "n_frames": len(frames),
         "n_paired": n_paired,
         "n_people": n_people,
+        "smooth": smooth_info,
         "frames": frames,
     }
     OUT.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
@@ -127,6 +143,20 @@ def main() -> int:
         f"wrote {OUT}  frames={len(frames)} paired={n_paired} people={n_people} "
         f"stride={stride}  {OUT.stat().st_size / 1e6:.1f}MB"
     )
+    if smooth_info:
+        print(
+            f"smooth tracks={smooth_info['n_tracks']}  "
+            f"wrist {smooth_info['n_wrist_in']}→{smooth_info['n_wrist_out']}"
+        )
+        if jump_before and jump_after:
+            for side in ("L", "R"):
+                b, a = jump_before[side], jump_after[side]
+                if b.get("n") and a.get("n"):
+                    print(
+                        f"  {side}wrist jump p90 {b['p90']:.3f}→{a['p90']:.3f}m  "
+                        f"p99 {b['p99']:.3f}→{a['p99']:.3f}m  "
+                        f">15cm {b['frac_gt_0.15']:.1%}→{a['frac_gt_0.15']:.1%}"
+                    )
     return 0
 
 

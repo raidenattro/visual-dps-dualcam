@@ -74,7 +74,7 @@
     <input type="range" id="seek" min="0" max="1000" value="0" step="0.04">
     <span id="tlab">0:00</span>
     <label>报警阈值 m <input type="number" id="contactM" step="0.01" value="0"></label>
-    <span id="hint">空格播放 · ←→ 跳 2 秒 · 有向距离小于阈值才变红（0=伸进墙）</span>
+    <span id="hint">空格播放 · ←→ 跳 2 秒 · 有向距离小于阈值才变红（0=伸进墙）· 3D 腕/肘已时序平滑</span>
   </div>
 </div>
 <script type="importmap">
@@ -255,6 +255,12 @@ const PERSON_HEX = [0x66e0ff, 0xffcc66, 0xc9a0ff, 0x5cf08a, 0xff8866, 0x8ab4ff, 
 const PERSON_CSS = ['#66e0ff', '#ffcc66', '#c9a0ff', '#5cf08a', '#ff8866', '#8ab4ff', '#f0a0c0', '#d0d060'];
 const MAX_PERSONS = PERSON_HEX.length;
 const jointGeo = new THREE.SphereGeometry(0.032, 8, 8);
+const wristGeo = new THREE.SphereGeometry(0.048, 10, 10);
+function personTint(person, fallback) {
+  const id = person && person.track_id;
+  const n = Number.isInteger(id) ? id : fallback;
+  return ((n % MAX_PERSONS) + MAX_PERSONS) % MAX_PERSONS;
+}
 const wristMats = {
   near: new THREE.MeshBasicMaterial({ color: 0x3dd68c }),
   far: new THREE.MeshBasicMaterial({ color: 0xffa23c }),
@@ -266,7 +272,8 @@ for (let p = 0; p < MAX_PERSONS; p++) {
   const g = new THREE.Group();
   const joints = [];
   for (let i = 0; i < 17; i++) {
-    const m = new THREE.Mesh(jointGeo, jointMat);
+    const geo = (i === 9 || i === 10) ? wristGeo : jointGeo;
+    const m = new THREE.Mesh(geo, jointMat);
     m.visible = false;
     g.add(m);
     joints.push(m);
@@ -277,7 +284,7 @@ for (let p = 0; p < MAX_PERSONS; p++) {
   g.add(new THREE.LineSegments(boneGeo, boneMat));
   g.visible = false;
   scene.add(g);
-  skelPeople.push({ g, joints, boneAttr, boneGeo, jointMat });
+  skelPeople.push({ g, joints, boneAttr, boneGeo, jointMat, boneMat });
 }
 
 const slotProj = { L: [], R: [] };
@@ -314,6 +321,9 @@ function draw3d(fr, keys, wristHits) {
       continue;
     }
     slot.g.visible = true;
+    const tint = personTint(person, p);
+    slot.jointMat.color.setHex(PERSON_HEX[tint]);
+    slot.boneMat.color.setHex(PERSON_HEX[tint]);
     const xyz = person.xyz;
     const w = wristHits[p] || { 9: [], 10: [] };
     for (let i = 0; i < 17; i++) {
@@ -385,7 +395,7 @@ function draw2d(cv, fr, side, keys, wristHits) {
     const kpts = side === 'L' ? person.L : person.R;
     const scores = side === 'L' ? person.sL : person.sR;
     if (!kpts || !scores) return;
-    const col = PERSON_CSS[pi % PERSON_CSS.length];
+    const col = PERSON_CSS[personTint(person, pi)];
     const wr = wristHits[pi] || { 9: [], 10: [] };
     ctx.lineWidth = 2;
     ctx.strokeStyle = col;
@@ -435,8 +445,9 @@ function show(t) {
     } else {
       const uniq = [...new Set(hits.map((h) => `墙${h.wall_id} ${h.box_id}`))];
       const gaps = people.map((p) => (p.gap != null ? p.gap.toFixed(2) : '—')).join('/');
+      const sm = DATA.smooth ? ' · 腕点已平滑' : '';
       hud.innerHTML =
-        `${people.length} 人 · 交会 ${gaps}m<br>` +
+        `${people.length} 人 · 交会 ${gaps}m${sm}<br>` +
         (uniq.length
           ? `<span class="alarm">报警 ${uniq.join(' · ')}</span>`
           : '报警 无');
