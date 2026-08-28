@@ -6,7 +6,8 @@
 角点世界坐标只剩一个未知（该墙近端的 Z）。
 
 未知：f, camX, camH, camZ, pitch, yaw, roll + 每面墙近端 Z。
-观测：每面墙 4 个角点。卷尺量的相机位姿只作初值与软先验，焦距必须解。
+观测：每面墙 4 个角点；若有层线，再加「已知高度的水平分格线」两端反投影。
+卷尺量的相机位姿只作初值与软先验，焦距必须解。层高是货架真值，用来钉住世界系 Y。
 """
 
 from __future__ import annotations
@@ -52,6 +53,15 @@ def _wall_corners(wall: dict, sign: int, aisle: float, znear: float) -> np.ndarr
     ])
 
 
+def _wall_line(wall: dict, sign: int, aisle: float, znear: float, y: float) -> np.ndarray:
+    """墙上等高线：远、近两端（与四角远近一致）。"""
+    x = sign * aisle / 2.0
+    w = float(wall["width"])
+    zf = znear + w
+    y = float(y)
+    return np.array([[x, y, zf], [x, y, znear]], float)
+
+
 def _project(pts: np.ndarray, z: np.ndarray, cx: float, cy: float) -> np.ndarray:
     f, camX, camH, camZ, pitch, yaw, roll = z[:7]
     right, down, fwd = cam_axes(pitch, yaw, roll)
@@ -75,8 +85,34 @@ def _bounds(n: int, img_w: int):
     return lo, hi
 
 
+def _layer_entries(calib: dict, walls: list[dict]) -> list[tuple[int, float, np.ndarray]]:
+    """layer_lines: [{wall_id, y, uv:[[u,v]x2]}]，uv 为顶远→顶近方向的两端。"""
+    by_id = {w.get("wall_id"): i for i, w in enumerate(walls)}
+    out: list[tuple[int, float, np.ndarray]] = []
+    for ln in calib.get("layer_lines") or []:
+        wi = by_id.get(ln.get("wall_id"))
+        if wi is None:
+            continue
+        uv = ln.get("uv") or []
+        if len(uv) != 2:
+            continue
+        try:
+            y = float(ln["y"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        out.append((wi, y, np.asarray(uv, float)))
+    return out
+
+
+def _point_rms(fun: np.ndarray, n_pts: int) -> float:
+    if n_pts <= 0:
+        return 0.0
+    r = np.asarray(fun[: n_pts * 2], float).reshape(-1, 2)
+    return float(np.sqrt(np.mean(np.sum(r * r, axis=1))))
+
+
 def solve(calib: dict, img_w: int, img_h: int) -> dict:
-    """calib: {aisle, prior:{...}, walls:[{wall_id, quad:[[u,v]x4], width, height, base}]}"""
+    """calib: {aisle, prior, walls:[{wall_id, quad, width, height, base}], layer_lines?}"""
     walls = [w for w in calib.get("walls") or [] if len(w.get("quad") or []) == 4]
     if not walls:
         return {"ok": False, "error": "没有完整的四角标注"}
@@ -84,6 +120,9 @@ def solve(calib: dict, img_w: int, img_h: int) -> dict:
     prior = calib.get("prior") or {}
     cx, cy = img_w / 2.0, img_h / 2.0
     obs = np.array([p for w in walls for p in w["quad"]], float)
+    layers = _layer_entries(calib, walls)
+    n_corner = len(obs)
+    n_layer = len(layers)
 
     sign_sets: list[list[int]]
     if len(walls) == 1:
@@ -98,6 +137,10 @@ def solve(calib: dict, img_w: int, img_h: int) -> dict:
             ])
             uv = _project(pts, z, cx, cy)
             r = np.nan_to_num(uv - obs, nan=400.0).ravel().tolist()
+            for wi, y, uv_obs in layers:
+                line_pts = _wall_line(walls[wi], signs[wi], aisle, z[7 + wi], y)
+                uv_line = _project(line_pts, z, cx, cy)
+                r.extend(np.nan_to_num(uv_line - uv_obs, nan=400.0).ravel().tolist())
             # 卷尺值作软先验：偏离才罚，不钉死
             r.append(2.0 * (z[2] - float(prior.get("camH", 2.84))))
             r.append(1.0 * (math.degrees(z[4]) - float(prior.get("pitch", 45.0))) / 10.0)
@@ -109,6 +152,7 @@ def solve(calib: dict, img_w: int, img_h: int) -> dict:
 
     best: dict[str, Any] | None = None
     n = 7 + len(walls)
+    n_geom = n_corner + n_layer * 2
     for signs in sign_sets:
         for pitch0 in (20.0, 35.0, 50.0, 65.0):
             for fov0 in (60.0, 90.0, 110.0):
@@ -128,10 +172,14 @@ def solve(calib: dict, img_w: int, img_h: int) -> dict:
                     )
                 except Exception:
                     continue
-                r = np.array(sol.fun[: len(obs) * 2]).reshape(-1, 2)
-                rms = float(np.sqrt(np.mean(np.sum(r * r, axis=1))))
+                rms = _point_rms(sol.fun, n_geom)
                 if best is None or rms < best["resid_px"]:
-                    best = {"resid_px": rms, "z": sol.x.copy(), "signs": list(signs)}
+                    best = {
+                        "resid_px": rms,
+                        "z": sol.x.copy(),
+                        "signs": list(signs),
+                        "fun": np.asarray(sol.fun, float),
+                    }
     if best is None:
         return {"ok": False, "error": "求解未收敛"}
 
@@ -149,23 +197,17 @@ def solve(calib: dict, img_w: int, img_h: int) -> dict:
             "z_near": round(znear[i] - shift, 4),
             "corners": [[round(float(c), 4) for c in p] for p in pts],
         })
-    per_corner = np.linalg.norm(
-        np.nan_to_num(
-            _project(
-                np.vstack([
-                    _wall_corners(w, s, aisle, znear[i])
-                    for i, (w, s) in enumerate(zip(walls, best["signs"]))
-                ]),
-                z, cx, cy,
-            ) - obs,
-            nan=400.0,
-        ),
-        axis=1,
+    fun = best["fun"]
+    per_corner = np.linalg.norm(np.asarray(fun[: n_corner * 2], float).reshape(-1, 2), axis=1)
+    per_layer = (
+        np.linalg.norm(np.asarray(fun[n_corner * 2: n_geom * 2], float).reshape(-1, 2), axis=1)
+        if n_layer else np.zeros(0)
     )
     return {
         "ok": True,
         "resid_px": round(best["resid_px"], 2),
         "corner_resid_px": [round(float(v), 1) for v in per_corner],
+        "layer_resid_px": [round(float(v), 1) for v in per_layer],
         "aisle": aisle,
         "camera": {
             "fovH": round(fov_h, 2),
@@ -228,6 +270,7 @@ def _cam_bundle(sol: dict, img_w: int, img_h: int, R=None, t=None, scale: float 
         "camH": round(float(C[1]), 4),
         "resid_px": sol["resid_px"],
         "corner_resid_px": sol.get("corner_resid_px") or [],
+        "layer_resid_px": sol.get("layer_resid_px") or [],
     }
 
 
@@ -243,6 +286,7 @@ def solve_dual(payload: dict) -> dict:
             "aisle": payload.get("aisle"),
             "prior": v.get("prior") or payload.get("prior") or {},
             "walls": v.get("walls") or [],
+            "layer_lines": v.get("layer_lines") or [],
         }
         res = solve(cal, int(w), int(h))
         if not res.get("ok"):
@@ -288,7 +332,15 @@ def solve_dual(payload: dict) -> dict:
         "cameras": {views[0].get("name") or "L": cam_a, views[1].get("name") or "R": cam_b},
         "walls": walls,
         "per_view": {
-            views[0].get("name") or "L": {"resid_px": sols[0]["resid_px"], "camera": sols[0]["camera"]},
-            views[1].get("name") or "R": {"resid_px": sols[1]["resid_px"], "camera": sols[1]["camera"]},
+            views[0].get("name") or "L": {
+                "resid_px": sols[0]["resid_px"],
+                "layer_resid_px": sols[0].get("layer_resid_px") or [],
+                "camera": sols[0]["camera"],
+            },
+            views[1].get("name") or "R": {
+                "resid_px": sols[1]["resid_px"],
+                "layer_resid_px": sols[1].get("layer_resid_px") or [],
+                "camera": sols[1]["camera"],
+            },
         },
     }

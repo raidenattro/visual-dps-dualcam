@@ -125,6 +125,31 @@ export function equalRowYs(yBottom, yTop, nLayers) {
   return ys;
 }
 
+export function defaultRowHeights(nLayers, wallH, riser = DEFAULT_LAYER_PITCH) {
+  const n = Math.max(1, Math.round(Number(nLayers)) || 1);
+  const h = Number(wallH);
+  riser = Number(riser);
+  if (!(riser >= 0.05)) riser = DEFAULT_LAYER_PITCH;
+  if (n === 1) return [h];
+  const nEq = n - 1;
+  if (nEq * riser >= h - 0.02) return Array.from({ length: n }, () => h / n);
+  return [h - nEq * riser, ...Array.from({ length: nEq }, () => riser)];
+}
+
+export function rowYsFromHeights(base, wallH, heights) {
+  base = Number(base);
+  wallH = Number(wallH);
+  const yTop = base + wallH;
+  const ys = [yTop];
+  let acc = 0;
+  for (const ht of heights) {
+    acc += Number(ht);
+    ys.push(yTop - acc);
+  }
+  ys[ys.length - 1] = base;
+  return ys;
+}
+
 export function rowYsFromMesh(mesh) {
   if (Array.isArray(mesh.row_ys) && mesh.row_ys.length >= 2) {
     return mesh.row_ys.map(Number);
@@ -172,7 +197,12 @@ export function moveLayerRow(mesh, corners, r, y) {
 
 export function makeLayerMesh(wallId, corners, pitch = DEFAULT_LAYER_PITCH, nLayers = 4, cols = 4) {
   const [yBot, yTop] = wallYSpan(corners);
-  return meshFromRowYs(wallId, corners, equalRowYs(yBot, yTop, nLayers), cols);
+  const wallH = yTop - yBot;
+  const heights = defaultRowHeights(nLayers, wallH, pitch);
+  const mesh = meshFromRowYs(wallId, corners, rowYsFromHeights(yBot, wallH, heights), cols);
+  mesh.riser_m = Math.round(((Number(pitch) >= 0.05) ? Number(pitch) : DEFAULT_LAYER_PITCH) * 1e4) / 1e4;
+  mesh.row_heights = heights.map((h) => Math.round(h * 1e4) / 1e4);
+  return mesh;
 }
 
 export function vertIndex(rows, cols, r, c) {

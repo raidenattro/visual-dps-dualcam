@@ -32,6 +32,7 @@
   tr.w2 td:first-child { color: #d89bff; }
   button { background: #2a2a2a; color: #eee; border: 1px solid #444; padding: 5px 10px; cursor: pointer; }
   button.pri { background: #2a4a3a; border-color: #5c8; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
   hr.sep { border: 0; border-top: 1px solid #333; margin: 12px 0; }
   #bar {
     position: fixed; left: 10px; right: 350px; bottom: 10px;
@@ -75,18 +76,20 @@
     <div id="btns">
       <button id="btnUndo">撤销墙角</button>
       <button id="btnClear">清空本墙本路</button>
-      <button class="pri" id="btnSolve">1. 反解并对齐</button>
+      <button class="pri" id="btnSolve">1. 反解相机</button>
       <button id="btnSave">保存</button>
     </div>
     <hr class="sep"/>
-    <div class="muted">反解后生成本墙层线，再<strong>逐条拖分格线</strong>对齐隔板。各层高度独立，不再等距；列仍沿墙面均分。</div>
+    <div class="muted">三步分开：<strong>1</strong> 只用墙四角解相机；<strong>2</strong> 按下层高生成层线并拖齐隔板；<strong>3</strong> 把层高（默认 0.45m）送进最小二乘，钉住世界系 Y。不要用第 1 步代替第 3 步。</div>
     <label><span>层数</span><input type="number" id="nLayers" min="1" max="8" step="1" value="4"></label>
     <label><span>列数</span><input type="number" id="nCols" min="1" max="8" step="1" value="4"></label>
+    <label><span>下层高 m</span><input type="number" id="riserM" min="0.1" max="1.2" step="0.01" value="0.45"></label>
     <label><span>报警阈值 m</span><input type="number" id="contactM" step="0.01" value="0"></label>
     <div class="muted">腕点到墙的有向距离 <strong>小于</strong> 该值才报警。0 = 伸进墙面；正数（如 0.10）= 离墙还有余量也报。</div>
     <div id="btns">
-      <button class="pri" id="btnGen">2. 生成本墙层线</button>
+      <button id="btnGen">2. 生成本墙层线</button>
       <button id="btnGenBoth">两墙都生成</button>
+      <button id="btnSolveLayers" disabled>3. 带层高再解</button>
       <button id="btnResetMesh">重置本墙</button>
       <button id="btnDelMesh">删除本墙层线</button>
     </div>
@@ -101,8 +104,9 @@
 </div>
 <script type="module">
 import {
-  makeLayerMesh, meshCells, meshFromRowYs, moveLayerRow, pointInPolygon,
-  projectPix, rayPlane, rowYsFromMesh, vertIndex, wallById, wallPlane,
+  bilinearOnWall, defaultRowHeights, makeLayerMesh, meshCells, meshFromRowYs,
+  pointInPolygon, projectPix, rayPlane, rowYsFromHeights, rowYsFromMesh,
+  vertIndex, wallById, wallPlane, wallYSpan,
 } from '/dualcam_geom.js';
 
 const IW = 1280, IH = 720;
@@ -187,6 +191,25 @@ function renderRows() {
   hint();
 }
 
+function hasLayerMeshes() {
+  return (state.slot_meshes || []).length > 0;
+}
+
+function syncStepButtons() {
+  const hasMesh = hasLayerMeshes();
+  const hasSol = !!solved();
+  const btnCam = document.getElementById('btnSolve');
+  const btnGen = document.getElementById('btnGen');
+  const btnLayers = document.getElementById('btnSolveLayers');
+  if (btnLayers) {
+    btnLayers.disabled = !hasMesh;
+    btnLayers.title = hasMesh ? '四角 + 层高一起进最小二乘' : '先生成层线';
+  }
+  btnCam.classList.toggle('pri', !hasSol);
+  if (btnGen) btnGen.classList.toggle('pri', hasSol && !hasMesh);
+  if (btnLayers) btnLayers.classList.toggle('pri', hasSol && hasMesh);
+}
+
 function hint() {
   const w = wallsOf(activeView)[activeWall];
   const el = document.getElementById('hint');
@@ -195,12 +218,13 @@ function hint() {
   if (w.quad.length < 4) {
     el.textContent = `${side} 墙${w.wall_id}：点 ${HINT[w.quad.length]}。标完一面后点表格换墙，或直接点另一面已有的角。`;
   } else if (!solved()) {
-    el.textContent = `两路、两面墙角都齐了后点「1. 反解并对齐」，再生成层线并拖齐隔板。`;
+    el.textContent = `两路、两面墙角都齐了后点「1. 反解相机」（只用四角，不含层高）。`;
   } else if (!mesh) {
-    el.textContent = `当前墙${w.wall_id}。点「生成本墙层线」，再逐条拖分格线对齐隔板。`;
+    el.textContent = `当前墙${w.wall_id}。点「2. 生成本墙层线」（下层 ${riserM()} m），拖齐隔板后再点「3. 带层高再解」。`;
   } else {
-    el.textContent = `当前墙${w.wall_id}。拖每条水平分格线改该层高度；顶沿和底沿跟着墙走。`;
+    el.textContent = `当前墙${w.wall_id}。拖的是 2D 观测，层高仍是 ${riserM()} m。拖齐后点「3. 带层高再解」，不要再点「1. 反解相机」。`;
   }
+  syncStepButtons();
   const parts = (state.slot_meshes || []).map((m) => `墙${m.wall_id} ${m.rows}层×${m.cols}列`);
   document.getElementById('slotCount').textContent = parts.length
     ? parts.join(' · ') + '（表格高亮的是正在改的那面）'
@@ -295,16 +319,22 @@ function drawMeshes(c, v, k) {
       c.lineWidth = 1;
       c.stroke();
     }
-    // 行线：墙上的层分格线
+    // 行线：顶/底沿用 3D 投影；内部分格线优先用该路 2D 观测（拖的是像素，不是改层高）
     for (let i = 0; i <= rows; i++) {
       const inner = i > 0 && i < rows;
+      const stored = inner && layerLineUv(mesh, v, i);
       c.beginPath();
-      let started = false;
-      for (let j = 0; j <= cols; j++) {
-        const uv = projectPix(mesh.vertices[vertIndex(rows, cols, i, j)], cam);
-        if (!uv) continue;
-        const x = uv[0] * k, y = uv[1] * k;
-        if (!started) { c.moveTo(x, y); started = true; } else c.lineTo(x, y);
+      if (stored) {
+        c.moveTo(stored[0][0] * k, stored[0][1] * k);
+        c.lineTo(stored[1][0] * k, stored[1][1] * k);
+      } else {
+        let started = false;
+        for (let j = 0; j <= cols; j++) {
+          const uv = projectPix(mesh.vertices[vertIndex(rows, cols, i, j)], cam);
+          if (!uv) continue;
+          const x = uv[0] * k, y = uv[1] * k;
+          if (!started) { c.moveTo(x, y); started = true; } else c.lineTo(x, y);
+        }
       }
       c.strokeStyle = inner ? (on ? t.slot : t.off) : (on ? t.on : t.off);
       c.lineWidth = inner ? (on ? 2.6 : 1.6) : (on ? 1.4 : 1);
@@ -358,12 +388,11 @@ function hitLayerLine(v, x, y) {
   if (!cam) return null;
   let best = null, bestD = 14;
   for (const mesh of state.slot_meshes || []) {
-    const rows = mesh.rows, cols = mesh.cols;
+    const rows = mesh.rows;
     for (let r = 1; r < rows; r++) {
-      const a = projectPix(mesh.vertices[vertIndex(rows, cols, r, 0)], cam);
-      const b = projectPix(mesh.vertices[vertIndex(rows, cols, r, cols)], cam);
-      if (!a || !b) continue;
-      const d = distToSeg(x, y, a[0], a[1], b[0], b[1]);
+      const uv = layerLineUv(mesh, v, r);
+      if (!uv) continue;
+      const d = distToSeg(x, y, uv[0][0], uv[0][1], uv[1][0], uv[1][1]);
       if (d < bestD) { bestD = d; best = { wallId: mesh.wall_id, r }; }
     }
   }
@@ -376,6 +405,74 @@ function nLayers() {
 function nCols() {
   return Math.max(1, Number(document.getElementById('nCols').value) || 4);
 }
+function riserM() {
+  const v = Number(document.getElementById('riserM').value);
+  return v >= 0.05 ? v : 0.45;
+}
+
+function wallMeta(wallId) {
+  return wallsOf('L').find((w) => w.wall_id === wallId) || null;
+}
+
+function rowHeightsOf(mesh, meta) {
+  if (Array.isArray(mesh.row_heights) && mesh.row_heights.length === mesh.rows) {
+    return mesh.row_heights.map(Number);
+  }
+  return defaultRowHeights(mesh.rows || nLayers(), Number(meta.height), mesh.riser_m || riserM());
+}
+
+function physicalRowYs(mesh, meta) {
+  return rowYsFromHeights(Number(meta.base), Number(meta.height), rowHeightsOf(mesh, meta));
+}
+
+function rowLineUvFromMesh(mesh, r, cam) {
+  const rows = mesh.rows, cols = mesh.cols;
+  const a = projectPix(mesh.vertices[vertIndex(rows, cols, r, 0)], cam);
+  const b = projectPix(mesh.vertices[vertIndex(rows, cols, r, cols)], cam);
+  if (!a || !b) return null;
+  return [a, b];
+}
+
+function layerLineUv(mesh, v, r) {
+  const stored = mesh.line_uv && mesh.line_uv[v] && mesh.line_uv[v][r];
+  if (stored && stored[0] && stored[1]) return stored;
+  const cam = camOf(v);
+  if (!cam) return null;
+  return rowLineUvFromMesh(mesh, r, cam);
+}
+
+function projectYLine(corners, y, cam) {
+  const [yBot, yTop] = wallYSpan(corners);
+  const h = yTop - yBot;
+  const ty = Math.abs(h) < 1e-9 ? 0 : (yTop - y) / h;
+  const a = projectPix(bilinearOnWall(corners, ty, 0), cam);
+  const b = projectPix(bilinearOnWall(corners, ty, 1), cam);
+  if (!a || !b) return null;
+  return [a, b];
+}
+
+function initLineUv(mesh, corners) {
+  const uv = { L: mesh.line_uv && mesh.line_uv.L ? mesh.line_uv.L.slice() : [], R: mesh.line_uv && mesh.line_uv.R ? mesh.line_uv.R.slice() : [] };
+  for (const v of ['L', 'R']) {
+    const cam = camOf(v);
+    if (!cam) continue;
+    uv[v] = [];
+    for (let r = 0; r <= mesh.rows; r++) uv[v][r] = rowLineUvFromMesh(mesh, r, cam);
+  }
+  mesh.line_uv = uv;
+  return mesh;
+}
+
+function stampMesh(mesh, prev) {
+  if (!prev) {
+    if (mesh.riser_m == null) mesh.riser_m = riserM();
+    return mesh;
+  }
+  if (mesh.riser_m == null) mesh.riser_m = prev.riser_m || riserM();
+  if (!mesh.row_heights && prev.row_heights) mesh.row_heights = prev.row_heights;
+  if (!mesh.line_uv && prev.line_uv) mesh.line_uv = prev.line_uv;
+  return mesh;
+}
 
 function putMesh(mesh) {
   const i = (state.slot_meshes || []).findIndex((m) => m.wall_id === mesh.wall_id);
@@ -384,6 +481,7 @@ function putMesh(mesh) {
   if (mesh.wall_id === wallsOf('L')[activeWall].wall_id) {
     document.getElementById('nLayers').value = String(mesh.n_layers || mesh.rows);
     document.getElementById('nCols').value = String(mesh.cols);
+    if (mesh.riser_m) document.getElementById('riserM').value = String(mesh.riser_m);
   }
   return mesh;
 }
@@ -394,13 +492,17 @@ function syncInputsFromMesh() {
   if (!m) return;
   document.getElementById('nLayers').value = String(m.n_layers || m.rows);
   document.getElementById('nCols').value = String(m.cols);
+  if (m.riser_m) document.getElementById('riserM').value = String(m.riser_m);
 }
 
 function applyMesh(wallId, layers, cols) {
   const sol = solved();
   const wall = sol && wallById(sol, wallId);
-  if (!wall) return null;
-  return putMesh(makeLayerMesh(wallId, wall.corners, 0, layers, cols));
+  const meta = wallMeta(wallId);
+  if (!wall || !meta) return null;
+  const mesh = makeLayerMesh(wallId, wall.corners, riserM(), layers, cols);
+  initLineUv(mesh, wall.corners);
+  return putMesh(mesh);
 }
 
 function applyMeshKeepRows(wallId, cols) {
@@ -408,15 +510,28 @@ function applyMeshKeepRows(wallId, cols) {
   const wall = sol && wallById(sol, wallId);
   const mesh = meshOf(wallId);
   if (!wall || !mesh) return applyMesh(wallId, nLayers(), cols);
-  return putMesh(meshFromRowYs(wallId, wall.corners, rowYsFromMesh(mesh), cols));
+  const next = stampMesh(meshFromRowYs(wallId, wall.corners, rowYsFromMesh(mesh), cols), mesh);
+  return putMesh(next);
 }
 
-function dragRowLine(wallId, r, p) {
+function dragRowLine(wallId, r, x, y, view) {
   const sol = solved();
   const wall = sol && wallById(sol, wallId);
   const mesh = meshOf(wallId);
-  if (!wall || !mesh || !p) return null;
-  return putMesh(moveLayerRow(mesh, wall.corners, r, p[1]));
+  const cam = camOf(view);
+  if (!wall || !mesh || !cam) return null;
+  const { p0, n } = wallPlane(wall.corners);
+  const p = rayPlane(x, y, cam, p0, n);
+  if (!p) return null;
+  const uv = projectYLine(wall.corners, p[1], cam);
+  if (!uv) return null;
+  const next = stampMesh({
+    ...mesh,
+    line_uv: JSON.parse(JSON.stringify(mesh.line_uv || { L: [], R: [] })),
+  }, mesh);
+  if (!next.line_uv[view]) next.line_uv[view] = [];
+  next.line_uv[view][r] = uv;
+  return putMesh(next);
 }
 
 function hitWallCorner(v, x, y) {
@@ -485,13 +600,7 @@ for (const v of ['L', 'R']) {
     if (drag.kind === 'wall') {
       wallsOf(v)[activeWall].quad[drag.i] = [x, y];
     } else if (drag.kind === 'line') {
-      const sol = solved();
-      const cam = camOf(v);
-      const wall = sol && wallById(sol, drag.wallId);
-      if (!sol || !cam || !wall) return;
-      const { p0, n } = wallPlane(wall.corners);
-      const p = rayPlane(x, y, cam, p0, n);
-      if (p) dragRowLine(drag.wallId, drag.r, p);
+      dragRowLine(drag.wallId, drag.r, x, y, v);
       hint();
     }
     draw();
@@ -508,7 +617,28 @@ function viewPrior(camH, camDist) {
   };
 }
 
-function collect() {
+function layerLinesForView(v) {
+  const lines = [];
+  for (const mesh of state.slot_meshes || []) {
+    const meta = wallMeta(mesh.wall_id);
+    if (!meta || !mesh.rows) continue;
+    const ys = physicalRowYs(mesh, meta);
+    const sol = solved();
+    const wall = sol && wallById(sol, mesh.wall_id);
+    const cam = camOf(v);
+    for (let r = 1; r < mesh.rows; r++) {
+      let uv = mesh.line_uv && mesh.line_uv[v] && mesh.line_uv[v][r];
+      if ((!uv || !uv[0] || !uv[1]) && wall && cam) {
+        uv = projectYLine(wall.corners, ys[r], cam);
+      }
+      if (!uv || !uv[0] || !uv[1]) continue;
+      lines.push({ wall_id: mesh.wall_id, y: ys[r], uv: [uv[0], uv[1]] });
+    }
+  }
+  return lines;
+}
+
+function collect({ layerLines = true } = {}) {
   state.aisle = Number(document.getElementById('aisle').value);
   const pL = viewPrior(
     Number(document.getElementById('camHL').value),
@@ -521,17 +651,55 @@ function collect() {
   state.prior = pL;
   state.views.L.prior = pL;
   state.views.R.prior = pR;
+  state.views.L.layer_lines = layerLines ? layerLinesForView('L') : [];
+  state.views.R.layer_lines = layerLines ? layerLinesForView('R') : [];
   state.contact_m = Number(document.getElementById('contactM').value);
   return state;
 }
 
-async function post(path) {
+async function post(path, opts = {}) {
   const r = await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(collect()),
+    body: JSON.stringify(collect(opts)),
   });
   return r.json();
+}
+
+async function runSolve({ layerLines }) {
+  const el = document.getElementById('msg');
+  el.textContent = layerLines ? '带层高求解中…' : '只用四角求解中…';
+  const res = await post('/api/solve', { layerLines });
+  if (!res.ok) {
+    el.textContent = res.error || '失败';
+    return;
+  }
+  state.solved = res;
+  for (const m of [...(state.slot_meshes || [])]) {
+    const wall = wallById(res, m.wall_id);
+    const meta = wallMeta(m.wall_id);
+    if (!wall || !meta) continue;
+    const next = stampMesh(
+      meshFromRowYs(m.wall_id, wall.corners, physicalRowYs(m, meta), m.cols),
+      m,
+    );
+    putMesh(next);
+  }
+  const a = res.per_view.L, b = res.per_view.R;
+  const nL = (a.layer_resid_px || []).length;
+  const nR = (b.layer_resid_px || []).length;
+  const nLine = (nL / 2 | 0) + (nR / 2 | 0);
+  el.textContent =
+    (layerLines
+      ? `带层高再解 · 左路 ${a.resid_px}px · 右路 ${b.resid_px}px` +
+        (nLine ? `（层线 ${nL / 2 | 0}+${nR / 2 | 0} 条）` : '（没有层线观测，先生成并拖齐）')
+      : `仅四角 · 左路 ${a.resid_px}px · 右路 ${b.resid_px}px`) + `\n` +
+    `对齐误差 ${res.align_rms_m} m · 尺度 ${res.align_scale}\n` +
+    `左相机高 ${res.cameras.L.camH} m · 右 ${res.cameras.R.camH} m\n` +
+    (layerLines
+      ? `层高已按 ${riserM()} m 钉在世界系。黄圈应套住绿点①②③④。`
+      : `黄圈应套住绿点①②③④。接着生成层线、拖齐隔板，再点「3. 带层高再解」。`);
+  hint(); draw();
 }
 
 function upsertMesh(wallId) {
@@ -551,44 +719,31 @@ document.getElementById('btnSave').onclick = async () => {
   const res = await post('/api/calib');
   document.getElementById('msg').textContent = res.ok ? `已存 ${res.path}` : (res.error || '保存失败');
 };
-document.getElementById('btnSolve').onclick = async () => {
-  document.getElementById('msg').textContent = '求解中…';
-  const res = await post('/api/solve');
-  if (!res.ok) {
-    document.getElementById('msg').textContent = res.error || '失败';
+document.getElementById('btnSolve').onclick = () => runSolve({ layerLines: false });
+document.getElementById('btnSolveLayers').onclick = () => {
+  if (!hasLayerMeshes()) {
+    document.getElementById('msg').textContent = '先点「2. 生成本墙层线」，拖齐隔板后再带层高再解。';
     return;
   }
-  state.solved = res;
-  for (const m of [...(state.slot_meshes || [])]) {
-    const wall = wallById(res, m.wall_id);
-    if (!wall) continue;
-    putMesh(meshFromRowYs(m.wall_id, wall.corners, rowYsFromMesh(m), m.cols));
-  }
-  const a = res.per_view.L, b = res.per_view.R;
-  document.getElementById('msg').textContent =
-    `左路残差 ${a.resid_px}px · 右路 ${b.resid_px}px\n` +
-    `对齐误差 ${res.align_rms_m} m · 尺度 ${res.align_scale}\n` +
-    `左相机高 ${res.cameras.L.camH} m · 右 ${res.cameras.R.camH} m\n` +
-    `黄圈应套住绿点①②③④。套不住就微调墙角再反解。`;
-  hint(); draw();
+  return runSolve({ layerLines: true });
 };
 document.getElementById('btnGen').onclick = () => {
   const sol = solved();
   const w = wallsOf('L')[activeWall];
   const wall = sol && wallById(sol, w.wall_id);
   if (!wall) {
-    document.getElementById('msg').textContent = '先点「1. 反解并对齐」。层线必须长在 3D 墙上。';
+    document.getElementById('msg').textContent = '先点「1. 反解相机」。层线必须长在 3D 墙上。';
     return;
   }
   const mesh = upsertMesh(w.wall_id);
   document.getElementById('msg').textContent =
-    `墙${w.wall_id}：${mesh.n_layers} 层 × ${mesh.cols} 列。拖每条分格线对齐隔板。`;
+    `墙${w.wall_id}：${mesh.n_layers} 层 × ${mesh.cols} 列，下层 ${riserM()} m。拖齐后点「3. 带层高再解」。`;
   hint(); draw();
 };
 document.getElementById('btnGenBoth').onclick = () => {
   const sol = solved();
   if (!sol) {
-    document.getElementById('msg').textContent = '先点「1. 反解并对齐」。';
+    document.getElementById('msg').textContent = '先点「1. 反解相机」。';
     return;
   }
   const names = [];
@@ -679,6 +834,7 @@ window.addEventListener('resize', () => { draw(); });
     if (m) {
       document.getElementById('nLayers').value = String(m.n_layers || m.rows || 4);
       document.getElementById('nCols').value = String(m.cols || 4);
+      if (m.riser_m) document.getElementById('riserM').value = String(m.riser_m);
     }
   }
   document.getElementById('nLayers').addEventListener('change', () => {
@@ -689,6 +845,16 @@ window.addEventListener('resize', () => { draw(); });
   document.getElementById('nCols').addEventListener('change', () => {
     const w = wallsOf('L')[activeWall];
     if (solved() && meshOf(w.wall_id)) applyMeshKeepRows(w.wall_id, nCols());
+    hint(); draw();
+  });
+  document.getElementById('riserM').addEventListener('change', () => {
+    const w = wallsOf('L')[activeWall];
+    const mesh = w && meshOf(w.wall_id);
+    if (!solved() || !mesh) { hint(); return; }
+    const kept = mesh.line_uv;
+    applyMesh(w.wall_id, nLayers(), nCols());
+    const next = meshOf(w.wall_id);
+    if (next && kept) next.line_uv = kept;
     hint(); draw();
   });
   renderRows();

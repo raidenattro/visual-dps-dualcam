@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
 from scripts.dualcam_geom import (
     contact_slots,
     drag_vertex,
+    default_row_heights,
     equal_row_ys,
     make_grid_vertices,
     make_layer_mesh,
@@ -167,13 +168,15 @@ def test_contact_slot_into_wall_not_on_or_aisle():
     assert contact_slots(in_aisle, [mesh], solved) == []
 
 
-def test_layer_initial_equal_split():
+def test_layer_mesh_uses_riser():
     corners = [[-1, 2, 2], [-1, 2, 0], [-1, 0, 0], [-1, 0, 2]]
     ys = equal_row_ys(0, 2, 4)
     assert ys == pytest.approx([2.0, 1.5, 1.0, 0.5, 0.0])
+    assert default_row_heights(4, 2.0, 0.45) == pytest.approx([0.65, 0.45, 0.45, 0.45])
     mesh = make_layer_mesh(1, corners, n_layers=4, cols=4)
     assert mesh["rows"] == 4
-    assert mesh["row_ys"] == pytest.approx([2.0, 1.5, 1.0, 0.5, 0.0])
+    assert mesh["row_heights"] == pytest.approx([0.65, 0.45, 0.45, 0.45])
+    assert mesh["row_ys"] == pytest.approx([2.0, 1.35, 0.90, 0.45, 0.0])
     z0 = mesh["vertices"][vert_index(4, 4, 1, 0)][2]
     z1 = mesh["vertices"][vert_index(4, 4, 1, 1)][2]
     z2 = mesh["vertices"][vert_index(4, 4, 1, 2)][2]
@@ -185,8 +188,8 @@ def test_move_one_row_leaves_others():
     mesh = make_layer_mesh(1, corners, n_layers=4, cols=4)
     moved = move_layer_row(mesh, corners, 1, 1.2)
     assert moved["row_ys"][1] == pytest.approx(1.2)
-    assert moved["row_ys"][2] == pytest.approx(1.0)
-    assert moved["row_ys"][3] == pytest.approx(0.5)
+    assert moved["row_ys"][2] == pytest.approx(0.90)
+    assert moved["row_ys"][3] == pytest.approx(0.45)
     again = move_layer_row(moved, corners, 2, 0.7)
     assert again["row_ys"][1] == pytest.approx(1.2)
     assert again["row_ys"][2] == pytest.approx(0.7)
