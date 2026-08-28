@@ -240,12 +240,15 @@ function wristContactOk(person, idx, hit) {
   const sr = (person.sR && person.sR[idx]) || 0;
   const inL = viewConfirmsSlot(person, idx, hit, 'L');
   const inR = viewConfirmsSlot(person, idx, hit, 'R');
+  // stereo：3D 已贴墙；墙面格子的 2D 投影不含伸进货架的点，斜视角会差几像素。
+  // 两路都过门槛时只需一路 2D 落在格内（6:36 那种单路误检是 Lhold/Rhold，上面已挡）。
+  if (src === 'stereo') return inL === true || inR === true;
   if (src === 'L') return inL === true;
   if (src === 'R') return inR === true;
   if (sl >= min && sr >= min) {
     if (sl >= sr + 0.12) return inL === true;
     if (sr >= sl + 0.12) return inR === true;
-    return inL === true && inR === true;
+    return inL === true || inR === true;
   }
   if (sl >= min) return inL === true;
   if (sr >= min) return inR === true;
