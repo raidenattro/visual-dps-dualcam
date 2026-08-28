@@ -17,10 +17,11 @@
     aspect-ratio: 16 / 9;
     background: #000;
   }
-  .stage video, .stage canvas.ov { display: block; width: 100%; height: 100%; }
-  .stage video { object-fit: cover; }
-  .stage video.L { object-position: left center; }
-  .stage video.R { object-position: right center; }
+  .stage video, .stage canvas.frame, .stage canvas.ov {
+    display: block; width: 100%; height: 100%;
+  }
+  .stage video { object-fit: cover; object-position: left center; }
+  .stage canvas.frame { position: absolute; inset: 0; }
   .stage canvas.ov { position: absolute; inset: 0; pointer-events: none; }
   #view3d { position: relative; min-width: 0; min-height: 0; }
   #c { display: block; width: 100%; height: 100%; }
@@ -38,6 +39,10 @@
     padding: 8px 14px; border-top: 1px solid #333; background: #181818;
   }
   #bar input[type=range] { flex: 1; }
+  #bar label { display: flex; align-items: center; gap: 6px; color: #bbb; white-space: nowrap; }
+  #bar input[type=number] {
+    width: 64px; background: #222; color: #ddd; border: 1px solid #444; padding: 2px 4px;
+  }
   button { background: #2a2a2a; color: #eee; border: 1px solid #444; padding: 5px 12px; cursor: pointer; }
   #tlab { width: 92px; color: #bbb; font-variant-numeric: tabular-nums; }
   #hint { color: #777; }
@@ -48,7 +53,7 @@
   <div class="pane">
     <span class="tag">左路 · 1-3组-1</span>
     <div class="stage">
-      <video id="vidL" class="L" playsinline muted></video>
+      <video id="vid" playsinline muted preload="auto"></video>
       <canvas class="ov" id="ovL"></canvas>
     </div>
   </div>
@@ -60,7 +65,7 @@
   <div class="pane">
     <span class="tag">右路 · 1-3组-2</span>
     <div class="stage">
-      <video id="vidR" class="R" playsinline muted></video>
+      <canvas class="frame" id="frameR"></canvas>
       <canvas class="ov" id="ovR"></canvas>
     </div>
   </div>
@@ -68,7 +73,8 @@
     <button id="btnPlay">播放</button>
     <input type="range" id="seek" min="0" max="1000" value="0" step="0.04">
     <span id="tlab">0:00</span>
-    <span id="hint">空格播放 · ←→ 跳 2 秒 · 腕点贴墙（≤10cm）对应货位变红</span>
+    <label>报警阈值 m <input type="number" id="contactM" step="0.01" value="0"></label>
+    <span id="hint">空格播放 · ←→ 跳 2 秒 · 有向距离小于阈值才变红（0=伸进墙）</span>
   </div>
 </div>
 <script type="importmap">
@@ -82,14 +88,15 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { contactSlots, makeGridVertices, meshCells, projectCorners } from '/dualcam_geom.js';
+import { contactSlots, makeLayerMesh, meshCells, projectCorners, DEFAULT_LAYER_PITCH, DEFAULT_CONTACT_M } from '/dualcam_geom.js';
 
 const DATA = await fetch('/api/skel3d').then((r) => r.json());
 const CALIB = await fetch('/api/calib').then((r) => r.json()).catch(() => ({}));
-const vidL = document.getElementById('vidL');
-const vidR = document.getElementById('vidR');
+const vid = document.getElementById('vid');
+const frameR = document.getElementById('frameR');
 const ovL = document.getElementById('ovL');
 const ovR = document.getElementById('ovR');
+const ctxFrameR = frameR.getContext('2d', { alpha: false });
 const seek = document.getElementById('seek');
 const tlab = document.getElementById('tlab');
 const hud = document.getElementById('hud');
@@ -114,15 +121,15 @@ function nearest(t) {
 }
 function dClass(d) {
   if (d == null) return '';
-  return d <= 0.10 ? 'near' : 'far';
+  return d < contactM ? 'near' : 'far';
 }
 function dTxt(d) {
   return d == null ? '—' : `${d.toFixed(2)}m`;
 }
 
 const canvas = document.getElementById('c');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+renderer.setPixelRatio(1);
 const viewCam = new THREE.PerspectiveCamera(50, 1, 0.05, 40);
 viewCam.position.set(3.6, 3.4, 1.1);
 const scene = new THREE.Scene();
@@ -163,21 +170,26 @@ function addCam(cam, color) {
 addCam(DATA.cameras.L, 0xffcc66);
 addCam(DATA.cameras.R, 0xff8866);
 
-const CONTACT_M = 0.10;
+let contactM = Number.isFinite(Number(CALIB.contact_m)) ? Number(CALIB.contact_m) : DEFAULT_CONTACT_M;
+const inpContact = document.getElementById('contactM');
+inpContact.value = String(contactM);
+inpContact.addEventListener('input', () => {
+  const v = Number(inpContact.value);
+  if (!Number.isFinite(v)) return;
+  contactM = v;
+  lastIdx = -1;
+  lastPaintSig = null;
+  show(vid.currentTime || 0);
+});
 const solved = (CALIB.solved && CALIB.solved.ok) ? CALIB.solved : { walls: DATA.walls || [] };
 const slotMeshes = (CALIB.slot_meshes && CALIB.slot_meshes.length)
   ? CALIB.slot_meshes
-  : (DATA.walls || []).map((w) => ({
-    wall_id: w.wall_id,
-    rows: 4,
-    cols: 4,
-    vertices: makeGridVertices(w.corners, 4, 4),
-  }));
+  : (DATA.walls || []).map((w) => makeLayerMesh(w.wall_id, w.corners, DEFAULT_LAYER_PITCH, 4, 4));
 
-const idleFill = new THREE.MeshPhongMaterial({
+const idleFill = new THREE.MeshBasicMaterial({
   color: 0x3a6a88, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false,
 });
-const alarmFill = new THREE.MeshPhongMaterial({
+const alarmFill = new THREE.MeshBasicMaterial({
   color: 0xff3344, transparent: true, opacity: 0.78, side: THREE.DoubleSide, depthWrite: false,
 });
 const idleLine = new THREE.LineBasicMaterial({ color: 0x7ec8ff });
@@ -201,27 +213,24 @@ for (const mesh of slotMeshes) {
   }
 }
 
-function alarmKeys(fr) {
-  const keys = new Set();
-  if (!fr || !fr.ok) return keys;
-  for (const idx of [9, 10]) {
-    for (const h of contactSlots(fr.xyz && fr.xyz[idx], slotMeshes, solved, CONTACT_M)) {
-      keys.add(`${h.wall_id}:${h.box_id}`);
+function frameHits(fr) {
+  const hits = [];
+  const wrist = { 9: [], 10: [] };
+  if (fr && fr.ok) {
+    for (const idx of [9, 10]) {
+      const h = contactSlots(fr.xyz && fr.xyz[idx], slotMeshes, solved, contactM);
+      wrist[idx] = h;
+      hits.push(...h);
     }
   }
-  return keys;
+  return { hits, keys: new Set(hits.map((h) => `${h.wall_id}:${h.box_id}`)), wrist };
 }
 
-function hitsOf(fr) {
-  const all = [];
-  if (!fr || !fr.ok) return all;
-  for (const idx of [9, 10]) {
-    all.push(...contactSlots(fr.xyz && fr.xyz[idx], slotMeshes, solved, CONTACT_M));
-  }
-  return all;
-}
-
+let lastPaintSig = null;
 function paintSlots(keys) {
+  const sig = [...keys].sort().join(',');
+  if (sig === lastPaintSig) return;
+  lastPaintSig = sig;
   for (const s of slotObjs) {
     const on = keys.has(s.key);
     s.fill.material = on ? alarmFill : idleFill;
@@ -231,13 +240,39 @@ function paintSlots(keys) {
 
 const skelGroup = new THREE.Group();
 scene.add(skelGroup);
-const jointGeo = new THREE.SphereGeometry(0.032, 10, 10);
+const jointGeo = new THREE.SphereGeometry(0.032, 8, 8);
 const boneMat = new THREE.LineBasicMaterial({ color: 0x66e0ff });
-const jointMat = new THREE.MeshPhongMaterial({ color: 0x66e0ff });
+const jointMat = new THREE.MeshBasicMaterial({ color: 0x66e0ff });
 const wristMats = {
-  near: new THREE.MeshPhongMaterial({ color: 0x3dd68c }),
-  far: new THREE.MeshPhongMaterial({ color: 0xffa23c }),
+  near: new THREE.MeshBasicMaterial({ color: 0x3dd68c }),
+  far: new THREE.MeshBasicMaterial({ color: 0xffa23c }),
 };
+const joints = [];
+for (let i = 0; i < 17; i++) {
+  const m = new THREE.Mesh(jointGeo, jointMat);
+  m.visible = false;
+  skelGroup.add(m);
+  joints.push(m);
+}
+const boneAttr = new THREE.Float32BufferAttribute(new Float32Array(DATA.edges.length * 6), 3);
+const boneGeo = new THREE.BufferGeometry();
+boneGeo.setAttribute('position', boneAttr);
+const boneLine = new THREE.LineSegments(boneGeo, boneMat);
+skelGroup.add(boneLine);
+
+const slotProj = { L: [], R: [] };
+for (const side of ['L', 'R']) {
+  const cam = DATA.cameras[side];
+  for (const mesh of slotMeshes) {
+    for (const cell of meshCells(mesh)) {
+      slotProj[side].push({
+        key: `${mesh.wall_id}:${cell.box_id}`,
+        label: `墙${mesh.wall_id} ${cell.box_id}`,
+        poly: cam ? projectCorners(cell.corners, cam) : null,
+      });
+    }
+  }
+}
 
 function resize3d() {
   const box = canvas.parentElement.getBoundingClientRect();
@@ -248,72 +283,69 @@ function resize3d() {
 }
 new ResizeObserver(resize3d).observe(canvas.parentElement);
 
-function draw3d(fr, keys) {
-  while (skelGroup.children.length) skelGroup.remove(skelGroup.children[0]);
+function draw3d(fr, keys, wrist) {
   paintSlots(keys);
-  if (!fr || !fr.ok) return;
+  if (!fr || !fr.ok) {
+    skelGroup.visible = false;
+    return;
+  }
+  skelGroup.visible = true;
   const xyz = fr.xyz;
-  const hitL = keys.size && contactSlots(xyz[9], slotMeshes, solved, CONTACT_M).length > 0;
-  const hitR = keys.size && contactSlots(xyz[10], slotMeshes, solved, CONTACT_M).length > 0;
   for (let i = 0; i < 17; i++) {
     const p = xyz[i];
-    if (!p) continue;
-    const isW = i === 9 || i === 10;
-    const alarm = i === 9 ? hitL : hitR;
-    const d = i === 9 ? fr.dL : fr.dR;
-    const mat = isW
-      ? (alarm || (d != null && d <= CONTACT_M) ? wristMats.near : wristMats.far)
-      : jointMat;
-    const s = new THREE.Mesh(jointGeo, mat);
-    s.position.set(...p);
-    skelGroup.add(s);
+    const m = joints[i];
+    if (!p) { m.visible = false; continue; }
+    m.visible = true;
+    m.position.set(p[0], p[1], p[2]);
+    if (i === 9 || i === 10) {
+      const alarm = wrist[i] && wrist[i].length > 0;
+      const d = i === 9 ? fr.dL : fr.dR;
+      m.material = (alarm || (d != null && d < contactM)) ? wristMats.near : wristMats.far;
+    } else {
+      m.material = jointMat;
+    }
   }
-  const pos = [];
+  const arr = boneAttr.array;
+  let n = 0;
   for (const [a, b] of DATA.edges) {
     if (!xyz[a] || !xyz[b]) continue;
-    pos.push(...xyz[a], ...xyz[b]);
+    arr[n++] = xyz[a][0]; arr[n++] = xyz[a][1]; arr[n++] = xyz[a][2];
+    arr[n++] = xyz[b][0]; arr[n++] = xyz[b][1]; arr[n++] = xyz[b][2];
   }
-  if (pos.length) {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    skelGroup.add(new THREE.LineSegments(g, boneMat));
-  }
+  boneAttr.needsUpdate = true;
+  boneGeo.setDrawRange(0, n / 3);
 }
 
 function drawSlots2d(ctx, w, h, side, keys) {
-  const cam = DATA.cameras[side];
-  if (!cam) return;
   const sx = w / 1280, sy = h / 720;
-  for (const mesh of slotMeshes) {
-    for (const cell of meshCells(mesh)) {
-      const poly = projectCorners(cell.corners, cam);
-      if (!poly) continue;
-      const alarm = keys.has(`${mesh.wall_id}:${cell.box_id}`);
-      ctx.beginPath();
-      poly.forEach((p, i) => {
-        const x = p[0] * sx, y = p[1] * sy;
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      });
-      ctx.closePath();
-      ctx.fillStyle = alarm ? 'rgba(255,50,60,.45)' : 'rgba(80,160,220,.10)';
-      ctx.fill();
-      ctx.strokeStyle = alarm ? '#ff4455' : 'rgba(120,180,220,.55)';
-      ctx.lineWidth = alarm ? 3 : 1;
-      ctx.stroke();
-      if (alarm) {
-        const cx = poly.reduce((s, p) => s + p[0], 0) / 4 * sx;
-        const cy = poly.reduce((s, p) => s + p[1], 0) / 4 * sy;
-        ctx.fillStyle = '#ff99a6';
-        ctx.font = '12px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(`墙${mesh.wall_id} ${cell.box_id}`, cx, cy);
-      }
+  for (const cell of slotProj[side]) {
+    const poly = cell.poly;
+    if (!poly) continue;
+    const alarm = keys.has(cell.key);
+    ctx.beginPath();
+    poly.forEach((p, i) => {
+      const x = p[0] * sx, y = p[1] * sy;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.closePath();
+    ctx.fillStyle = alarm ? 'rgba(255,50,60,.45)' : 'rgba(80,160,220,.10)';
+    ctx.fill();
+    ctx.strokeStyle = alarm ? '#ff4455' : 'rgba(120,180,220,.55)';
+    ctx.lineWidth = alarm ? 3 : 1;
+    ctx.stroke();
+    if (alarm) {
+      const cx = poly.reduce((s, p) => s + p[0], 0) / 4 * sx;
+      const cy = poly.reduce((s, p) => s + p[1], 0) / 4 * sy;
+      ctx.fillStyle = '#ff99a6';
+      ctx.font = '12px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(cell.label, cx, cy);
     }
   }
 }
 
-function draw2d(cv, fr, side, keys) {
+function draw2d(cv, fr, side, keys, wrist) {
   const w = cv.clientWidth, h = cv.clientHeight;
   if (!w || !h) return;
   if (cv.width !== w) cv.width = w;
@@ -336,13 +368,21 @@ function draw2d(cv, fr, side, keys) {
   }
   for (let i = 0; i < 17; i++) {
     if (scores[i] < DATA.kpt_min) continue;
-    const wristHit = (i === 9 || i === 10)
-      && contactSlots(fr.xyz && fr.xyz[i], slotMeshes, solved, CONTACT_M).length > 0;
+    const wristHit = (i === 9 || i === 10) && wrist[i] && wrist[i].length > 0;
     ctx.beginPath();
     ctx.arc(kpts[i][0] * sx, kpts[i][1] * sy, i === 9 || i === 10 ? 5 : 3, 0, Math.PI * 2);
     ctx.fillStyle = (i === 9 || i === 10) ? (wristHit ? '#3dd68c' : '#ffa23c') : '#66e0ff';
     ctx.fill();
   }
+}
+
+function blitRight() {
+  const w = frameR.clientWidth, h = frameR.clientHeight;
+  if (!w || !h || vid.readyState < 2) return;
+  if (frameR.width !== w) frameR.width = w;
+  if (frameR.height !== h) frameR.height = h;
+  const vw = vid.videoWidth || 2560, vh = vid.videoHeight || 720;
+  ctxFrameR.drawImage(vid, vw / 2, 0, vw / 2, vh, 0, 0, w, h);
 }
 
 let lastIdx = -1;
@@ -353,15 +393,14 @@ function show(t) {
   const fr = frames[idx];
   if (idx !== lastIdx) {
     lastIdx = idx;
-    const keys = alarmKeys(fr);
-    draw3d(fr, keys);
-    draw2d(ovL, fr, 'L', keys);
-    draw2d(ovR, fr, 'R', keys);
+    const { hits, keys, wrist } = frameHits(fr);
+    draw3d(fr, keys, wrist);
+    draw2d(ovL, fr, 'L', keys, wrist);
+    draw2d(ovR, fr, 'R', keys, wrist);
     if (!fr || !fr.ok) {
       hud.textContent = '未配对';
       hud.className = '';
     } else {
-      const hits = hitsOf(fr);
       const uniq = [...new Set(hits.map((h) => `墙${h.wall_id} ${h.box_id}`))];
       hud.innerHTML =
         `交会 ${fr.gap.toFixed(2)}m<br>` +
@@ -374,50 +413,55 @@ function show(t) {
   }
 }
 
-function setTime(t, play) {
-  t = Math.max(0, Math.min(vidL.duration || 1000, t));
-  vidL.currentTime = t;
-  vidR.currentTime = t;
-  if (!play) show(t);
+function setTime(t) {
+  t = Math.max(0, Math.min(vid.duration || 1000, t));
+  vid.currentTime = t;
+  show(t);
 }
 
-vidL.src = vidR.src = '/api/video';
-vidL.addEventListener('loadedmetadata', () => {
-  seek.max = String(vidL.duration);
+vid.src = '/api/video';
+vid.addEventListener('loadedmetadata', () => {
+  seek.max = String(vid.duration);
   show(0);
+  blitRight();
 });
+vid.addEventListener('loadeddata', blitRight);
+vid.addEventListener('seeked', blitRight);
 btn.onclick = () => {
-  if (vidL.paused) {
-    vidR.currentTime = vidL.currentTime;
-    vidL.play(); vidR.play();
+  if (vid.paused) {
+    vid.play();
     btn.textContent = '暂停';
   } else {
-    vidL.pause(); vidR.pause();
+    vid.pause();
     btn.textContent = '播放';
   }
 };
 seek.oninput = () => {
-  vidL.pause(); vidR.pause();
+  vid.pause();
   btn.textContent = '播放';
-  setTime(Number(seek.value), false);
+  setTime(Number(seek.value));
 };
 document.addEventListener('keydown', (e) => {
   if (e.code === 'Space') { e.preventDefault(); btn.click(); }
-  if (e.code === 'ArrowLeft') setTime(vidL.currentTime - 2, false);
-  if (e.code === 'ArrowRight') setTime(vidL.currentTime + 2, false);
+  if (e.code === 'ArrowLeft') setTime(vid.currentTime - 2);
+  if (e.code === 'ArrowRight') setTime(vid.currentTime + 2);
 });
 
 function tick() {
-  if (!vidL.paused) {
-    if (Math.abs(vidR.currentTime - vidL.currentTime) > 0.08) vidR.currentTime = vidL.currentTime;
-    show(vidL.currentTime);
+  if (!vid.paused) {
+    blitRight();
+    show(vid.currentTime);
   }
   controls.update();
-  renderer.render(scene, viewCam);
+  if (!document.hidden) renderer.render(scene, viewCam);
   requestAnimationFrame(tick);
 }
 for (const el of document.querySelectorAll('.stage')) {
-  new ResizeObserver(() => { lastIdx = -1; show(vidL.currentTime || 0); }).observe(el);
+  new ResizeObserver(() => {
+    lastIdx = -1;
+    blitRight();
+    show(vid.currentTime || 0);
+  }).observe(el);
 }
 resize3d();
 tick();

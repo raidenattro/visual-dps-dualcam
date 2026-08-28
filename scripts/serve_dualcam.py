@@ -150,6 +150,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "public, max-age=86400")
         self.send_header("Content-Length", str(length))
         if code == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
@@ -161,7 +162,7 @@ class Handler(BaseHTTPRequestHandler):
                 f.seek(start)
                 left = length
                 while left > 0:
-                    chunk = f.read(min(256 * 1024, left))
+                    chunk = f.read(min(1024 * 1024, left))
                     if not chunk:
                         break
                     self.wfile.write(chunk)

@@ -9,11 +9,13 @@
   #views { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 10px 10px 70px; min-width: 0; }
   .pane { position: relative; background: #000; border: 1px solid #333; min-height: 0; }
   .pane.on { border-color: #5c8; }
-  .pane video, .pane canvas { display: block; width: 100%; aspect-ratio: 1280 / 720; height: auto; }
-  .pane video { object-fit: cover; background: #000; }
+  .pane video {
+    display: block; width: 100%; aspect-ratio: 1280 / 720; height: auto; background: #000;
+    object-fit: cover;
+  }
   .pane video.L { object-position: left center; }
   .pane video.R { object-position: right center; }
-  .pane canvas { position: absolute; left: 0; top: 0; cursor: crosshair; }
+  .pane canvas.ov { position: absolute; left: 0; top: 0; width: 100%; aspect-ratio: 1280 / 720; cursor: crosshair; }
   .tag { position: absolute; left: 8px; top: 8px; background: rgba(0,0,0,.7); padding: 2px 8px; color: #fff; }
   #panel { border-left: 1px solid #333; padding: 12px; overflow: auto; }
   h1 { margin: 0 0 8px; font-size: 15px; color: #fff; }
@@ -21,7 +23,7 @@
   .muted { color: #8a8a8a; }
   .hint { color: #e0b060; min-height: 3.2em; margin: 8px 0; }
   label { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
-  label span { width: 96px; color: #bbb; flex-shrink: 0; }
+  label span { width: 112px; color: #bbb; flex-shrink: 0; }
   input[type=number], input[type=text] { width: 72px; background: #222; color: #ddd; border: 1px solid #444; padding: 2px 4px; }
   table { border-collapse: collapse; width: 100%; margin: 6px 0; }
   th, td { padding: 3px 4px; text-align: left; font-weight: 400; color: #bbb; }
@@ -46,13 +48,13 @@
   <div id="views">
     <div class="pane on" data-view="L">
       <span class="tag">左路 · 1-3组-1</span>
-      <video id="vidL" class="L" playsinline muted></video>
-      <canvas id="cvL"></canvas>
+      <video id="vidL" class="L" playsinline muted preload="auto"></video>
+      <canvas id="cvL" class="ov"></canvas>
     </div>
     <div class="pane" data-view="R">
       <span class="tag">右路 · 1-3组-2</span>
-      <video id="vidR" class="R" playsinline muted></video>
-      <canvas id="cvR"></canvas>
+      <video id="vidR" class="R" playsinline muted preload="auto"></video>
+      <canvas id="cvR" class="ov"></canvas>
     </div>
   </div>
   <div id="panel">
@@ -64,9 +66,11 @@
       <tbody id="rows"></tbody>
     </table>
     <label><span>巷道净宽 m</span><input type="number" id="aisle" step="0.01" value="2.00"></label>
-    <div class="muted" style="margin-top:8px">卷尺初值（先验，可改）</div>
-    <label><span>相机高 m</span><input type="number" id="camH" step="0.05" value="2.84"></label>
-    <label><span>离近端 m</span><input type="number" id="camDist" step="0.05" value="1.56"></label>
+    <div class="muted" style="margin-top:8px">卷尺初值（先验，可改）。相机高、离近端分左右路，两端可以不同。</div>
+    <label><span>左路相机高 m</span><input type="number" id="camHL" step="0.05" value="2.84"></label>
+    <label><span>右路相机高 m</span><input type="number" id="camHR" step="0.05" value="2.84"></label>
+    <label><span>左路离近端 m</span><input type="number" id="camDistL" step="0.05" value="1.56"></label>
+    <label><span>右路离近端 m</span><input type="number" id="camDistR" step="0.05" value="1.56"></label>
     <label><span>俯仰 °</span><input type="number" id="pitch" step="1" value="45"></label>
     <div id="btns">
       <button id="btnUndo">撤销墙角</button>
@@ -75,19 +79,18 @@
       <button id="btnSave">保存</button>
     </div>
     <hr class="sep"/>
-    <div class="muted">货格是把<strong>当前这面墙</strong>切成区域。两面墙要分别生成。格子在墙上，不是描筐口。</div>
-    <label><span>行 × 列</span>
-      <input type="number" id="gridRows" min="1" max="8" value="4">
-      ×
-      <input type="number" id="gridCols" min="1" max="8" value="4">
-    </label>
+    <div class="muted">反解后生成本墙层线，再<strong>逐条拖分格线</strong>对齐隔板。各层高度独立，不再等距；列仍沿墙面均分。</div>
+    <label><span>层数</span><input type="number" id="nLayers" min="1" max="8" step="1" value="4"></label>
+    <label><span>列数</span><input type="number" id="nCols" min="1" max="8" step="1" value="4"></label>
+    <label><span>报警阈值 m</span><input type="number" id="contactM" step="0.01" value="0"></label>
+    <div class="muted">腕点到墙的有向距离 <strong>小于</strong> 该值才报警。0 = 伸进墙面；正数（如 0.10）= 离墙还有余量也报。</div>
     <div id="btns">
-      <button class="pri" id="btnGen">2. 生成本墙货格</button>
+      <button class="pri" id="btnGen">2. 生成本墙层线</button>
       <button id="btnGenBoth">两墙都生成</button>
       <button id="btnResetMesh">重置本墙</button>
-      <button id="btnDelMesh">删除本墙货格</button>
+      <button id="btnDelMesh">删除本墙层线</button>
     </div>
-    <div class="muted" id="slotCount">还没有货格</div>
+    <div class="muted" id="slotCount">还没有层线</div>
     <div id="msg"></div>
   </div>
 </div>
@@ -98,20 +101,18 @@
 </div>
 <script type="module">
 import {
-  makeGridVertices, meshCells, pointInPolygon, projectCorners, projectPix,
-  rayPlane, wallById, wallPlane,
+  makeLayerMesh, meshCells, meshFromRowYs, moveLayerRow, pointInPolygon,
+  projectPix, rayPlane, rowYsFromMesh, vertIndex, wallById, wallPlane,
 } from '/dualcam_geom.js';
 
 const IW = 1280, IH = 720;
 const HINT = ['① 顶沿·远端', '② 顶沿·近端', '③ 底沿·近端', '④ 底沿·远端'];
 const vidL = document.getElementById('vidL');
 const vidR = document.getElementById('vidR');
-const vid = vidL;
 const cvs = { L: document.getElementById('cvL'), R: document.getElementById('cvR') };
 const ctx = { L: cvs.L.getContext('2d'), R: cvs.R.getContext('2d') };
 let activeView = 'L';
 let activeWall = 0;
-let selectedCell = null;
 let drag = null;
 let state = {
   aisle: 2.0,
@@ -121,6 +122,7 @@ let state = {
     R: { name: 'R', image_size: [IW, IH], walls: emptyWalls() },
   },
   slot_meshes: [],
+  contact_m: 0,
 };
 
 function emptyWalls() {
@@ -150,7 +152,7 @@ function wallIndexById(id) {
 function setActiveWall(i) {
   if (i < 0 || i === activeWall) return;
   activeWall = i;
-  selectedCell = null;
+  syncInputsFromMesh();
 }
 
 function renderRows() {
@@ -193,16 +195,16 @@ function hint() {
   if (w.quad.length < 4) {
     el.textContent = `${side} 墙${w.wall_id}：点 ${HINT[w.quad.length]}。标完一面后点表格换墙，或直接点另一面已有的角。`;
   } else if (!solved()) {
-    el.textContent = `两路、两面墙角都齐了后点「1. 反解并对齐」，再分别生成货格。`;
+    el.textContent = `两路、两面墙角都齐了后点「1. 反解并对齐」，再生成层线并拖齐隔板。`;
   } else if (!mesh) {
-    el.textContent = `当前墙${w.wall_id}。点「生成本墙货格」，或「两墙都生成」。`;
+    el.textContent = `当前墙${w.wall_id}。点「生成本墙层线」，再逐条拖分格线对齐隔板。`;
   } else {
-    el.textContent = `当前墙${w.wall_id}。拖格点改这面墙的分区；点另一面墙或表格切换。`;
+    el.textContent = `当前墙${w.wall_id}。拖每条水平分格线改该层高度；顶沿和底沿跟着墙走。`;
   }
-  const parts = (state.slot_meshes || []).map((m) => `墙${m.wall_id} ${m.rows}×${m.cols}`);
+  const parts = (state.slot_meshes || []).map((m) => `墙${m.wall_id} ${m.rows}层×${m.cols}列`);
   document.getElementById('slotCount').textContent = parts.length
-    ? parts.join(' · ') + '（当前表格高亮的是正在改的那面）'
-    : '还没有货格';
+    ? parts.join(' · ') + '（表格高亮的是正在改的那面）'
+    : '还没有层线';
 }
 
 function fitCanvas(cv) {
@@ -278,43 +280,47 @@ function drawMeshes(c, v, k) {
   for (const mesh of state.slot_meshes || []) {
     const on = mesh.wall_id === wallId;
     const t = wallTint(mesh.wall_id);
+    const rows = mesh.rows, cols = mesh.cols;
+    // 列线：均分，只作参考
+    for (let j = 0; j <= cols; j++) {
+      c.beginPath();
+      let started = false;
+      for (let i = 0; i <= rows; i++) {
+        const uv = projectPix(mesh.vertices[vertIndex(rows, cols, i, j)], cam);
+        if (!uv) continue;
+        const x = uv[0] * k, y = uv[1] * k;
+        if (!started) { c.moveTo(x, y); started = true; } else c.lineTo(x, y);
+      }
+      c.strokeStyle = on ? 'rgba(180,180,180,.35)' : 'rgba(120,120,120,.2)';
+      c.lineWidth = 1;
+      c.stroke();
+    }
+    // 行线：墙上的层分格线
+    for (let i = 0; i <= rows; i++) {
+      const inner = i > 0 && i < rows;
+      c.beginPath();
+      let started = false;
+      for (let j = 0; j <= cols; j++) {
+        const uv = projectPix(mesh.vertices[vertIndex(rows, cols, i, j)], cam);
+        if (!uv) continue;
+        const x = uv[0] * k, y = uv[1] * k;
+        if (!started) { c.moveTo(x, y); started = true; } else c.lineTo(x, y);
+      }
+      c.strokeStyle = inner ? (on ? t.slot : t.off) : (on ? t.on : t.off);
+      c.lineWidth = inner ? (on ? 2.6 : 1.6) : (on ? 1.4 : 1);
+      c.stroke();
+    }
     const cells = meshCells(mesh);
     for (const cell of cells) {
-      const poly = projectCorners(cell.corners, cam);
-      if (!poly) continue;
-      const sel = selectedCell && selectedCell.wall_id === mesh.wall_id
-        && selectedCell.row === cell.row && selectedCell.col === cell.col;
-      c.beginPath();
-      poly.forEach((p, i) => {
-        const x = p[0] * k, y = p[1] * k;
-        if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
-      });
-      c.closePath();
-      c.fillStyle = sel ? 'rgba(255,180,60,.28)' : (on ? t.fillOn : t.fillOff);
-      c.fill();
-      c.strokeStyle = sel ? '#fc6' : (on ? t.slot : t.off);
-      c.lineWidth = sel ? 2.2 : (on ? 1.4 : 1);
-      c.stroke();
-      const cx = poly.reduce((s, p) => s + p[0], 0) / 4 * k;
-      const cy = poly.reduce((s, p) => s + p[1], 0) / 4 * k;
-      c.fillStyle = sel ? '#fc6' : t.slot;
+      const a = projectPix(cell.corners[0], cam);
+      const b = projectPix(cell.corners[2], cam);
+      if (!a || !b) continue;
+      c.fillStyle = on ? t.slot : t.off;
       c.font = '10px sans-serif';
       c.textAlign = 'center';
       c.textBaseline = 'middle';
-      c.fillText(cell.box_id, cx, cy);
+      c.fillText(cell.box_id, (a[0] + b[0]) / 2 * k, (a[1] + b[1]) / 2 * k);
     }
-    mesh.vertices.forEach((p) => {
-      const uv = projectPix(p, cam);
-      if (!uv) return;
-      const x = uv[0] * k, y = uv[1] * k;
-      c.beginPath();
-      c.arc(x, y, on ? 5.5 : 4, 0, Math.PI * 2);
-      c.fillStyle = t.slot;
-      c.fill();
-      c.strokeStyle = '#123';
-      c.lineWidth = 1;
-      c.stroke();
-    });
   }
 }
 
@@ -339,19 +345,78 @@ function evtToImg(e, v) {
   ];
 }
 
-function hitVertex(v, x, y) {
+function distToSeg(px, py, ax, ay, bx, by) {
+  const vx = bx - ax, vy = by - ay;
+  const l2 = vx * vx + vy * vy || 1;
+  let t = ((px - ax) * vx + (py - ay) * vy) / l2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
+}
+
+function hitLayerLine(v, x, y) {
   const cam = camOf(v);
   if (!cam) return null;
-  let best = null, bestD = 18;
+  let best = null, bestD = 14;
   for (const mesh of state.slot_meshes || []) {
-    mesh.vertices.forEach((p, i) => {
-      const uv = projectPix(p, cam);
-      if (!uv) return;
-      const d = Math.hypot(uv[0] - x, uv[1] - y);
-      if (d < bestD) { bestD = d; best = { wallId: mesh.wall_id, vi: i }; }
-    });
+    const rows = mesh.rows, cols = mesh.cols;
+    for (let r = 1; r < rows; r++) {
+      const a = projectPix(mesh.vertices[vertIndex(rows, cols, r, 0)], cam);
+      const b = projectPix(mesh.vertices[vertIndex(rows, cols, r, cols)], cam);
+      if (!a || !b) continue;
+      const d = distToSeg(x, y, a[0], a[1], b[0], b[1]);
+      if (d < bestD) { bestD = d; best = { wallId: mesh.wall_id, r }; }
+    }
   }
   return best;
+}
+
+function nLayers() {
+  return Math.max(1, Number(document.getElementById('nLayers').value) || 4);
+}
+function nCols() {
+  return Math.max(1, Number(document.getElementById('nCols').value) || 4);
+}
+
+function putMesh(mesh) {
+  const i = (state.slot_meshes || []).findIndex((m) => m.wall_id === mesh.wall_id);
+  if (i < 0) state.slot_meshes = [...(state.slot_meshes || []), mesh];
+  else state.slot_meshes[i] = mesh;
+  if (mesh.wall_id === wallsOf('L')[activeWall].wall_id) {
+    document.getElementById('nLayers').value = String(mesh.n_layers || mesh.rows);
+    document.getElementById('nCols').value = String(mesh.cols);
+  }
+  return mesh;
+}
+
+function syncInputsFromMesh() {
+  const w = wallsOf('L')[activeWall];
+  const m = w && meshOf(w.wall_id);
+  if (!m) return;
+  document.getElementById('nLayers').value = String(m.n_layers || m.rows);
+  document.getElementById('nCols').value = String(m.cols);
+}
+
+function applyMesh(wallId, layers, cols) {
+  const sol = solved();
+  const wall = sol && wallById(sol, wallId);
+  if (!wall) return null;
+  return putMesh(makeLayerMesh(wallId, wall.corners, 0, layers, cols));
+}
+
+function applyMeshKeepRows(wallId, cols) {
+  const sol = solved();
+  const wall = sol && wallById(sol, wallId);
+  const mesh = meshOf(wallId);
+  if (!wall || !mesh) return applyMesh(wallId, nLayers(), cols);
+  return putMesh(meshFromRowYs(wallId, wall.corners, rowYsFromMesh(mesh), cols));
+}
+
+function dragRowLine(wallId, r, p) {
+  const sol = solved();
+  const wall = sol && wallById(sol, wallId);
+  const mesh = meshOf(wallId);
+  if (!wall || !mesh || !p) return null;
+  return putMesh(moveLayerRow(mesh, wall.corners, r, p[1]));
 }
 
 function hitWallCorner(v, x, y) {
@@ -373,20 +438,6 @@ function hitWallQuad(v, x, y) {
   return -1;
 }
 
-function hitCell(v, x, y) {
-  const cam = camOf(v);
-  if (!cam) return null;
-  for (const mesh of state.slot_meshes || []) {
-    for (const cell of meshCells(mesh)) {
-      const poly = projectCorners(cell.corners, cam);
-      if (poly && pointInPolygon([x, y], poly)) {
-        return { wall_id: mesh.wall_id, row: cell.row, col: cell.col };
-      }
-    }
-  }
-  return null;
-}
-
 function incompleteWall(v) {
   return wallsOf(v).findIndex((w) => w.quad.length < 4);
 }
@@ -396,10 +447,10 @@ for (const v of ['L', 'R']) {
   cv.addEventListener('pointerdown', (e) => {
     activeView = v;
     const [x, y] = evtToImg(e, v);
-    const hv = hitVertex(v, x, y);
-    if (hv) {
-      setActiveWall(wallIndexById(hv.wallId));
-      drag = { kind: 'vert', view: v, vi: hv.vi };
+    const hl = hitLayerLine(v, x, y);
+    if (hl) {
+      setActiveWall(wallIndexById(hl.wallId));
+      drag = { kind: 'line', view: v, r: hl.r, wallId: hl.wallId };
       cv.setPointerCapture(e.pointerId);
       renderRows(); hint(); draw();
       return;
@@ -415,7 +466,6 @@ for (const v of ['L', 'R']) {
     const hq = hitWallQuad(v, x, y);
     if (hq >= 0) {
       setActiveWall(hq);
-      selectedCell = hitCell(v, x, y);
       renderRows(); hint(); draw();
       return;
     }
@@ -426,11 +476,7 @@ for (const v of ['L', 'R']) {
     }
     setActiveWall(wi);
     const w = wallsOf(v)[wi];
-    if (w.quad.length < 4) {
-      w.quad.push([x, y]);
-    } else {
-      selectedCell = hitCell(v, x, y);
-    }
+    if (w.quad.length < 4) w.quad.push([x, y]);
     renderRows(); hint(); draw();
   });
   cv.addEventListener('pointermove', (e) => {
@@ -438,31 +484,44 @@ for (const v of ['L', 'R']) {
     const [x, y] = evtToImg(e, v);
     if (drag.kind === 'wall') {
       wallsOf(v)[activeWall].quad[drag.i] = [x, y];
-    } else if (drag.kind === 'vert') {
+    } else if (drag.kind === 'line') {
       const sol = solved();
       const cam = camOf(v);
-      if (!sol || !cam) return;
-      const wall = wallById(sol, wallsOf(v)[activeWall].wall_id);
-      const mesh = meshOf(wall && wall.wall_id);
-      if (!wall || !mesh) return;
+      const wall = sol && wallById(sol, drag.wallId);
+      if (!sol || !cam || !wall) return;
       const { p0, n } = wallPlane(wall.corners);
       const p = rayPlane(x, y, cam, p0, n);
-      if (p) mesh.vertices[drag.vi] = p;
+      if (p) dragRowLine(drag.wallId, drag.r, p);
+      hint();
     }
     draw();
   });
   cv.addEventListener('pointerup', () => { drag = null; });
 }
 
-function collect() {
-  state.aisle = Number(document.getElementById('aisle').value);
-  state.prior = {
-    camH: Number(document.getElementById('camH').value),
-    camDist: Number(document.getElementById('camDist').value),
+function viewPrior(camH, camDist) {
+  return {
+    camH,
+    camDist,
     pitch: Number(document.getElementById('pitch').value),
     yaw: 0,
   };
-  for (const v of ['L', 'R']) state.views[v].prior = state.prior;
+}
+
+function collect() {
+  state.aisle = Number(document.getElementById('aisle').value);
+  const pL = viewPrior(
+    Number(document.getElementById('camHL').value),
+    Number(document.getElementById('camDistL').value),
+  );
+  const pR = viewPrior(
+    Number(document.getElementById('camHR').value),
+    Number(document.getElementById('camDistR').value),
+  );
+  state.prior = pL;
+  state.views.L.prior = pL;
+  state.views.R.prior = pR;
+  state.contact_m = Number(document.getElementById('contactM').value);
   return state;
 }
 
@@ -475,18 +534,8 @@ async function post(path) {
   return r.json();
 }
 
-function gridSize() {
-  return [
-    Math.max(1, Number(document.getElementById('gridRows').value) || 4),
-    Math.max(1, Number(document.getElementById('gridCols').value) || 4),
-  ];
-}
-
-function upsertMesh(wallId, rows, cols, vertices) {
-  const next = { wall_id: wallId, rows, cols, vertices };
-  const i = (state.slot_meshes || []).findIndex((m) => m.wall_id === wallId);
-  if (i < 0) state.slot_meshes = [...(state.slot_meshes || []), next];
-  else state.slot_meshes[i] = next;
+function upsertMesh(wallId) {
+  return applyMesh(wallId, nLayers(), nCols());
 }
 
 document.getElementById('btnUndo').onclick = () => {
@@ -510,6 +559,11 @@ document.getElementById('btnSolve').onclick = async () => {
     return;
   }
   state.solved = res;
+  for (const m of [...(state.slot_meshes || [])]) {
+    const wall = wallById(res, m.wall_id);
+    if (!wall) continue;
+    putMesh(meshFromRowYs(m.wall_id, wall.corners, rowYsFromMesh(m), m.cols));
+  }
   const a = res.per_view.L, b = res.per_view.R;
   document.getElementById('msg').textContent =
     `左路残差 ${a.resid_px}px · 右路 ${b.resid_px}px\n` +
@@ -523,14 +577,12 @@ document.getElementById('btnGen').onclick = () => {
   const w = wallsOf('L')[activeWall];
   const wall = sol && wallById(sol, w.wall_id);
   if (!wall) {
-    document.getElementById('msg').textContent = '先点「1. 反解并对齐」。货格必须长在 3D 墙上，不能两路各画一套。';
+    document.getElementById('msg').textContent = '先点「1. 反解并对齐」。层线必须长在 3D 墙上。';
     return;
   }
-  const [rows, cols] = gridSize();
-  upsertMesh(w.wall_id, rows, cols, makeGridVertices(wall.corners, rows, cols));
-  selectedCell = null;
+  const mesh = upsertMesh(w.wall_id);
   document.getElementById('msg').textContent =
-    `墙${w.wall_id} 已按墙面分成 ${rows}×${cols}。拖格点只改墙上分区；不必贴筐口。`;
+    `墙${w.wall_id}：${mesh.n_layers} 层 × ${mesh.cols} 列。拖每条分格线对齐隔板。`;
   hint(); draw();
 };
 document.getElementById('btnGenBoth').onclick = () => {
@@ -539,17 +591,14 @@ document.getElementById('btnGenBoth').onclick = () => {
     document.getElementById('msg').textContent = '先点「1. 反解并对齐」。';
     return;
   }
-  const [rows, cols] = gridSize();
   const names = [];
   for (const w of wallsOf('L')) {
-    const sw = wallById(sol, w.wall_id);
-    if (!sw) continue;
-    upsertMesh(w.wall_id, rows, cols, makeGridVertices(sw.corners, rows, cols));
+    if (!wallById(sol, w.wall_id)) continue;
+    upsertMesh(w.wall_id);
     names.push(`墙${w.wall_id}`);
   }
-  selectedCell = null;
   document.getElementById('msg').textContent =
-    names.length ? `${names.join('、')} 已各分成 ${rows}×${cols}。` : 'solved 里没有墙。';
+    names.length ? `${names.join('、')} 已生成层线。` : 'solved 里没有墙。';
   hint(); draw();
 };
 document.getElementById('btnResetMesh').onclick = () => {
@@ -558,22 +607,29 @@ document.getElementById('btnResetMesh').onclick = () => {
 document.getElementById('btnDelMesh').onclick = () => {
   const id = wallsOf('L')[activeWall].wall_id;
   state.slot_meshes = (state.slot_meshes || []).filter((m) => m.wall_id !== id);
-  selectedCell = null;
   hint(); draw();
 };
+
+function syncRight(force = false) {
+  if (vidR.readyState < 1) return;
+  if (force || Math.abs(vidR.currentTime - vidL.currentTime) > 0.04) {
+    vidR.currentTime = vidL.currentTime;
+  }
+}
 
 function fmt(t) {
   const m = Math.floor(t / 60), s = Math.floor(t % 60);
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 const seek = document.getElementById('seek');
-vid.addEventListener('loadedmetadata', () => {
-  seek.max = Math.floor(vid.duration * 25);
+vidL.addEventListener('loadedmetadata', () => {
+  seek.max = Math.floor(vidL.duration * 25);
   draw();
 });
-vid.addEventListener('timeupdate', () => {
-  seek.value = Math.round(vid.currentTime * 25);
-  document.getElementById('tlab').textContent = fmt(vid.currentTime);
+vidL.addEventListener('timeupdate', () => {
+  seek.value = Math.round(vidL.currentTime * 25);
+  document.getElementById('tlab').textContent = fmt(vidL.currentTime);
+  if (!vidL.paused) syncRight();
 });
 seek.oninput = () => {
   const t = Number(seek.value) / 25;
@@ -582,20 +638,27 @@ seek.oninput = () => {
 };
 document.getElementById('btnPlay').onclick = () => {
   if (vidL.paused) {
-    vidL.play(); vidR.play();
+    syncRight(true);
+    vidL.play();
+    vidR.play();
     document.getElementById('btnPlay').textContent = '暂停';
   } else {
-    vidL.pause(); vidR.pause();
+    vidL.pause();
+    vidR.pause();
     document.getElementById('btnPlay').textContent = '播放';
   }
 };
 
-vid.addEventListener('seeked', draw);
+vidL.addEventListener('seeked', () => { syncRight(true); draw(); });
 vidL.addEventListener('error', () => {
   const e = vidL.error;
   document.getElementById('msg').textContent = '视频加载失败：' + (e ? e.message || e.code : 'unknown');
 });
-window.addEventListener('resize', draw);
+vidR.addEventListener('error', () => {
+  const e = vidR.error;
+  document.getElementById('msg').textContent = '右路视频加载失败：' + (e ? e.message || e.code : 'unknown');
+});
+window.addEventListener('resize', () => { draw(); });
 
 (async () => {
   const saved = await fetch('/api/calib').then((r) => r.json()).catch(() => ({}));
@@ -604,15 +667,30 @@ window.addEventListener('resize', draw);
     if (!Array.isArray(state.slot_meshes)) state.slot_meshes = [];
     if (saved.aisle) document.getElementById('aisle').value = saved.aisle;
     const p = saved.prior || {};
-    if (p.camH) document.getElementById('camH').value = p.camH;
-    if (p.camDist) document.getElementById('camDist').value = p.camDist;
-    if (p.pitch) document.getElementById('pitch').value = p.pitch;
+    const pL = (saved.views.L && saved.views.L.prior) || p;
+    const pR = (saved.views.R && saved.views.R.prior) || p;
+    if (pL.camH) document.getElementById('camHL').value = pL.camH;
+    if (pR.camH) document.getElementById('camHR').value = pR.camH;
+    if (pL.camDist || p.camDist) document.getElementById('camDistL').value = pL.camDist || p.camDist;
+    if (pR.camDist || p.camDist) document.getElementById('camDistR').value = pR.camDist || p.camDist;
+    if (pL.pitch || p.pitch) document.getElementById('pitch').value = pL.pitch || p.pitch;
+    if (saved.contact_m != null) document.getElementById('contactM').value = saved.contact_m;
     const m = (state.slot_meshes || [])[0];
     if (m) {
-      document.getElementById('gridRows').value = String(m.rows);
-      document.getElementById('gridCols').value = String(m.cols);
+      document.getElementById('nLayers').value = String(m.n_layers || m.rows || 4);
+      document.getElementById('nCols').value = String(m.cols || 4);
     }
   }
+  document.getElementById('nLayers').addEventListener('change', () => {
+    const w = wallsOf('L')[activeWall];
+    if (solved() && meshOf(w.wall_id)) applyMesh(w.wall_id, nLayers(), nCols());
+    hint(); draw();
+  });
+  document.getElementById('nCols').addEventListener('change', () => {
+    const w = wallsOf('L')[activeWall];
+    if (solved() && meshOf(w.wall_id)) applyMeshKeepRows(w.wall_id, nCols());
+    hint(); draw();
+  });
   renderRows();
   vidL.src = '/api/video';
   vidR.src = '/api/video';

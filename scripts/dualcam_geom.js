@@ -2,6 +2,8 @@
 
 const EPS = 1e-8;
 const MIN_DEPTH = 0.05;
+export const DEFAULT_LAYER_PITCH = 0.45;
+export const DEFAULT_CONTACT_M = 0;
 
 function v3(a) {
   return [Number(a[0]), Number(a[1]), Number(a[2])];
@@ -89,20 +91,88 @@ export function dragVertex(u, v, cam, otherCam, current, p0, n, stereo = false) 
   return rayPlane(u, v, cam, p0, n);
 }
 
-export function makeGridVertices(corners, rows, cols) {
+export function bilinearOnWall(corners, ty, tz) {
   const c0 = v3(corners[0]), c1 = v3(corners[1]), c2 = v3(corners[2]), c3 = v3(corners[3]);
+  return add(add(
+    add(mul(c0, (1 - ty) * (1 - tz)), mul(c1, (1 - ty) * tz)),
+    mul(c2, ty * tz),
+  ), mul(c3, ty * (1 - tz)));
+}
+
+export function makeGridVertices(corners, rows, cols) {
   const out = [];
   for (let r = 0; r <= rows; r++) {
     const ty = r / rows;
-    for (let c = 0; c <= cols; c++) {
-      const tz = c / cols;
-      out.push(add(add(
-        add(mul(c0, (1 - ty) * (1 - tz)), mul(c1, (1 - ty) * tz)),
-        mul(c2, ty * tz),
-      ), mul(c3, ty * (1 - tz))));
-    }
+    for (let c = 0; c <= cols; c++) out.push(bilinearOnWall(corners, ty, c / cols));
   }
   return out;
+}
+
+export function wallYSpan(corners) {
+  const ys = corners.map((p) => Number(p[1]));
+  return [Math.min(...ys), Math.max(...ys)];
+}
+
+export const MIN_LAYER_GAP = 0.03;
+
+export function equalRowYs(yBottom, yTop, nLayers) {
+  const n = Math.max(1, Math.round(Number(nLayers)) || 1);
+  yBottom = Number(yBottom);
+  yTop = Number(yTop);
+  const h = yTop - yBottom;
+  const ys = [];
+  for (let i = 0; i <= n; i++) ys.push(yTop - i * h / n);
+  return ys;
+}
+
+export function rowYsFromMesh(mesh) {
+  if (Array.isArray(mesh.row_ys) && mesh.row_ys.length >= 2) {
+    return mesh.row_ys.map(Number);
+  }
+  const rows = mesh.rows, cols = mesh.cols, verts = mesh.vertices;
+  const ys = [];
+  for (let r = 0; r <= rows; r++) ys.push(Number(verts[r * (cols + 1)][1]));
+  return ys;
+}
+
+export function meshFromRowYs(wallId, corners, rowYs, cols = 4) {
+  const [yBot, yTop] = wallYSpan(corners);
+  let ys = (rowYs && rowYs.length >= 2) ? rowYs.map(Number) : [yTop, yBot];
+  ys[0] = yTop;
+  ys[ys.length - 1] = yBot;
+  cols = Math.max(1, Math.round(Number(cols)) || 1);
+  const height = yTop - yBot;
+  const tys = ys.map((y) => (Math.abs(height) < 1e-9 ? 0 : (yTop - y) / height));
+  const vertices = [];
+  for (const ty of tys) {
+    for (let c = 0; c <= cols; c++) vertices.push(bilinearOnWall(corners, ty, c / cols));
+  }
+  const rows = ys.length - 1;
+  return {
+    wall_id: wallId,
+    rows,
+    cols,
+    n_layers: rows,
+    row_ys: ys.map((y) => Math.round(y * 1e4) / 1e4),
+    vertices,
+  };
+}
+
+export function moveLayerRow(mesh, corners, r, y) {
+  const ys = rowYsFromMesh(mesh);
+  const rows = ys.length - 1;
+  r = Math.round(Number(r));
+  if (r <= 0 || r >= rows) return meshFromRowYs(mesh.wall_id, corners, ys, mesh.cols);
+  const hi = ys[r - 1] - MIN_LAYER_GAP;
+  const lo = ys[r + 1] + MIN_LAYER_GAP;
+  if (hi < lo) ys[r] = 0.5 * (ys[r - 1] + ys[r + 1]);
+  else ys[r] = Math.min(Math.max(Number(y), lo), hi);
+  return meshFromRowYs(mesh.wall_id, corners, ys, mesh.cols);
+}
+
+export function makeLayerMesh(wallId, corners, pitch = DEFAULT_LAYER_PITCH, nLayers = 4, cols = 4) {
+  const [yBot, yTop] = wallYSpan(corners);
+  return meshFromRowYs(wallId, corners, equalRowYs(yBot, yTop, nLayers), cols);
 }
 
 export function vertIndex(rows, cols, r, c) {
@@ -140,14 +210,14 @@ export function signedWallDist(p, wall) {
   return (p[0] - p0[0]) * nx;
 }
 
-export function contactSlots(p, meshes, solved, contactM = 0.10) {
+export function contactSlots(p, meshes, solved, contactM = DEFAULT_CONTACT_M) {
   if (!p) return [];
   const hits = [];
   for (const mesh of meshes || []) {
     const wall = wallById(solved, mesh.wall_id);
     if (!wall) continue;
     const d = signedWallDist(p, wall);
-    if (d > contactM) continue;
+    if (d >= contactM) continue;
     const yz = [p[1], p[2]];
     for (const cell of meshCells(mesh)) {
       const poly = cell.corners.map((c) => [c[1], c[2]]);

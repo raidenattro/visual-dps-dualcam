@@ -14,8 +14,12 @@ if str(ROOT) not in sys.path:
 from scripts.dualcam_geom import (
     contact_slots,
     drag_vertex,
+    equal_row_ys,
     make_grid_vertices,
+    make_layer_mesh,
+    mesh_from_row_ys,
     mesh_cells,
+    move_layer_row,
     offset_corners,
     project_pix,
     ray_plane,
@@ -24,6 +28,7 @@ from scripts.dualcam_geom import (
     vert_index,
     wall_by_id,
     wall_plane,
+    wall_y_span,
 )
 
 CALIB = ROOT / "output" / "calib" / "dual_1-3.json"
@@ -136,25 +141,61 @@ def test_stereo_drag_keeps_other_view_then_aligns_both():
     assert np.hypot(uv_r2[0] - uv_r_true[0], uv_r2[1] - uv_r_true[1]) < 3
 
 
-def test_contact_slot_on_wall_not_in_aisle():
+def test_contact_slot_into_wall_not_on_or_aisle():
+    """只在有向距离 < 0（伸进墙）时报警；贴墙和通道里都不报。"""
     _, solved = _load()
     wall = wall_by_id(solved, 1)
-    mesh = {
-        "wall_id": 1,
-        "rows": 4,
-        "cols": 4,
-        "vertices": make_grid_vertices(wall["corners"], 4, 4),
-    }
+    mesh = make_layer_mesh(1, wall["corners"], pitch=0.45, n_layers=4, cols=4)
     cells = mesh_cells(mesh)
     c = np.mean(np.array(cells[0]["corners"]), axis=0)
     on_wall = c.copy()
     on_wall[0] = wall["corners"][0][0]
     assert signed_wall_dist(on_wall, wall) == pytest.approx(0, abs=1e-6)
-    hits = contact_slots(on_wall, [mesh], solved, contact_m=0.10)
+    assert contact_slots(on_wall, [mesh], solved) == []
+
+    inward = 1.0 if int(wall.get("sign", -1)) < 0 else -1.0
+    into = on_wall.copy()
+    into[0] = on_wall[0] - 0.02 * inward
+    assert signed_wall_dist(into, wall) == pytest.approx(-0.02, abs=1e-6)
+    hits = contact_slots(into, [mesh], solved)
     assert len(hits) == 1
     assert hits[0]["box_id"] == "r0c0"
 
     in_aisle = on_wall.copy()
-    in_aisle[0] = 0.0  # 巷道中央
-    assert signed_wall_dist(in_aisle, wall) > 0.10
-    assert contact_slots(in_aisle, [mesh], solved, contact_m=0.10) == []
+    in_aisle[0] = 0.0
+    assert signed_wall_dist(in_aisle, wall) > 0
+    assert contact_slots(in_aisle, [mesh], solved) == []
+
+
+def test_layer_initial_equal_split():
+    corners = [[-1, 2, 2], [-1, 2, 0], [-1, 0, 0], [-1, 0, 2]]
+    ys = equal_row_ys(0, 2, 4)
+    assert ys == pytest.approx([2.0, 1.5, 1.0, 0.5, 0.0])
+    mesh = make_layer_mesh(1, corners, n_layers=4, cols=4)
+    assert mesh["rows"] == 4
+    assert mesh["row_ys"] == pytest.approx([2.0, 1.5, 1.0, 0.5, 0.0])
+    z0 = mesh["vertices"][vert_index(4, 4, 1, 0)][2]
+    z1 = mesh["vertices"][vert_index(4, 4, 1, 1)][2]
+    z2 = mesh["vertices"][vert_index(4, 4, 1, 2)][2]
+    assert (z1 - z0) == pytest.approx(z2 - z1)
+
+
+def test_move_one_row_leaves_others():
+    corners = [[-1, 2, 2], [-1, 2, 0], [-1, 0, 0], [-1, 0, 2]]
+    mesh = make_layer_mesh(1, corners, n_layers=4, cols=4)
+    moved = move_layer_row(mesh, corners, 1, 1.2)
+    assert moved["row_ys"][1] == pytest.approx(1.2)
+    assert moved["row_ys"][2] == pytest.approx(1.0)
+    assert moved["row_ys"][3] == pytest.approx(0.5)
+    again = move_layer_row(moved, corners, 2, 0.7)
+    assert again["row_ys"][1] == pytest.approx(1.2)
+    assert again["row_ys"][2] == pytest.approx(0.7)
+
+
+def test_mesh_from_custom_row_ys():
+    corners = [[-1, 2, 2], [-1, 2, 0], [-1, 0, 0], [-1, 0, 2]]
+    mesh = mesh_from_row_ys(1, corners, [2.0, 1.6, 1.1, 0.4, 0.0], cols=3)
+    assert mesh["rows"] == 4
+    assert mesh["cols"] == 3
+    assert mesh["vertices"][vert_index(4, 3, 1, 0)][1] == pytest.approx(1.6)
+    assert wall_y_span(corners) == (0.0, 2.0)
