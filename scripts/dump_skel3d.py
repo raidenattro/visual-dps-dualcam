@@ -2,7 +2,7 @@
 """从已落的两路 2D 姿态三角化 17 点，写出播放器用 JSON。不重跑 RTMPose。
 
 每帧可有多个人：左右路 NMS + 续帧匹配，只保留两路都看见且落在巷道内的人。
-单路闪断最多沿用 8 帧；贴墙须左路 2D 腕点也落在该格。
+单路闪断最多沿用 8 帧。腕点跟高置信度那路建 3D；单路∩面只显示不报贴墙。
 默认对 3D 做时序平滑（腕/肘更强），贴墙判定与画面用同一套坐标。
 """
 
@@ -21,15 +21,15 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.dualcam_lift import (
-    JOINT_GAP_MAX,
     KPT_MIN,
     LWRIST,
+    PREFER_PX,
     RWRIST,
     _torso_xy,
+    lift_point,
     load_cams,
     pick_pairs,
     signed_x,
-    triangulate,
 )
 from scripts.skel3d_smooth import assign_tracks, smooth_frames, torso_centroid, wrist_jump_stats
 
@@ -61,8 +61,10 @@ HOLD_FRAMES = 8  # 单路闪断时沿用上一帧 3D，约 0.32s
 LSHO, RSHO = 5, 6
 
 
-def _lift_person(kl, sl, kr, sr, gap: float, cams: dict, plane: dict) -> dict:
-    xyz, vis, L2, R2, sL, sR, jg = [], [], [], [], [], [], []
+def _lift_person(
+    kl, sl, kr, sr, gap: float, cams: dict, plane: dict, prev_xyz: list | None = None
+) -> dict:
+    xyz, vis, L2, R2, sL, sR, jg, src = [], [], [], [], [], [], [], []
     dL = dR = None
     raw3 = [None] * 17
     for k in range(17):
@@ -70,14 +72,13 @@ def _lift_person(kl, sl, kr, sr, gap: float, cams: dict, plane: dict) -> dict:
         R2.append(_xy(kr[k]))
         sL.append(round(float(sl[k]), 2))
         sR.append(round(float(sr[k]), 2))
-        if sl[k] < KPT_MIN or sr[k] < KPT_MIN:
-            xyz.append(None)
-            vis.append(0)
-            jg.append(None)
-            continue
-        p, g = triangulate(kl[k], kr[k], cams)
-        jg.append(round(float(g), 3))
-        if g > JOINT_GAP_MAX:
+        prev = None
+        if prev_xyz and k < len(prev_xyz) and prev_xyz[k]:
+            prev = np.asarray(prev_xyz[k], float)
+        p, g, kind = lift_point(kl[k], float(sl[k]), kr[k], float(sr[k]), cams, plane, prev)
+        jg.append(None if g is None else round(float(g), 3))
+        src.append(kind)
+        if p is None:
             xyz.append(None)
             vis.append(0)
             continue
@@ -93,6 +94,7 @@ def _lift_person(kl, sl, kr, sr, gap: float, cams: dict, plane: dict) -> dict:
             xyz[wi] = None
             vis[wi] = 0
             raw3[wi] = None
+            src[wi] = None
 
     _drop_wrist(LWRIST, LSHO)
     _drop_wrist(RWRIST, RSHO)
@@ -105,6 +107,7 @@ def _lift_person(kl, sl, kr, sr, gap: float, cams: dict, plane: dict) -> dict:
         "xyz": xyz,
         "vis": vis,
         "jg": jg,
+        "src": src,
         "L": L2,
         "R": R2,
         "sL": sL,
@@ -151,7 +154,22 @@ def main() -> int:
         for a, b, gap in pairs:
             kl, sl = fr["L"]["k"][a], fr["L"]["s"][a]
             kr, sr = fr["R"]["k"][b], fr["R"]["s"][b]
-            persons.append(_lift_person(kl, sl, kr, sr, gap, cams, plane))
+            lxy = _torso_xy(kl, sl)
+            prev_xyz = None
+            if lxy is not None:
+                best_d = PREFER_PX
+                for prev, _miss, _pt in holds:
+                    hxy = _torso_xy(
+                        np.asarray(prev.get("L") or [], float),
+                        np.asarray(prev.get("sL") or [], float),
+                    )
+                    if hxy is None:
+                        continue
+                    d = float(np.linalg.norm(lxy - hxy))
+                    if d < best_d:
+                        best_d = d
+                        prev_xyz = prev.get("xyz")
+            persons.append(_lift_person(kl, sl, kr, sr, gap, cams, plane, prev_xyz))
         cents = [torso_centroid(p.get("xyz") or []) for p in persons]
         used: set[int] = set()
         new_holds: list[tuple[dict, int, np.ndarray]] = []

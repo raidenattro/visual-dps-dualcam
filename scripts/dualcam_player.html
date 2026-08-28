@@ -233,17 +233,23 @@ function viewConfirmsSlot(person, idx, hit, side) {
 
 function wristContactOk(person, idx, hit) {
   if (person.held) return false;
-  const jg = person.jg;
-  if (Array.isArray(jg) && jg[idx] != null && jg[idx] > 0.20) return false;
+  const src = Array.isArray(person.src) ? person.src[idx] : null;
+  if (src === 'Lmono' || src === 'Rmono' || src === 'Lhold' || src === 'Rhold') return false;
+  const min = DATA.kpt_min;
   const sl = (person.sL && person.sL[idx]) || 0;
   const sr = (person.sR && person.sR[idx]) || 0;
   const inL = viewConfirmsSlot(person, idx, hit, 'L');
   const inR = viewConfirmsSlot(person, idx, hit, 'R');
-  // 左路看得见腕却不在该格 → 右路误检，不报
-  if (sl >= DATA.kpt_min && inL === false) return false;
-  if (sr >= DATA.kpt_min && inR === false) return false;
-  // 贴墙至少要左路 2D 也落在格内（墙1 拣货面左路看得清）
-  return inL === true;
+  if (src === 'L') return inL === true;
+  if (src === 'R') return inR === true;
+  if (sl >= min && sr >= min) {
+    if (sl >= sr + 0.12) return inL === true;
+    if (sr >= sl + 0.12) return inR === true;
+    return inL === true && inR === true;
+  }
+  if (sl >= min) return inL === true;
+  if (sr >= min) return inR === true;
+  return false;
 }
 
 function frameHits(fr) {

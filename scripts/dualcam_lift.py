@@ -48,7 +48,13 @@ def ray(uv: np.ndarray, cam: dict) -> tuple[np.ndarray, np.ndarray]:
     return cam["C"], d / n
 
 
-def triangulate(uv_l: np.ndarray, uv_r: np.ndarray, cams: dict) -> tuple[np.ndarray, float]:
+CONF_MARGIN = 0.12  # 两路分差大于此则 3D 钉在高分那路的射线上
+
+
+def triangulate_ends(
+    uv_l: np.ndarray, uv_r: np.ndarray, cams: dict
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """返回 (左射线交点, 右射线交点, 缝)。"""
     c1, d1 = ray(uv_l, cams["L"])
     c2, d2 = ray(uv_r, cams["R"])
     w0 = c1 - c2
@@ -56,12 +62,65 @@ def triangulate(uv_l: np.ndarray, uv_r: np.ndarray, cams: dict) -> tuple[np.ndar
     d, e = float(d1 @ w0), float(d2 @ w0)
     den = a * c - b * b
     if abs(den) < 1e-9:
-        return c1 + d1, 99.0
+        return c1 + d1, c2 + d2, 99.0
     t = (b * e - c * d) / den
     s = (a * e - b * d) / den
     p1, p2 = c1 + t * d1, c2 + s * d2
-    mid = 0.5 * (p1 + p2)
-    return mid, float(np.linalg.norm(p1 - p2))
+    return p1, p2, float(np.linalg.norm(p1 - p2))
+
+
+def triangulate(uv_l: np.ndarray, uv_r: np.ndarray, cams: dict) -> tuple[np.ndarray, float]:
+    p1, p2, g = triangulate_ends(uv_l, uv_r, cams)
+    return 0.5 * (p1 + p2), g
+
+
+def point_on_ray(uv: np.ndarray, cam: dict, ref: np.ndarray) -> np.ndarray:
+    """保持高置信度 2D，深度沿用参考点（上一帧立体或另一路交点）。"""
+    C, d = ray(uv, cam)
+    t = float((ref - C) @ d)
+    if t < 0.05:
+        t = 0.05
+    return C + t * d
+
+
+def lift_point(
+    uv_l,
+    s_l: float,
+    uv_r,
+    s_r: float,
+    cams: dict,
+    plane: dict | None,
+    prev: np.ndarray | None = None,
+) -> tuple[np.ndarray | None, float | None, str | None]:
+    """用高置信度路建 3D。双路都过门槛才立体；单路则沿该射线借上一帧深度。
+
+    src: stereo=两路分接近且缝小；L/R=两路都看见、钉在高分射线（可贴墙）；
+    Lhold/Rhold=只一路高分、沿射线借上一帧深度（只显示）；
+    Lmono/Rmono=没有深度先验、射线∩拣货面（只显示，不报贴墙）。
+    """
+    ok_l, ok_r = float(s_l) >= KPT_MIN, float(s_r) >= KPT_MIN
+    if ok_l and ok_r:
+        p1, p2, g = triangulate_ends(uv_l, uv_r, cams)
+        if g <= JOINT_GAP_MAX and abs(float(s_l) - float(s_r)) < CONF_MARGIN:
+            return 0.5 * (p1 + p2), g, "stereo"
+        winner_l = float(s_l) >= float(s_r)
+        p_win, uv, cam = (p1, uv_l, cams["L"]) if winner_l else (p2, uv_r, cams["R"])
+        src = "L" if winner_l else "R"
+        if g > JOINT_GAP_MAX:
+            ref = prev if prev is not None else p_win
+            p_win = point_on_ray(uv, cam, ref)
+        return p_win, g, src
+    if ok_l:
+        if prev is not None:
+            return point_on_ray(uv_l, cams["L"], prev), None, "Lhold"
+        hit = ray_plane(uv_l, cams["L"], plane) if plane is not None else None
+        return hit, None, "Lmono" if hit is not None else None
+    if ok_r:
+        if prev is not None:
+            return point_on_ray(uv_r, cams["R"], prev), None, "Rhold"
+        hit = ray_plane(uv_r, cams["R"], plane) if plane is not None else None
+        return hit, None, "Rmono" if hit is not None else None
+    return None, None, None
 
 
 def ray_plane(uv: np.ndarray, cam: dict, plane: dict) -> np.ndarray | None:
