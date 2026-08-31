@@ -1,0 +1,99 @@
+.aisle-page {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  height: calc(100vh - 56px);
+  background: #111;
+  color: #ddd;
+  font: 13px/1.4 system-ui, sans-serif;
+}
+.aisle-panel {
+  border-right: 1px solid #333;
+  padding: 12px 14px;
+  overflow: auto;
+}
+.aisle-panel h1 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  color: #fff;
+}
+.muted { color: #8a8a8a; }
+.hint { color: #e0b060; min-height: 2.4em; }
+.ok { color: #7ec8ff; }
+.msg { color: #9ad; white-space: pre-wrap; }
+.aisle-panel label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+}
+.aisle-panel label.check { font-weight: 600; }
+.aisle-panel input,
+.aisle-panel select {
+  background: #222;
+  color: #ddd;
+  border: 1px solid #444;
+  padding: 4px 6px;
+  min-width: 0;
+  flex: 1;
+}
+.aisle-panel table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+.aisle-panel th, .aisle-panel td { padding: 3px 4px; text-align: left; }
+.aisle-panel tr.active td { background: #24323d; }
+.aisle-panel td input { width: 52px; flex: none; }
+.btns { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.aisle-panel button {
+  background: #2a2a2a;
+  color: #eee;
+  border: 1px solid #444;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.aisle-panel button.pri { background: #2a4a3a; border-color: #5c8; }
+.aisle-views {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 10px;
+  min-width: 0;
+}
+.pane {
+  position: relative;
+  background: #000;
+  border: 1px solid #333;
+  min-height: 0;
+}
+.pane.on { border-color: #5c8; }
+.pane .bg {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: #000;
+}
+.pane .bg.empty {
+  display: grid;
+  place-items: center;
+  color: #666;
+}
+.pane canvas.ov {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  cursor: crosshair;
+}
+.tag {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  z-index: 2;
+  background: rgba(0, 0, 0, 0.7);
+  padding: 2px 8px;
+}
+.cell-edit {
+  border: 1px solid #2b3a45;
+  padding: 8px;
+  margin-top: 8px;
+}
+.group-title { color: #9ab1c4; font-size: 12px; margin-bottom: 6px; }

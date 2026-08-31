@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>摄像头 Dashboard</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #0f1419;
+            color: #e8f0f6;
+            font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+        }
+        .wrap { max-width: 1280px; margin: 0 auto; }
+        h1 { font-size: 1.5rem; font-weight: 600; margin: 0 0 8px; }
+        .sub { color: #8fa3b5; font-size: 0.9rem; margin-bottom: 16px; }
+        nav {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 20px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #2b3a45;
+        }
+        nav a {
+            color: #00d4aa;
+            text-decoration: none;
+            font-size: 0.95rem;
+        }
+        nav a.active { color: #fff; font-weight: 600; pointer-events: none; }
+        nav a:hover:not(.active) { text-decoration: underline; }
+        .toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+        .toolbar button {
+            background: #1e2d38;
+            border: 1px solid #3a4f5f;
+            color: #e8f0f6;
+            padding: 8px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+        .toolbar button:hover { background: #263845; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 16px;
+        }
+        .card {
+            background: #182027;
+            border: 1px solid #2b3a45;
+            border-radius: 10px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .card-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            padding: 12px 12px 8px;
+            gap: 8px;
+        }
+        .card-title { font-weight: 600; font-size: 1rem; margin: 0; }
+        .card-url {
+            font-size: 0.75rem;
+            color: #7a92a8;
+            word-break: break-all;
+            margin-top: 4px;
+        }
+        .btn-refresh {
+            flex-shrink: 0;
+            width: 32px;
+            height: 32px;
+            border: 1px solid #3a4f5f;
+            background: #141c22;
+            color: #00d4aa;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1rem;
+            line-height: 1;
+            padding: 0;
+        }
+        .btn-refresh:hover { background: #1e2d38; }
+        .btn-refresh:disabled { opacity: 0.5; cursor: wait; }
+        .card-meta {
+            display: flex;
+            gap: 12px;
+            padding: 0 12px 10px;
+            font-size: 0.85rem;
+        }
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 4px;
+            vertical-align: middle;
+        }
+        .status-dot.online { background: #2ecc71; box-shadow: 0 0 6px #2ecc71; }
+        .status-dot.offline { background: #6c7a89; }
+        .activity { color: #9ab1c4; }
+        .preview {
+            aspect-ratio: 4/3;
+            background: #0a0e12;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            min-height: 160px;
+        }
+        .preview img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+        .preview .placeholder {
+            color: #5a6d7d;
+            font-size: 0.85rem;
+            text-align: center;
+            padding: 20px;
+        }
+        .empty {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 48px 20px;
+            color: #8fa3b5;
+            border: 1px dashed #2b3a45;
+            border-radius: 10px;
+        }
+        .empty a { color: #00d4aa; }
+        .msg { color: #8fa3b5; font-size: 0.9rem; }
+        .msg.err { color: #ff6b6b; }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <nav>
+        <a href="/" class="active">Dashboard</a>
+        <a href="/monitor">推理监控</a>
+        <a href="/annotate">标注配置</a>
+    </nav>
+    <h1>摄像头 Dashboard</h1>
+    <p class="sub">查看各路摄像头在线状态与连续在线时长；点击刷新抓取最新画面。</p>
+    <div class="toolbar">
+        <span class="msg" id="globalMsg">加载中…</span>
+        <button type="button" id="btnRefreshAll">刷新全部状态</button>
+    </div>
+    <div class="grid" id="cameraGrid"></div>
+</div>
+<script>
+const POLL_MS = 30000;
+let cameras = [];
+let tickTimer = null;
+
+function formatDuration(seconds) {
+    const s = Math.max(0, parseInt(seconds, 10) || 0);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    return [h, m, sec].map(n => String(n).padStart(2, '0')).join(':');
+}
+
+function setMsg(text, isErr) {
+    const el = document.getElementById('globalMsg');
+    el.textContent = text;
+    el.className = 'msg' + (isErr ? ' err' : '');
+}
+
+function thumbnailUrl(cameraId, lastFrameAt) {
+    const t = lastFrameAt ? Math.floor(lastFrameAt) : Date.now();
+    return `/api/cameras/${encodeURIComponent(cameraId)}/thumbnail?t=${t}`;
+}
+
+function renderCards() {
+    const grid = document.getElementById('cameraGrid');
+    if (!cameras.length) {
+        grid.innerHTML = '<div class="empty">暂无摄像头，请先在 <a href="/annotate">标注配置</a> 中添加 RTSP 地址。</div>';
+        return;
+    }
+    grid.innerHTML = cameras.map(cam => {
+        const online = !!cam.online;
+        const activity = formatDuration(cam._displayActivity ?? cam.activity_seconds);
+        const imgHtml = cam.has_thumbnail
+            ? `<img id="img-${cam.id}" src="${thumbnailUrl(cam.id, cam.last_frame_at)}" alt="${cam.name}">`
+            : '<div class="placeholder">暂无画面，点击 ↻ 抓帧</div>';
+        return `
+        <article class="card" data-id="${cam.id}" data-url="${encodeURIComponent(cam.url)}">
+            <div class="card-head">
+                <div>
+                    <h2 class="card-title">${escapeHtml(cam.name)}</h2>
+                    <div class="card-url">${escapeHtml(cam.url)}</div>
+                </div>
+                <button type="button" class="btn-refresh" title="抓取最新画面" data-url="${encodeURIComponent(cam.url)}" data-id="${cam.id}">↻</button>
+            </div>
+            <div class="card-meta">
+                <span><span class="status-dot ${online ? 'online' : 'offline'}"></span>${online ? '在线' : '离线'}</span>
+                <span class="activity">活动 ${activity}</span>
+            </div>
+            <div class="preview" id="preview-${cam.id}">${imgHtml}</div>
+        </article>`;
+    }).join('');
+
+    grid.querySelectorAll('.btn-refresh').forEach(btn => {
+        btn.addEventListener('click', () => captureFrame(btn));
+    });
+}
+
+function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+}
+
+function syncDisplayActivity() {
+    const now = Date.now() / 1000;
+    cameras.forEach(cam => {
+        if (!cam.online || !cam._syncedAt) {
+            cam._displayActivity = cam.activity_seconds;
+            return;
+        }
+        const elapsed = Math.floor(now - cam._syncedAt);
+        cam._displayActivity = (cam.activity_seconds || 0) + elapsed;
+    });
+    document.querySelectorAll('.card').forEach(card => {
+        const id = card.dataset.id;
+        const cam = cameras.find(c => c.id === id);
+        if (!cam) return;
+        const act = card.querySelector('.activity');
+        if (act) act.textContent = '活动 ' + formatDuration(cam._displayActivity);
+        const dot = card.querySelector('.status-dot');
+        if (dot) {
+            dot.classList.toggle('online', !!cam.online);
+            dot.classList.toggle('offline', !cam.online);
+        }
+        const statusText = card.querySelector('.card-meta span');
+        if (statusText && statusText.querySelector('.status-dot')) {
+            statusText.lastChild.textContent = cam.online ? '在线' : '离线';
+        }
+    });
+}
+
+async function loadCameras() {
+    try {
+        const resp = await fetch('/api/cameras');
+        const data = await resp.json();
+        if (data.status !== 'success' || !Array.isArray(data.items)) {
+            setMsg(data.error || '加载失败', true);
+            return;
+        }
+        const now = Date.now() / 1000;
+        cameras = data.items.map(item => ({
+            ...item,
+            _syncedAt: now,
+            _displayActivity: item.activity_seconds
+        }));
+        renderCards();
+        setMsg(`共 ${cameras.length} 路摄像头 · 上次更新 ${new Date().toLocaleTimeString()}`);
+    } catch (e) {
+        setMsg('无法连接服务: ' + e.message, true);
+    }
+}
+
+async function captureFrame(btn) {
+    const url = decodeURIComponent(btn.dataset.url);
+    const id = btn.dataset.id;
+    btn.disabled = true;
+    try {
+        const resp = await fetch('/api/get_camera_frame', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url })
+        });
+        const data = await resp.json();
+        if (data.status !== 'success') {
+            alert(data.error || '抓帧失败');
+            return;
+        }
+        const cam = cameras.find(c => c.id === id);
+        if (cam) {
+            cam.has_thumbnail = true;
+            cam.last_frame_at = data.last_frame_at || Date.now() / 1000;
+            cam.online = true;
+            const now = Date.now() / 1000;
+            cam._syncedAt = now;
+            if (data.activity_seconds != null) cam.activity_seconds = data.activity_seconds;
+        }
+        const preview = document.getElementById('preview-' + id);
+        if (preview) {
+            preview.innerHTML = `<img id="img-${id}" src="${thumbnailUrl(id, data.last_frame_at)}" alt="">`;
+        }
+        await loadCameras();
+    } catch (e) {
+        alert('抓帧请求失败: ' + e.message);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+document.getElementById('btnRefreshAll').addEventListener('click', loadCameras);
+
+loadCameras();
+tickTimer = setInterval(syncDisplayActivity, 1000);
+setInterval(loadCameras, POLL_MS);
+</script>
+</body>
+</html>

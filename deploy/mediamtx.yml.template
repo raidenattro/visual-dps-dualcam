@@ -1,0 +1,16 @@
+# 复制到 localdata/mediamtx.yml；也可由 Dashboard 保存摄像头时自动生成
+
+logLevel: info
+api: yes
+apiAddress: :9997
+rtspAddress: :8554
+rtmpAddress: ''
+hlsAddress: :8888
+webrtcAddress: :8889
+webrtcAllowOrigin: '*'
+srtAddress: ''
+
+paths:
+  # 示例：外部 ffmpeg / 测试推流 publish 到此 path
+  # cam2:
+  #   source: publisher

@@ -1,0 +1,12 @@
+---
+description: visual-dps Docker 构建必须使用日期时间 tag，禁止仅交付 latest
+globs: scripts/build*.sh, scripts/lib/docker*.sh, docker-compose.yml, Dockerfile*
+alwaysApply: false
+---
+
+# Docker 镜像 tag
+
+- 构建前 `source scripts/lib/docker-image-tag.sh`，使用 `VISUAL_DPS_IMAGE_TAG=$(visual_dps_image_tag)`。
+- 通过 `scripts/lib/docker-build.sh` 的 `visual_dps_compose_build` 调用 `docker compose build`。
+- `docker-compose.yml` 中推理镜像使用 `${VISUAL_DPS_IMAGE_TAG}`，勿写死 `:latest`。
+- 部署文档/`.env` 应引用带日期的完整镜像名。

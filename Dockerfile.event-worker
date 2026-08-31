@@ -1,0 +1,36 @@
+# 事件 Worker：碰撞/报警/回调，无 MediaPipe。
+# 构建: docker compose --profile ui build visual-dps-event-worker
+
+FROM python:3.10-slim
+
+ARG APT_MIRROR=mirrors.aliyun.com
+ARG PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    POSE_DELIVERY=stream
+
+WORKDIR /app
+
+COPY docker/debian-mirror.sh /tmp/debian-mirror.sh
+RUN sh /tmp/debian-mirror.sh "${APT_MIRROR}" && rm /tmp/debian-mirror.sh
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/pip-install.sh /tmp/pip-install.sh
+RUN sh /tmp/pip-install.sh "${PIP_INDEX}" --upgrade pip \
+    && sh /tmp/pip-install.sh "${PIP_INDEX}" \
+        opencv-python-headless \
+        numpy \
+        redis
+
+COPY services ./services
+COPY core ./core
+COPY event_worker.py ./event_worker.py
+COPY app_config.json ./app_config.json
+
+CMD ["python", "event_worker.py"]

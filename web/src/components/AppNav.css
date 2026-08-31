@@ -1,0 +1,125 @@
+.app-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #2b3a45;
+  flex-wrap: wrap;
+}
+
+.app-nav-start {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.app-nav-brand {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  line-height: 0;
+  text-decoration: none;
+}
+
+.app-nav-logo {
+  display: block;
+  height: 32px;
+  width: auto;
+}
+
+.app-nav-links {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.app-nav-links a {
+  text-decoration: none;
+  font-size: 0.95rem;
+  color: #00d4aa;
+}
+
+.app-nav-links a.active {
+  color: #fff;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.app-nav-links a:hover:not(.active) {
+  color: #e8eef4;
+}
+
+.app-nav-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.app-nav-settings {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: 1px solid #3a4f5f;
+  background: #141c22;
+  color: #00d4aa;
+  text-decoration: none;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.app-nav-settings:hover,
+.app-nav-settings:focus,
+.app-nav-settings:focus-visible,
+.app-nav-settings:visited,
+.app-nav-settings.active {
+  text-decoration: none;
+}
+
+.app-nav-settings:hover {
+  background: #1e2d38;
+}
+
+.app-nav-settings.active {
+  background: #1e4d3a;
+  border-color: #2a6b4a;
+}
+
+.app-nav-name {
+  font-size: 0.85rem;
+  color: #9ab1c4;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-nav-logout {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 12px;
+  font-size: 0.8rem;
+  line-height: 1;
+  border-radius: 6px;
+  border: 1px solid #3a4f5f;
+  background: #141c22;
+  color: #8fa3b5;
+  cursor: pointer;
+}
+
+.app-nav-logout:hover {
+  color: #eaf2f8;
+  background: #1e2d38;
+}

@@ -1,0 +1,54 @@
+# 轻量 UI 镜像：前端须在宿主机先构建（web/dist），避免 Docker 内拉取 node 镜像。
+# 用法: ./scripts/build-ui-image.sh  或  cd web && npm run build && cd .. && docker compose --profile ui build
+
+FROM python:3.10-slim
+
+ARG APT_MIRROR=mirrors.aliyun.com
+ARG PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+COPY docker/debian-mirror.sh /tmp/debian-mirror.sh
+RUN sh /tmp/debian-mirror.sh "${APT_MIRROR}" && rm /tmp/debian-mirror.sh
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/pip-install.sh /tmp/pip-install.sh
+RUN sh /tmp/pip-install.sh "${PIP_INDEX}" --upgrade pip \
+    && sh /tmp/pip-install.sh "${PIP_INDEX}" \
+        fastapi "uvicorn[standard]" opencv-python-headless docker redis \
+        numpy scipy \
+        "passlib[bcrypt]" "bcrypt<4.1" httpx itsdangerous python-multipart
+
+COPY services ./services
+COPY core ./core
+COPY dualcam ./dualcam
+COPY app_config.json ./app_config.json
+COPY version.json ./version.json
+COPY docker/ui_server.py ./ui_server.py
+
+# 由 npm run build 生成；构建前请确认 web/dist/index.html 存在
+COPY web/dist ./web/dist
+
+ENV VISUAL_DPS_VERSION_FILE=/app/version.json \
+    BASE_DIR=/app \
+    JSON_DIR=/app/localdata/json \
+    DEFAULT_JSON=/app/localdata/json/precise_boxes_new.json \
+    LAST_FRAME=/app/localdata/last_frame.jpg \
+    CAMERA_IPS_FILE=/app/localdata/camera_ips.json \
+    FRAMES_DIR=/app/localdata/frames \
+    FRONTEND_DIST=/app/web/dist \
+    CAPTURE_HEIGHT=480 \
+    RTSP_CAPTURE_BACKEND=auto
+
+EXPOSE 8045
+
+CMD ["uvicorn", "ui_server:app", "--host", "0.0.0.0", "--port", "8045"]

@@ -1,0 +1,257 @@
+# 交付部署：准备 .env、app_config.json、localdata/ 后执行
+#   docker compose up -d
+# 构建镜像：docker compose build
+
+x-china-build-args: &china-build-args
+  APT_MIRROR: ${APT_MIRROR:-mirrors.aliyun.com}
+  PIP_INDEX: ${PIP_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+  TORCH_INDEX: ${TORCH_INDEX:-https://mirror.sjtu.edu.cn/pytorch-wheels/cu121}
+  # 国内构建 GitHub / Google Storage 等大文件：如 https://ghfast.top 或 https://mirror.ghproxy.com
+  GITHUB_PROXY_BASE: ${GITHUB_PROXY_BASE:-}
+  # docker build 内 apt/pip/wget/conda 走代理（153 用 BUILD_HTTP_PROXY，见 deploy/153.env.example）
+  HTTP_PROXY: ${BUILD_HTTP_PROXY:-}
+  HTTPS_PROXY: ${BUILD_HTTPS_PROXY:-${BUILD_HTTP_PROXY:-}}
+
+# 容器时区：与宿主机日志对齐（国内默认 Asia/Shanghai，可 .env 覆盖 TZ）
+x-tz-env: &tz-env
+  TZ: ${TZ:-Asia/Shanghai}
+
+x-tz-volumes: &tz-volumes
+  - /etc/localtime:/etc/localtime:ro
+
+services:
+  redis:
+    image: redis:7
+    container_name: visual-dps-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    networks:
+      - visual-dps-internal
+    restart: unless-stopped
+
+  mediamtx:
+    image: bluenviron/mediamtx:1.11.3
+    container_name: visual-dps-mediamtx
+    volumes:
+      - ./localdata/mediamtx.yml:/mediamtx.yml:ro
+    ports:
+      - "${MEDIAMTX_RTSP_PORT:-8554}:${MEDIAMTX_RTSP_PORT:-8554}"
+      - "${MEDIAMTX_HLS_PORT:-8888}:${MEDIAMTX_HLS_PORT:-8888}"
+      - "${MEDIAMTX_WEBRTC_PORT:-8889}:${MEDIAMTX_WEBRTC_PORT:-8889}"
+      - "${MEDIAMTX_WEBRTC_ICE_PORT:-8189}:${MEDIAMTX_WEBRTC_ICE_PORT:-8189}/udp"
+      - "${MEDIAMTX_WEBRTC_ICE_PORT:-8189}:${MEDIAMTX_WEBRTC_ICE_PORT:-8189}/tcp"
+    networks:
+      - visual-dps-internal
+    restart: unless-stopped
+
+  visual-dps-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+      args: *china-build-args
+    image: visual-dps-visual-dps-ui:${VISUAL_DPS_IMAGE_TAG:-latest}
+    container_name: visual-dps-ui
+    depends_on:
+      - redis
+      - mediamtx
+    ports:
+      - "${UI_PORT:-8045}:8045"
+    networks:
+      - visual-dps-internal
+    environment:
+      - NO_PROXY=localhost,127.0.0.1,::1,mediamtx,redis,visual-dps-ui,visual-dps-event-worker,172.16.0.0/12,172.17.0.0/16,172.18.0.0/16,10.0.0.0/8
+      - no_proxy=localhost,127.0.0.1,::1,mediamtx,redis,visual-dps-ui,visual-dps-event-worker,172.16.0.0/12,172.17.0.0/16,172.18.0.0/16,10.0.0.0/8
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - DOCKER_NETWORK=visual-dps-internal
+      - JSON_DIR=/app/localdata/json
+      - LAST_FRAME=/app/localdata/last_frame.jpg
+      - CAMERA_IPS_FILE=/app/localdata/camera_ips.json
+      - FRAMES_DIR=/app/localdata/frames
+      - CAPTURE_HEIGHT=480
+      - FRONTEND_DIST=/app/web/dist
+      - MEDIAMTX_CONFIG_PATH=/app/localdata/mediamtx.yml
+      - MEDIAMTX_API_URL=http://mediamtx:9997
+      - MEDIAMTX_INTERNAL_HOST=mediamtx
+      - MEDIAMTX_RTSP_HOST=${MEDIAMTX_PUBLIC_HOST:-127.0.0.1}
+      - MEDIAMTX_RTSP_PORT=${MEDIAMTX_RTSP_PORT:-8554}
+      - MEDIAMTX_PUBLIC_HOST=${MEDIAMTX_PUBLIC_HOST:-127.0.0.1}
+      - MEDIAMTX_HLS_PORT=${MEDIAMTX_HLS_PORT:-8888}
+      - MEDIAMTX_WEBRTC_PORT=${MEDIAMTX_WEBRTC_PORT:-8889}
+      - MEDIAMTX_WEBRTC_ICE_PORT=${MEDIAMTX_WEBRTC_ICE_PORT:-8189}
+      - MEDIAMTX_HLS_BASE=http://mediamtx:${MEDIAMTX_HLS_PORT:-8888}
+      - MEDIAMTX_WEBRTC_BASE=http://mediamtx:${MEDIAMTX_WEBRTC_PORT:-8889}
+      - RTSP_CAPTURE_BACKEND=opencv
+      - HOST_PROJECT_ROOT=${HOST_PROJECT_ROOT:-${PWD}}
+      # 留空则由 inference_container_service 按 INFERENCE_USE_GPU / 后端自动选 lite 或 lite-gpu-onnx
+      - INFERENCE_IMAGE=${INFERENCE_IMAGE:-}
+      - INFERENCE_LITE_IMAGE=${INFERENCE_LITE_IMAGE:-visual-dps-inference-lite:${VISUAL_DPS_IMAGE_TAG:-latest}}
+      - INFERENCE_LITE_GPU_IMAGE=${INFERENCE_LITE_GPU_IMAGE:-visual-dps-inference-lite-gpu:${VISUAL_DPS_IMAGE_TAG:-latest}}
+      - INFERENCE_LITE_GPU_ONNX_IMAGE=${INFERENCE_LITE_GPU_ONNX_IMAGE:-visual-dps-inference-lite-gpu-onnx:${VISUAL_DPS_IMAGE_TAG:-latest}}
+      - INFERENCE_CONTAINER_PREFIX=${INFERENCE_CONTAINER_PREFIX:-visual-dps-infer-}
+      - INFERENCE_USE_GPU=${INFERENCE_USE_GPU:-0}
+      - INFERENCE_BACKEND=${INFERENCE_BACKEND:-rtmpose_onnx}
+      - VISUAL_DPS_VERSION_FILE=/app/version.json
+      - VISUAL_DPS_IMAGE_TAG=${VISUAL_DPS_IMAGE_TAG:-latest}
+      - VISUAL_DPS_UI_IMAGE=visual-dps-visual-dps-ui:${VISUAL_DPS_IMAGE_TAG:-latest}
+      - VISUAL_DPS_EVENT_WORKER_IMAGE=visual-dps-event-worker:${VISUAL_DPS_IMAGE_TAG:-latest}
+      - INFERENCE_JSON_PATH=localdata/json/precise_boxes_new.json
+      - INFERENCE_STATUS_DIR=/app/localdata/inference
+      - LOG_DB_PATH=/app/localdata/logs/visual_dps.db
+      - POSE_DELIVERY=stream
+      - POSE_LOGICAL_SHARD_COUNT=${POSE_LOGICAL_SHARD_COUNT:-16}
+      - POSE_STREAM_KEY_PREFIX=${POSE_STREAM_KEY_PREFIX:-pose:stream}
+      - POSE_STREAM_GROUP=event-workers
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
+      - MKL_NUM_THREADS=${MKL_NUM_THREADS:-1}
+      - OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-1}
+      - NUMEXPR_NUM_THREADS=${NUMEXPR_NUM_THREADS:-1}
+      - OPENCV_NUM_THREADS=${OPENCV_NUM_THREADS:-1}
+      - INFERENCE_ORT_INTRA_OP_THREADS=${INFERENCE_ORT_INTRA_OP_THREADS:-1}
+      - INFERENCE_ORT_INTER_OP_THREADS=${INFERENCE_ORT_INTER_OP_THREADS:-1}
+      - TZ=${TZ:-Asia/Shanghai}
+    volumes:
+      - ./app_config.json:/app/app_config.json:ro
+      - ./localdata:/app/localdata
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /etc/localtime:/etc/localtime:ro
+    restart: unless-stopped
+
+  visual-dps-event-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.event-worker
+      args: *china-build-args
+    image: visual-dps-event-worker:${VISUAL_DPS_IMAGE_TAG:-latest}
+    container_name: visual-dps-event-worker
+    depends_on:
+      - redis
+      - mediamtx
+    networks:
+      - visual-dps-internal
+    environment:
+      - NO_PROXY=localhost,127.0.0.1,::1,mediamtx,redis,visual-dps-ui,visual-dps-event-worker,172.16.0.0/12,172.17.0.0/16,172.18.0.0/16,10.0.0.0/8
+      - no_proxy=localhost,127.0.0.1,::1,mediamtx,redis,visual-dps-ui,visual-dps-event-worker,172.16.0.0/12,172.17.0.0/16,172.18.0.0/16,10.0.0.0/8
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - JSON_DIR=/app/localdata/json
+      - POSE_DELIVERY=stream
+      - POSE_LOGICAL_SHARD_COUNT=${POSE_LOGICAL_SHARD_COUNT:-16}
+      - COLLISION_LOG=${COLLISION_LOG:-0}
+      - TZ=${TZ:-Asia/Shanghai}
+    volumes:
+      - ./app_config.json:/app/app_config.json:ro
+      - ./localdata:/app/localdata
+      - /etc/localtime:/etc/localtime:ro
+    restart: unless-stopped
+
+
+  # pick_state 备选 worker；默认单实例消费全部 logical shard。
+  visual-dps-event-worker-2:
+    profiles: ["worker-2"]
+    build:
+      context: .
+      dockerfile: Dockerfile.event-worker-2
+      args: *china-build-args
+    image: visual-dps-event-worker-2:${VISUAL_DPS_IMAGE_TAG:-latest}
+    container_name: visual-dps-event-worker-2
+    depends_on:
+      - redis
+      - mediamtx
+    networks:
+      - visual-dps-internal
+    environment:
+      - NO_PROXY=localhost,127.0.0.1,::1,mediamtx,redis,visual-dps-ui,visual-dps-event-worker,visual-dps-event-worker-2,visual-dps-event-worker-2-b,172.16.0.0/12,172.17.0.0/16,172.18.0.0/16,10.0.0.0/8
+      - no_proxy=localhost,127.0.0.1,::1,mediamtx,redis,visual-dps-ui,visual-dps-event-worker,visual-dps-event-worker-2,visual-dps-event-worker-2-b,172.16.0.0/12,172.17.0.0/16,172.18.0.0/16,10.0.0.0/8
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - JSON_DIR=/app/localdata/json
+      - POSE_DELIVERY=stream
+      - POSE_LOGICAL_SHARD_COUNT=${POSE_LOGICAL_SHARD_COUNT:-16}
+      - POSE_STREAM_KEY_PREFIX=${POSE_STREAM_KEY_PREFIX:-pose:stream}
+      - POSE_STREAM_GROUP=event-workers
+      - EVENT_WORKER_SHARD_START=${EVENT_WORKER_2_SHARD_START:-}
+      - EVENT_WORKER_SHARD_END=${EVENT_WORKER_2_SHARD_END:-}
+      - EVENT_WORKER_CONSUMER_NAME=${EVENT_WORKER_2_CONSUMER_NAME:-worker-2-a}
+      - PICK_STATE_CONFIG=pick_state/configs/pipeline.v5_gated.json
+      - EVENT_WORKER_ENABLE_CALLBACKS=${EVENT_WORKER_ENABLE_CALLBACKS:-1}
+      - COLLISION_LOG=${COLLISION_LOG:-0}
+      - ACTION_GATE_ORT_INTRA_OP_THREADS=${ACTION_GATE_ORT_INTRA_OP_THREADS:-1}
+      - ACTION_GATE_ORT_INTER_OP_THREADS=${ACTION_GATE_ORT_INTER_OP_THREADS:-1}
+      - TZ=${TZ:-Asia/Shanghai}
+    volumes:
+      - ./app_config.json:/app/app_config.json:ro
+      - ./localdata:/app/localdata
+      - /etc/localtime:/etc/localtime:ro
+    restart: unless-stopped
+
+  visual-dps-event-worker-2-b:
+    profiles: ["worker-2-dual"]
+    build:
+      context: .
+      dockerfile: Dockerfile.event-worker-2
+      args: *china-build-args
+    image: visual-dps-event-worker-2:${VISUAL_DPS_IMAGE_TAG:-latest}
+    container_name: visual-dps-event-worker-2-b
+    depends_on:
+      - redis
+      - mediamtx
+    networks:
+      - visual-dps-internal
+    environment:
+      - NO_PROXY=localhost,127.0.0.1,::1,mediamtx,redis,visual-dps-ui,visual-dps-event-worker,visual-dps-event-worker-2,visual-dps-event-worker-2-b,172.16.0.0/12,172.17.0.0/16,172.18.0.0/16,10.0.0.0/8
+      - no_proxy=localhost,127.0.0.1,::1,mediamtx,redis,visual-dps-ui,visual-dps-event-worker,visual-dps-event-worker-2,visual-dps-event-worker-2-b,172.16.0.0/12,172.17.0.0/16,172.18.0.0/16,10.0.0.0/8
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - JSON_DIR=/app/localdata/json
+      - POSE_DELIVERY=stream
+      - POSE_LOGICAL_SHARD_COUNT=${POSE_LOGICAL_SHARD_COUNT:-16}
+      - POSE_STREAM_KEY_PREFIX=${POSE_STREAM_KEY_PREFIX:-pose:stream}
+      - POSE_STREAM_GROUP=event-workers
+      - EVENT_WORKER_SHARD_START=${EVENT_WORKER_2B_SHARD_START:-8}
+      - EVENT_WORKER_SHARD_END=${EVENT_WORKER_2B_SHARD_END:-15}
+      - EVENT_WORKER_CONSUMER_NAME=${EVENT_WORKER_2B_CONSUMER_NAME:-worker-2-b}
+      - PICK_STATE_CONFIG=pick_state/configs/pipeline.v5_gated.json
+      - EVENT_WORKER_ENABLE_CALLBACKS=${EVENT_WORKER_ENABLE_CALLBACKS:-1}
+      - COLLISION_LOG=${COLLISION_LOG:-0}
+      - ACTION_GATE_ORT_INTRA_OP_THREADS=${ACTION_GATE_ORT_INTRA_OP_THREADS:-1}
+      - ACTION_GATE_ORT_INTER_OP_THREADS=${ACTION_GATE_ORT_INTER_OP_THREADS:-1}
+      - TZ=${TZ:-Asia/Shanghai}
+    volumes:
+      - ./app_config.json:/app/app_config.json:ro
+      - ./localdata:/app/localdata
+      - /etc/localtime:/etc/localtime:ro
+    restart: unless-stopped
+
+  # 以下为推理镜像构建目标（不会随 compose up 自动启动；由 UI 按摄像头 docker run）
+  # 镜像 tag 由构建脚本注入 VISUAL_DPS_IMAGE_TAG（见 AGENTS.md / scripts/lib/docker-image-tag.sh）
+  visual-dps-inference-lite:
+    profiles: ["build-only"]
+    build:
+      context: .
+      dockerfile: Dockerfile.inference-lite
+      args: *china-build-args
+    image: visual-dps-inference-lite:${VISUAL_DPS_IMAGE_TAG:?run via scripts/build-*.sh}
+    command: ["python", "inference_worker.py"]
+
+  visual-dps-inference-lite-gpu:
+    profiles: ["build-only"]
+    build:
+      context: .
+      dockerfile: Dockerfile.inference-lite-gpu
+      args: *china-build-args
+    image: visual-dps-inference-lite-gpu:${VISUAL_DPS_IMAGE_TAG:?run via scripts/build-*.sh}
+    command: ["python", "inference_worker.py"]
+
+  # 在已有 lite-gpu 上增量 ONNX（国内构建更快，不重复拉 ffmpeg）
+  visual-dps-inference-lite-gpu-onnx:
+    profiles: ["build-only"]
+    build:
+      context: .
+      dockerfile: Dockerfile.inference-lite-gpu-onnx
+      args: *china-build-args
+    image: visual-dps-inference-lite-gpu-onnx:${VISUAL_DPS_IMAGE_TAG:?run via scripts/build-*.sh}
+    command: ["python", "inference_worker.py"]
+
+networks:
+  visual-dps-internal:
+    name: visual-dps-internal

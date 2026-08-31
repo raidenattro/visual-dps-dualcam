@@ -1,0 +1,92 @@
+# NVIDIA 轻量推理：MediaPipe + FFmpeg CUDA 解码（需 --gpus all）
+# 构建: docker compose --profile inference-lite build visual-dps-inference-lite-gpu
+
+FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
+
+ARG APT_MIRROR=mirrors.aliyun.com
+ARG PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG GITHUB_PROXY_BASE=
+ARG HTTP_PROXY=
+ARG HTTPS_PROXY=
+ARG FFMPEG_CUDA_URL=
+ARG FFMPEG_CUDA_ARTIFACT=ffmpeg-n7.1-latest-linux64-gpl.tar.xz
+
+ENV http_proxy=${HTTP_PROXY} \
+    https_proxy=${HTTPS_PROXY} \
+    HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    INFERENCE_BACKEND=rtmpose_onnx \
+    INFERENCE_USE_GPU=1 \
+    RTSP_CAPTURE_BACKEND=auto \
+    DEBIAN_FRONTEND=noninteractive
+
+WORKDIR /app
+
+COPY docker/ubuntu-mirror.sh /tmp/ubuntu-mirror.sh
+RUN sh /tmp/ubuntu-mirror.sh "${APT_MIRROR}" && rm /tmp/ubuntu-mirror.sh
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    wget \
+    xz-utils \
+    ca-certificates \
+    libgl1 \
+    libglib2.0-0 \
+    libgles2 \
+    libegl1 \
+    libgbm1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3 /usr/local/bin/python \
+    && ln -sf /usr/bin/pip3 /usr/local/bin/pip
+
+RUN set -eu; \
+    DIRECT_FFMPEG="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/${FFMPEG_CUDA_ARTIFACT}"; \
+    PROXY_FFMPEG=""; \
+    if [ -n "${GITHUB_PROXY_BASE}" ]; then \
+      PROXY_FFMPEG="${GITHUB_PROXY_BASE%/}/${DIRECT_FFMPEG}"; \
+    fi; \
+    ok=0; \
+    for url in ${FFMPEG_CUDA_URL} ${PROXY_FFMPEG} ${DIRECT_FFMPEG}; do \
+      [ -n "${url}" ] || continue; \
+      echo "ffmpeg try=${url}"; \
+      if wget -q --timeout=120 --tries=3 -O /tmp/ffmpeg.tar.xz "${url}"; then ok=1; break; fi; \
+    done; \
+    if [ "${ok}" -eq 1 ]; then \
+      mkdir -p /tmp/ffbuild; \
+      tar -xJf /tmp/ffmpeg.tar.xz -C /tmp/ffbuild --strip-components=1; \
+      install -m755 /tmp/ffbuild/bin/ffmpeg /tmp/ffbuild/bin/ffprobe /usr/local/bin/; \
+      rm -rf /tmp/ffmpeg.tar.xz /tmp/ffbuild; \
+    else \
+      apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+        && rm -rf /var/lib/apt/lists/*; \
+      echo "warn: 使用 apt ffmpeg（未装上 CUDA 版 BtbN 包）"; \
+    fi
+
+COPY docker/pip-install.sh /tmp/pip-install.sh
+RUN sh /tmp/pip-install.sh "${PIP_INDEX}" --upgrade pip \
+    && sh /tmp/pip-install.sh "${PIP_INDEX}" \
+        onnxruntime-gpu \
+        rtmlib \
+        opencv-python-headless \
+        numpy \
+        fastapi \
+        "uvicorn[standard]" \
+        python-multipart \
+        httpx \
+        itsdangerous \
+        redis \
+        "passlib[bcrypt]" \
+        "bcrypt<4.1"
+
+# 模型权重：宿主机 localdata/models/（compose 挂载），构建前 ./scripts/download-model-weights.sh
+
+COPY services ./services
+COPY core ./core
+COPY inference_worker.py ./inference_worker.py
+COPY app_config.json ./app_config.json
+
+CMD ["python", "inference_worker.py"]

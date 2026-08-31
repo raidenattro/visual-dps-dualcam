@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 172 40" role="img" aria-label="DiDPS Digital Picking System">
+  <defs>
+    <clipPath id="logo-mark-clip">
+      <rect x="1.75" y="1.75" width="36.5" height="36.5" rx="6.5"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#logo-mark-clip)">
+    <rect width="40" height="40" rx="8" fill="#141c22" stroke="#2b3a45" stroke-width="1.5"/>
+    <rect x="5.5" y="7" width="2" height="24" rx="1" fill="#00d4aa"/>
+    <rect x="9" y="7" width="7" height="7" rx="1.75" fill="#1e2a33" stroke="#3a4f5f" stroke-width="1"/>
+    <rect x="17.5" y="7" width="7" height="7" rx="1.75" fill="#1e2a33" stroke="#3a4f5f" stroke-width="1"/>
+    <rect x="26" y="7" width="7" height="7" rx="1.75" fill="#1e2a33" stroke="#3a4f5f" stroke-width="1"/>
+    <rect x="9" y="15.5" width="7" height="7" rx="1.75" fill="#1e2a33" stroke="#3a4f5f" stroke-width="1"/>
+    <rect x="17.5" y="15.5" width="7" height="7" rx="1.75" fill="#00d4aa"/>
+    <rect x="26" y="15.5" width="7" height="7" rx="1.75" fill="#1e2a33" stroke="#3a4f5f" stroke-width="1"/>
+    <rect x="9" y="24" width="7" height="7" rx="1.75" fill="#1e2a33" stroke="#3a4f5f" stroke-width="1"/>
+    <rect x="17.5" y="24" width="7" height="7" rx="1.75" fill="#1e2a33" stroke="#3a4f5f" stroke-width="1"/>
+    <rect x="26" y="24" width="7" height="7" rx="1.75" fill="#1e2a33" stroke="#3a4f5f" stroke-width="1"/>
+  </g>
+  <text
+    x="48"
+    y="27"
+    font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
+    font-size="22"
+    font-weight="700"
+    letter-spacing="0.6"
+  >
+    <tspan fill="#00d4aa">Di</tspan><tspan fill="#e8eef4">DPS</tspan>
+  </text>
+</svg>

@@ -1,0 +1,108 @@
+{
+    "paths": {
+        "templates_dir": "frontend",
+        "index_html": "frontend/index.html",
+        "annotation_html": "frontend/annotation_tool.html",
+        "base_localdata_dir": "localdata",
+        "upload_dir": "localdata/upload",
+        "upload_480p_dir": "localdata/upload/480p",
+        "json_dir": "localdata/json",
+        "csv_dir": "localdata/csv",
+        "default_json_file": "localdata/json/precise_boxes_new.json",
+        "counter_file": "localdata/upload_counter.txt",
+        "camera_ips_file": "localdata/camera_ips.json",
+        "last_frame_file": "localdata/last_frame.jpg"
+    },
+    "video": {
+        "transcode_height": 480,
+        "capture_height": 480
+    },
+    "models": {
+        "backend": "rtmpose_t",
+        "det": "nano",
+        "rtmpose_onnx_det_path": "localdata/models/rtmpose_onnx/rtmdet_nano/end2end.onnx",
+        "rtmpose_onnx_det_url": "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/rtmdet_nano_8xb32-100e_coco-obj365-person-05d8511e.zip",
+        "rtmpose_onnx_pose_path": "localdata/models/rtmpose_onnx/rtmpose_t/end2end.onnx",
+        "rtmpose_onnx_pose_url": "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/rtmpose-t_simcc-body7_pt-body7_420e-256x192-026a1439_20230504.zip",
+        "rtmpose_onnx_det_size": [320, 320],
+        "rtmpose_onnx_pose_size": [192, 256],
+        "rtmpose_onnx_device": "cpu"
+    },
+    "inference": {
+        "frame_rate": 15,
+        "height": 480,
+        "pose_frame_interval": 1,
+        "stream_buffer_size": 1,
+        "preview_max_width": 640,
+        "preview_jpeg_quality": 60,
+        "alarm_min_consecutive_frames": 3,
+        "alarm_cooldown_frames": 0
+    },
+    "debug-info": {
+        "enabled": false,
+        "interval_frames": 30
+    },
+    "pipeline_log": {
+        "enabled": false,
+        "file_enabled": false,
+        "dir": "localdata/logs/pipeline",
+        "sample": 30,
+        "stdout": true
+    },
+    "source": {
+        "enabled": false,
+        "stream_url": "",
+        "upload_tag": "stream_config",
+        "annotation_json": ""
+    },
+    "reporting": {
+        "enabled": true,
+        "callback_url": "",
+        "callback_scheme": "http",
+        "callback_ip": "127.0.0.1",
+        "callback_port": "",
+        "callback_path": "/api/yf/callback/picking-complete",
+        "task_id": "TASK-001",
+        "shelf_code": "1001",
+        "point_code": "BB",
+        "request_timeout_ms": 800,
+        "queue_size": 1000,
+        "cooldown_ms": 500,
+        "retry_times": 0,
+        "retry_backoff_ms": 0,
+        "max_records": 5000,
+        "payload_template": {
+            "taskId": "{task_id}",
+            "shelfCode": "{shelf_code}",
+            "pointCode": "{point_code}",
+            "status": "{status}",
+            "finishTime": "{finish_time}"
+        },
+        "static_fields": {
+            "source": "visual-dps"
+        }
+    },
+    "server": {
+        "host": "0.0.0.0",
+        "port": 8045
+    },
+    "auth": {
+        "enabled": true,
+        "session_ttl_hours": 24,
+        "local": {
+            "enabled": true,
+            "users_file": "localdata/auth_users.json"
+        },
+        "oauth2": {
+            "enabled": false,
+            "display_name": "企业单点登录",
+            "client_id": "",
+            "client_secret_env": "OAUTH2_CLIENT_SECRET",
+            "authorize_url": "",
+            "token_url": "",
+            "userinfo_url": "",
+            "scopes": "openid profile email",
+            "redirect_path": "/api/auth/oauth2/callback"
+        }
+    }
+}

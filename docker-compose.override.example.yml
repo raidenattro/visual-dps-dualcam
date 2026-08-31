@@ -1,0 +1,8 @@
+# 可选：复制为 docker-compose.override.yml（已在 .gitignore，不会提交）
+# Compose 会自动合并 override 与 docker-compose.yml，用于本机端口、资源等微调。
+#
+# 示例：改 UI 端口
+# services:
+#   visual-dps-ui:
+#     ports:
+#       - "8046:8045"

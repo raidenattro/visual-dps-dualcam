@@ -1,0 +1,216 @@
+{
+  "schema": 1,
+  "status": "success",
+  "generated_at": 1779979465.52,
+  "poll_recommended_ms": 2500,
+  "capabilities": {
+    "docker": true,
+    "mediamtx_api": true,
+    "redis_info": false
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "source:cam2",
+        "kind": "source",
+        "label": "ffmpeg / MP4 (宿主机)",
+        "health": "warn",
+        "host": "external",
+        "hostname": "192.168.0.204",
+        "ip": "192.168.0.204",
+        "ports": [{ "name": "rtsp", "protocol": "tcp", "host_port": 8554, "container_port": null, "bind": "" }],
+        "meta": { "source_type": "publisher", "note": "推流到 LAN IP，非 compose mediamtx" }
+      },
+      {
+        "id": "mtx:compose",
+        "kind": "mediamtx",
+        "label": "MediaMTX (compose)",
+        "health": "warn",
+        "host": "visual-dps-mediamtx",
+        "hostname": "mediamtx",
+        "ip": "172.18.0.5",
+        "ports": [
+          { "name": "rtsp", "protocol": "tcp", "host_port": 8554, "container_port": 8554, "bind": "0.0.0.0" },
+          { "name": "api", "protocol": "tcp", "host_port": 9997, "container_port": 9997, "bind": "" }
+        ],
+        "meta": { "image": "bluenviron/mediamtx:1.11.3" }
+      },
+      {
+        "id": "infer:cam2",
+        "kind": "inference",
+        "label": "visual-dps-infer-cam2",
+        "health": "error",
+        "host": "visual-dps-infer-cam2",
+        "hostname": "338975da9981",
+        "ip": "172.18.0.12",
+        "ports": [],
+        "meta": { "backend": "yolo26s_pose", "docker_status": "running" }
+      },
+      {
+        "id": "redis",
+        "kind": "redis",
+        "label": "Redis",
+        "health": "ok",
+        "hostname": "redis",
+        "ip": "172.18.0.3",
+        "ports": [{ "name": "redis", "protocol": "tcp", "host_port": null, "container_port": 6379, "bind": "" }]
+      },
+      {
+        "id": "event-worker",
+        "kind": "event_worker",
+        "label": "visual-dps-event-worker",
+        "health": "ok",
+        "hostname": "visual-dps-event-worker",
+        "ip": "172.18.0.4",
+        "ports": []
+      },
+      {
+        "id": "ui",
+        "kind": "ui",
+        "label": "visual-dps-ui",
+        "health": "ok",
+        "hostname": "visual-dps-ui",
+        "ip": "172.18.0.2",
+        "ports": [{ "name": "http", "protocol": "tcp", "host_port": 8045, "container_port": 8045, "bind": "0.0.0.0" }]
+      }
+    ],
+    "edges": [
+      {
+        "id": "e:cam2:source->mtx-lan",
+        "from": "source:cam2",
+        "to": "mtx:compose",
+        "direction": "push",
+        "protocol": "rtsp",
+        "role": "publish",
+        "endpoint": "rtsp://192.168.0.204:8554/cam2",
+        "health": "ok",
+        "meta": { "note": "宿主机 ffmpeg 实际推流目标（与 compose 实例可能不是同一监听）" }
+      },
+      {
+        "id": "e:cam2:mtx->infer",
+        "from": "mtx:compose",
+        "to": "infer:cam2",
+        "direction": "pull",
+        "protocol": "rtsp",
+        "role": "play",
+        "endpoint": "rtsp://mediamtx:8554/cam2",
+        "health": "error",
+        "meta": { "probe_error": "DESCRIBE 404 Not Found" }
+      },
+      {
+        "id": "e:cam2:infer->redis",
+        "from": "infer:cam2",
+        "to": "redis",
+        "direction": "push",
+        "protocol": "redis_stream",
+        "role": "pose",
+        "endpoint": "redis://redis:6379/0 · XADD pose:stream",
+        "health": "unknown"
+      },
+      {
+        "id": "e:redis->event-worker",
+        "from": "redis",
+        "to": "event-worker",
+        "direction": "pull",
+        "protocol": "redis_stream",
+        "role": "event",
+        "endpoint": "XREADGROUP event-workers · pose:stream",
+        "health": "ok"
+      },
+      {
+        "id": "e:ui->mtx",
+        "from": "ui",
+        "to": "mtx:compose",
+        "direction": "pull",
+        "protocol": "http",
+        "role": "preview",
+        "endpoint": "http://mediamtx:8888 · /api/cameras/cam2/hls/…",
+        "health": "warn"
+      }
+    ]
+  },
+  "paths": [
+    {
+      "camera_id": "cam2",
+      "camera_name": "模拟摄像头2",
+      "source_type": "publisher",
+      "configured": {
+        "playback_url": "rtsp://127.0.0.1:8554/cam2",
+        "pull_url": "",
+        "annotation_camera_url": "rtsp://127.0.0.1:8554/cam2",
+        "mtx_path": "cam2",
+        "hls": "/api/cameras/cam2/hls/index.m3u8",
+        "whep": "/api/cameras/cam2/whep"
+      },
+      "runtime": {
+        "infer_stream_url": "rtsp://mediamtx:8554/cam2",
+        "infer_stream_probe": {
+          "reachable": false,
+          "latency_ms": null,
+          "error": "DESCRIBE 404 Not Found"
+        },
+        "external_publish_hint": "rtsp://192.168.0.204:8554/cam2"
+      },
+      "mediamtx": {
+        "path": "cam2",
+        "ready": false,
+        "available": false,
+        "source": null,
+        "readers": [],
+        "bytes_received": 0,
+        "bytes_sent": 0
+      },
+      "inference": {
+        "status": "running",
+        "container_name": "visual-dps-infer-cam2",
+        "container_id": "338975da9981",
+        "docker_status": "running",
+        "backend": "yolo26s_pose",
+        "stream_url": "rtsp://mediamtx:8554/cam2",
+        "message": "",
+        "hostname": "338975da9981",
+        "ip": "172.18.0.12",
+        "gpu": {
+          "requested": false,
+          "available": false,
+          "warning": "NVIDIA Driver was not detected"
+        },
+        "pose_publish": {
+          "delivery": "stream",
+          "stream_key": "pose:stream",
+          "group": "event-workers"
+        }
+      },
+      "event": {
+        "worker_container": "visual-dps-event-worker",
+        "consumer_group": "event-workers",
+        "consumer_name": "event-worker-1",
+        "redis_url": "redis://:***@redis:6379/0",
+        "last_pose_age_sec": null
+      },
+      "health": "error",
+      "issues": [
+        "MTX_PATH_NOT_READY",
+        "INFER_NO_FRAMES",
+        "INFER_STREAM_MISMATCH",
+        "ANNOTATION_URL_MISMATCH"
+      ]
+    }
+  ],
+  "issues": [
+    {
+      "code": "MTX_PATH_NOT_READY",
+      "severity": "error",
+      "camera_id": "cam2",
+      "message": "MediaMTX path cam2 无推流（ready=false）",
+      "hint": "将 ffmpeg 推到 rtsp://127.0.0.1:8554/cam2，或修正 infer 的 INFERENCE_STREAM_URL"
+    },
+    {
+      "code": "INFER_STREAM_MISMATCH",
+      "severity": "error",
+      "camera_id": "cam2",
+      "message": "推理拉流地址无画面，但检测到其它地址有流",
+      "hint": "当前推流: rtsp://192.168.0.204:8554/cam2；infer: rtsp://mediamtx:8554/cam2"
+    }
+  ]
+}

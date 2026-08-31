@@ -1,0 +1,1364 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>配置工具</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #101417;
+            color: #eaf2f8;
+            font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+            text-align: center;
+        }
+        .wrap {
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+        .panel {
+            background: #182027;
+            border: 1px solid #2b3a45;
+            border-radius: 10px;
+            padding: 14px;
+            margin-bottom: 14px;
+        }
+        .row {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .controls-grid {
+            display: grid;
+            gap: 10px;
+        }
+        .group {
+            border: 1px solid #2b3a45;
+            border-radius: 8px;
+            padding: 10px;
+            background: #141c22;
+        }
+        .group-title {
+            font-size: 12px;
+            letter-spacing: 0.08em;
+            color: #9ab1c4;
+            text-transform: uppercase;
+            text-align: left;
+            margin-bottom: 8px;
+        }
+        .field {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: #c7d6e2;
+            font-size: 13px;
+        }
+        input[type="text"], select, input[type="file"] {
+            background: #0f151a;
+            border: 1px solid #334653;
+            color: #eaf2f8;
+            border-radius: 6px;
+            padding: 9px 10px;
+        }
+        #cameraIpInput {
+            min-width: 300px;
+        }
+        button {
+            border: 0;
+            border-radius: 6px;
+            padding: 10px 16px;
+            font-weight: 700;
+            cursor: pointer;
+            background: #00d2a0;
+            color: #072018;
+        }
+        button.secondary {
+            background: #3a4a58;
+            color: #eaf2f8;
+        }
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        #annotatorCanvas {
+            display: inline-block;
+            max-width: 100%;
+            border: 2px solid #34495e;
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+            cursor: crosshair;
+        }
+        .status {
+            text-align: left;
+            font-size: 14px;
+            color: #b7c9d8;
+            line-height: 1.6;
+        }
+        .box-editor-panel {
+            display: none;
+        }
+        .box-editor-grid {
+            display: grid;
+            gap: 8px;
+        }
+        .box-item {
+            border: 1px solid #355063;
+            background: #1a2630;
+            border-radius: 8px;
+            padding: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            align-items: flex-start;
+        }
+        .box-item-label {
+            font-size: 12px;
+            color: #9ec8e8;
+        }
+        .box-item input {
+            width: 100%;
+            box-sizing: border-box;
+            font-weight: 700;
+            color: #ffffff;
+            border: 1px solid #3b5f77;
+            background: #0f151a;
+        }
+        .ok { color: #2ecc71; }
+        .warn { color: #f1c40f; }
+        .err { color: #ff6b6b; }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <nav style="display:flex;gap:16px;justify-content:center;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid #2b3a45;">
+        <a href="/" style="color:#00d4aa;text-decoration:none;">Dashboard</a>
+        <a href="/monitor" style="color:#00d4aa;text-decoration:none;">推理监控</a>
+        <a href="/annotate" style="color:#eaf2f8;font-weight:600;text-decoration:none;">标注配置</a>
+    </nav>
+    <h2>配置工具</h2>
+
+    <div class="panel">
+        <div class="controls-grid">
+            <div class="group">
+                <div class="group-title">网格设置</div>
+                <div class="row">
+                    <label class="field" for="gridRowsSelect">行数
+                        <select id="gridRowsSelect"></select>
+                    </label>
+                    <label class="field" for="gridColsSelect">列数
+                        <select id="gridColsSelect"></select>
+                    </label>
+                    <button class="secondary" onclick="applyGridShape()">应用网格</button>
+                </div>
+            </div>
+
+            <div class="group">
+                <div class="group-title">本地视频</div>
+                <div class="row">
+                    <input type="file" id="videoFile" accept="video/*" />
+                    <button id="btnUpload" onclick="uploadAndStartAnnotating()">上传并开始标注</button>
+                </div>
+            </div>
+
+            <div class="group">
+                <div class="group-title">网络摄像头</div>
+                <div class="row">
+                    <select id="cameraIpSelect">
+                        <option value="">选择已保存摄像头 IP</option>
+                    </select>
+                    <input type="text" id="cameraIpInput" placeholder="新增摄像头地址，如 rtsp://..." />
+                    <input type="text" id="cameraNameInput" placeholder="货架id名称(必选)" />
+                    <button class="secondary" onclick="deleteSelectedCameraIp()">删除所选 IP</button>
+                    <button class="secondary" onclick="addCameraIpFromInput()">保存 IP</button>
+                    <button onclick="captureCameraFrameAndAnnotate()">通过摄像头抓帧标注</button>
+                </div>
+            </div>
+
+            <div class="group">
+                <div class="group-title">标注操作</div>
+                <div class="row">
+                    <button id="btnSave" class="secondary" onclick="saveAnnotationOnly()" disabled>保存标注</button>
+                    <button class="secondary" onclick="finishAnnotationSession()">结束标注</button>
+                    <button class="secondary" onclick="resetAnnotationSession()">重置标注</button>
+                    <button class="secondary" onclick="window.location.href='/'">返回监控页</button>
+                </div>
+            </div>
+        </div>
+        <div class="status" id="statusBox">
+            <div>1. 上传视频后，依次点击 4 点（左上、右上、右下、左下）框定货架。</div>
+            <div>2. 先选择网格行列（1-8），再进行标注。默认 4x4。</div>
+            <div>3. 可通过下拉选择已保存摄像头 IP，或新增 IP 后抓取一帧进行标注。</div>
+            <div>4. 点击“保存标注”将结果保存到服务端 annotation_json 目录。</div>
+        </div>
+    </div>
+
+    <canvas id="annotatorCanvas"></canvas>
+
+    <div id="boxEditorPanel" class="panel box-editor-panel">
+        <div class="group-title">2D箱子面板（可修改每个 box_id）</div>
+        <div class="row" style="justify-content: flex-start;">
+            <label class="field">货架ID
+                <select id="shelfSelect"></select>
+            </label>
+        </div>
+        <div id="boxEditorGrid" class="box-editor-grid"></div>
+    </div>
+</div>
+
+<script>
+const annCvs = document.getElementById('annotatorCanvas');
+const annCtx = annCvs.getContext('2d');
+
+let bgImage = new Image();
+let shelfPoints = [];
+let M_fwd = null, M_inv = null;
+const MAP_W = 600, MAP_H = 600;
+const DEFAULT_CANVAS_W = 854;
+const DEFAULT_CANVAS_H = 480;
+let gridRows = 4, gridCols = 4;
+let layerYs = [], layerColXs = [];
+let dragTarget = null, dragStartFlat = null, dragStartState = null;
+let cameraNameByUrl = {};
+let boxIdOverrides = {};
+let loadedAnnotation = null;
+let shelves = [];
+let activeShelfIndex = -1;
+let annotationSource = {
+    capture_source: 'file',
+    camera_url: '',
+    camera_name: '',
+    shelf_code: ''
+};
+
+function setStatus(text, cls) {
+    const el = document.getElementById('statusBox');
+    el.innerHTML = `<div class="${cls || ''}">${text}</div>`;
+}
+
+function initGridSelectors() {
+    const rowSel = document.getElementById('gridRowsSelect');
+    const colSel = document.getElementById('gridColsSelect');
+
+    rowSel.innerHTML = '';
+    colSel.innerHTML = '';
+    for (let i = 1; i <= 8; i++) {
+        const rowOpt = document.createElement('option');
+        rowOpt.value = String(i);
+        rowOpt.textContent = String(i);
+        rowSel.appendChild(rowOpt);
+
+        const colOpt = document.createElement('option');
+        colOpt.value = String(i);
+        colOpt.textContent = String(i);
+        colSel.appendChild(colOpt);
+    }
+
+    rowSel.value = String(gridRows);
+    colSel.value = String(gridCols);
+}
+
+function applyGridShape() {
+    const rowSel = document.getElementById('gridRowsSelect');
+    const colSel = document.getElementById('gridColsSelect');
+    const newRows = Number(rowSel.value);
+    const newCols = Number(colSel.value);
+
+    if (!Number.isInteger(newRows) || !Number.isInteger(newCols) || newRows < 1 || newRows > 8 || newCols < 1 || newCols > 8) {
+        setStatus('网格行列范围必须在 1-8。', 'err');
+        return;
+    }
+
+    gridRows = newRows;
+    gridCols = newCols;
+    boxIdOverrides = {};
+
+    if (shelfPoints.length === 4 && M_inv) {
+        initGrid();
+        renderAnnotator();
+        renderBoxEditor();
+        document.getElementById('btnSave').disabled = false;
+        setStatus(`网格已更新为 ${gridRows}x${gridCols}。可继续微调并保存。`, 'ok');
+    } else {
+        renderBoxEditor();
+        setStatus(`网格已设置为 ${gridRows}x${gridCols}。请上传并完成四点标注。`, 'ok');
+    }
+}
+
+if (window.location.protocol === 'file:') {
+    setStatus('请先启动 Python 服务，再访问 http://127.0.0.1:5000', 'err');
+}
+
+function renderFrameAndEnterAnnotating(imageSrc, loadedMsg) {
+    bgImage.src = imageSrc;
+    bgImage.onload = () => {
+        annCvs.width = bgImage.width;
+        annCvs.height = bgImage.height;
+        renderAnnotator();
+        setStatus(loadedMsg || '请按顺序点击 4 个点：左上、右上、右下、左下。', 'ok');
+    };
+}
+
+async function loadCameraIpList() {
+    try {
+        const resp = await fetch('/api/camera_ips');
+        const data = await resp.json();
+        const select = document.getElementById('cameraIpSelect');
+        select.innerHTML = '<option value="">选择已保存摄像头 IP</option>';
+        cameraNameByUrl = {};
+
+        const items = Array.isArray(data.items) ? data.items : [];
+        for (const item of items) {
+            cameraNameByUrl[item.url] = item.name || '';
+            const opt = document.createElement('option');
+            opt.value = item.url;
+            opt.textContent = `${item.name || item.url} (${item.url})`;
+            select.appendChild(opt);
+        }
+    } catch (_err) {
+        setStatus('加载摄像头 IP 列表失败，请检查服务是否启动。', 'warn');
+    }
+}
+
+document.getElementById('cameraIpSelect').addEventListener('change', (e) => {
+    const value = e.target.value || '';
+    document.getElementById('cameraIpInput').value = value;
+});
+
+document.getElementById('shelfSelect').addEventListener('change', () => {
+    loadSelectedShelf();
+});
+
+function getCameraUrlFromUI() {
+    const inputUrl = document.getElementById('cameraIpInput').value.trim();
+    const selectedUrl = document.getElementById('cameraIpSelect').value.trim();
+    return inputUrl || selectedUrl;
+}
+
+function getCameraNameFromUI(url) {
+    const typedName = document.getElementById('cameraNameInput').value.trim();
+    if (typedName) return typedName;
+    return cameraNameByUrl[url] || '';
+}
+
+function getShelfCodeFromUI(url) {
+    return getCameraNameFromUI(url);
+}
+
+async function addCameraIpFromInput() {
+    const url = document.getElementById('cameraIpInput').value.trim();
+    const name = document.getElementById('cameraNameInput').value.trim();
+
+    if (!url) {
+        alert('请先输入摄像头 IP 地址');
+        return;
+    }
+
+    try {
+        const resp = await fetch('/api/camera_ips', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url, name })
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.error) {
+            setStatus(`保存 IP 失败：${data.error || '未知错误'}`, 'err');
+            return;
+        }
+
+        await loadCameraIpList();
+        document.getElementById('cameraIpSelect').value = url;
+        setStatus('摄像头 IP 已保存到项目目录。', 'ok');
+    } catch (err) {
+        setStatus(`保存 IP 失败：${err.message || '无法连接服务'}`, 'err');
+    }
+}
+
+async function deleteSelectedCameraIp() {
+    const select = document.getElementById('cameraIpSelect');
+    const url = (select.value || '').trim();
+    if (!url) {
+        alert('请先在下拉框选择要删除的 IP');
+        return;
+    }
+
+    if (!confirm(`确认删除该 IP 吗？\n${url}`)) {
+        return;
+    }
+
+    try {
+        const resp = await fetch('/api/camera_ips', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url })
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.error) {
+            setStatus(`删除 IP 失败：${data.error || '未知错误'}`, 'err');
+            return;
+        }
+
+        await loadCameraIpList();
+        document.getElementById('cameraIpInput').value = '';
+        document.getElementById('cameraNameInput').value = '';
+        setStatus('已删除所选摄像头 IP。', 'ok');
+    } catch (err) {
+        setStatus(`删除 IP 失败：${err.message || '无法连接服务'}`, 'err');
+    }
+}
+
+async function captureCameraFrameAndAnnotate() {
+    const url = getCameraUrlFromUI();
+    if (!url) {
+        alert('请选择或输入摄像头 IP 地址');
+        return;
+    }
+
+    resetAnnotationSession({ preserveCanvas: true, preserveLoaded: true, preserveGrid: true });
+    setStatus('正在通过摄像头抓取一帧...', 'warn');
+
+    try {
+        const resp = await fetch('/api/get_camera_frame', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url })
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.error || !data.image) {
+            setStatus(`摄像头抓帧失败：${data.error || '未知错误'}`, 'err');
+            return;
+        }
+
+        annotationSource = {
+            capture_source: 'camera',
+            camera_url: url,
+            camera_name: getCameraNameFromUI(url) || ''
+        };
+
+        renderFrameAndEnterAnnotating('data:image/jpeg;base64,' + data.image, '摄像头帧已加载。请按顺序点击 4 个点：左上、右上、右下、左下。');
+    } catch (err) {
+        setStatus(`摄像头抓帧失败：${err.message || '无法连接服务'}`, 'err');
+    }
+}
+
+function solveLinearSystem(A, b) {
+    const n = A.length;
+    const M = A.map((row, i) => [...row, b[i]]);
+
+    for (let col = 0; col < n; col++) {
+        let pivot = col;
+        for (let r = col + 1; r < n; r++) {
+            if (Math.abs(M[r][col]) > Math.abs(M[pivot][col])) pivot = r;
+        }
+        if (Math.abs(M[pivot][col]) < 1e-12) {
+            throw new Error('矩阵不可逆，无法计算透视变换');
+        }
+        if (pivot !== col) [M[col], M[pivot]] = [M[pivot], M[col]];
+
+        const div = M[col][col];
+        for (let c = col; c <= n; c++) M[col][c] /= div;
+
+        for (let r = 0; r < n; r++) {
+            if (r === col) continue;
+            const factor = M[r][col];
+            for (let c = col; c <= n; c++) M[r][c] -= factor * M[col][c];
+        }
+    }
+
+    return M.map(row => row[n]);
+}
+
+function getPerspectiveTransform(src, dst) {
+    let A = [], B = [];
+    for (let i = 0; i < 4; i++) {
+        A.push([src[i][0], src[i][1], 1, 0, 0, 0, -src[i][0] * dst[i][0], -src[i][1] * dst[i][0]]);
+        A.push([0, 0, 0, src[i][0], src[i][1], 1, -src[i][0] * dst[i][1], -src[i][1] * dst[i][1]]);
+        B.push(dst[i][0]);
+        B.push(dst[i][1]);
+    }
+    let h;
+    if (window.math && typeof window.math.lusolve === 'function') {
+        h = window.math.lusolve(A, B).map(x => x[0]);
+    } else {
+        h = solveLinearSystem(A, B);
+    }
+    h.push(1.0);
+    return [[h[0], h[1], h[2]], [h[3], h[4], h[5]], [h[6], h[7], h[8]]];
+}
+
+function perspectiveTransform(pt, M) {
+    let z = M[2][0] * pt[0] + M[2][1] * pt[1] + M[2][2];
+    let x = (M[0][0] * pt[0] + M[0][1] * pt[1] + M[0][2]) / z;
+    let y = (M[1][0] * pt[0] + M[1][1] * pt[1] + M[1][2]) / z;
+    return [x, y];
+}
+
+function initGrid() {
+    layerYs = [];
+    layerColXs = [];
+    for (let i = 0; i <= gridRows; i++) layerYs.push(i * (MAP_H / gridRows));
+    for (let i = 0; i < gridRows; i++) {
+        let cols = [];
+        for (let j = 0; j <= gridCols; j++) cols.push(j * (MAP_W / gridCols));
+        layerColXs.push(cols);
+    }
+}
+
+function getCellKey(rowIdx, colIdx) {
+    return `${rowIdx + 1}-${colIdx + 1}`;
+}
+
+function getDefaultBoxId(rowIdx, colIdx) {
+    return String(rowIdx * gridCols + colIdx + 1);
+}
+
+function getEffectiveBoxId(rowIdx, colIdx) {
+    const key = getCellKey(rowIdx, colIdx);
+    const defaultId = getDefaultBoxId(rowIdx, colIdx);
+    const raw = boxIdOverrides[key];
+    if (raw === undefined || raw === null || raw === '') {
+        return defaultId;
+    }
+    const text = String(raw).trim();
+    if (!text) {
+        return defaultId;
+    }
+    return text;
+}
+
+function syncShelfSelectOptions(selectedCode) {
+    const select = document.getElementById('shelfSelect');
+    if (!select) return;
+    select.innerHTML = '';
+
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = shelves.length ? '选择货架' : '暂无货架';
+    select.appendChild(placeholder);
+
+    for (const shelf of shelves) {
+        const opt = document.createElement('option');
+        opt.value = shelf.shelf_code || '';
+        opt.textContent = shelf.shelf_code || '未命名货架';
+        select.appendChild(opt);
+    }
+
+    if (selectedCode) {
+        select.value = selectedCode;
+    }
+}
+
+function loadSelectedShelf() {
+    const select = document.getElementById('shelfSelect');
+    if (!select) return;
+    const code = (select.value || '').trim();
+    if (!code) return;
+    const idx = shelves.findIndex((s) => String(s.shelf_code || '') === code);
+    if (idx < 0) return;
+    loadShelfIntoEditor(shelves[idx]);
+    activeShelfIndex = idx;
+    document.getElementById('cameraNameInput').value = code;
+}
+
+function loadShelfIntoEditor(shelf) {
+    if (!shelf) return;
+    shelfPoints = Array.isArray(shelf.shelf_corners)
+        ? shelf.shelf_corners.map((pt) => [Number(pt[0]), Number(pt[1])])
+        : [];
+    if (shelfPoints.length === 4) {
+        refreshPerspectiveFromShelf();
+    } else {
+        M_fwd = null;
+        M_inv = null;
+    }
+
+    if (Array.isArray(shelf.grid_shape) && shelf.grid_shape.length === 2) {
+        const rows = Number(shelf.grid_shape[0]);
+        const cols = Number(shelf.grid_shape[1]);
+        if (Number.isInteger(rows) && Number.isInteger(cols)) {
+            gridRows = rows;
+            gridCols = cols;
+            initGridSelectors();
+        }
+    }
+
+    boxIdOverrides = {};
+    if (M_fwd) {
+        applyAnnotationToGrid({ boxes: shelf.boxes || [] });
+    }
+
+    loadedAnnotation = { boxes: shelf.boxes || [] };
+    renderAnnotator();
+    renderBoxEditor();
+    document.getElementById('btnSave').disabled = !M_inv;
+}
+
+function renderBoxEditor() {
+    const panel = document.getElementById('boxEditorPanel');
+    const grid = document.getElementById('boxEditorGrid');
+    if (!panel || !grid) return;
+
+    if (!M_inv || shelfPoints.length < 4) {
+        if (!shelves.length) {
+            panel.style.display = 'none';
+            grid.innerHTML = '';
+            return;
+        }
+        panel.style.display = 'block';
+        grid.innerHTML = '';
+        syncShelfSelectOptions(activeShelfIndex >= 0 ? shelves[activeShelfIndex].shelf_code : '');
+        return;
+    }
+
+    panel.style.display = 'block';
+    grid.innerHTML = '';
+    grid.style.gridTemplateColumns = `repeat(${gridCols}, minmax(110px, 1fr))`;
+    syncShelfSelectOptions(activeShelfIndex >= 0 ? shelves[activeShelfIndex].shelf_code : '');
+
+    for (let i = 0; i < gridRows; i++) {
+        for (let j = 0; j < gridCols; j++) {
+            const key = getCellKey(i, j);
+            const defaultId = getDefaultBoxId(i, j);
+            const value = getEffectiveBoxId(i, j);
+
+            const item = document.createElement('div');
+            item.className = 'box-item';
+
+            const label = document.createElement('div');
+            label.className = 'box-item-label';
+            label.textContent = `L${i + 1} C${j + 1}`;
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = String(value);
+            input.title = `默认 box_id: ${defaultId}`;
+            input.addEventListener('input', (e) => {
+                const raw = String(e.target.value || '').trim();
+                if (!raw) {
+                    delete boxIdOverrides[key];
+                } else {
+                    boxIdOverrides[key] = raw;
+                }
+                // 实时更新标注页面
+                renderAnnotator();
+                document.getElementById('btnSave').disabled = !M_inv;
+            });
+
+            item.appendChild(label);
+            item.appendChild(input);
+            grid.appendChild(item);
+        }
+    }
+}
+
+function validateBoxIdsBeforeSave() {
+    const seen = new Set();
+    const validPattern = /^[A-Za-z0-9_-]+$/;
+    for (let i = 0; i < gridRows; i++) {
+        for (let j = 0; j < gridCols; j++) {
+            const idVal = String(getEffectiveBoxId(i, j) || '').trim();
+            if (!idVal) {
+                return { ok: false, message: '存在空的 box_id，请填写后保存' };
+            }
+            if (!validPattern.test(idVal)) {
+                return { ok: false, message: `box_id 不合法：${idVal}（仅支持字母/数字/下划线/中划线）` };
+            }
+            if (seen.has(idVal)) {
+                return { ok: false, message: `box_id 重复：${idVal}，请保证每个箱子 id 唯一` };
+            }
+            seen.add(idVal);
+        }
+    }
+    return { ok: true, message: '' };
+}
+
+function validateShelfCodeUnique(code) {
+    const nextCode = String(code || '').trim();
+    if (!nextCode) return { ok: false, message: '货架id不能为空' };
+    const existing = shelves.some((s, idx) => {
+        if (activeShelfIndex === idx) return false;
+        return String(s.shelf_code || '').trim() === nextCode;
+    });
+    if (existing) {
+        return { ok: false, message: `货架id重复：${nextCode}` };
+    }
+    return { ok: true, message: '' };
+}
+
+function getDist(p, a, b) {
+    let l2 = (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2;
+    if (l2 === 0) return Math.hypot(p[0] - a[0], p[1] - a[1]);
+    let t = Math.max(0, Math.min(1, ((p[0] - a[0]) * (b[0] - a[0]) + (p[1] - a[1]) * (b[1] - a[1])) / l2));
+    return Math.hypot(p[0] - (a[0] + t * (b[0] - a[0])), p[1] - (a[1] + t * (b[1] - a[1])));
+}
+
+function getPointDist(a, b) {
+    return Math.hypot(a[0] - b[0], a[1] - b[1]);
+}
+
+function refreshPerspectiveFromShelf() {
+    if (shelfPoints.length !== 4) return;
+    const dst = [[0, 0], [MAP_W, 0], [MAP_W, MAP_H], [0, MAP_H]];
+    try {
+        M_fwd = getPerspectiveTransform(shelfPoints, dst);
+        M_inv = getPerspectiveTransform(dst, shelfPoints);
+    } catch (_err) {
+        // 跳过退化状态，避免拖动过程中偶发不可逆。
+    }
+}
+
+function resetAnnotationSession(options) {
+    const opts = options || {};
+    const preserveCanvas = opts.preserveCanvas === true;
+    const preserveLoaded = opts.preserveLoaded === true;
+    const preserveGrid = opts.preserveGrid === true;
+    if (!preserveGrid) {
+        shelfPoints = [];
+        M_fwd = null;
+        M_inv = null;
+        layerYs = [];
+        layerColXs = [];
+    }
+    dragTarget = null;
+    dragStartFlat = null;
+    dragStartState = null;
+    if (!preserveGrid) {
+        boxIdOverrides = {};
+    }
+    if (!preserveLoaded) {
+        loadedAnnotation = null;
+    }
+    if (!preserveCanvas) {
+        annCtx.clearRect(0, 0, annCvs.width, annCvs.height);
+        renderEmptyCanvas();
+    }
+    document.getElementById('btnSave').disabled = true;
+    renderBoxEditor();
+    if (!preserveGrid) {
+        setStatus('已重置。请重新上传并标注。', 'warn');
+    }
+}
+
+function buildBoxes() {
+    const boxes = [];
+    const frameW = Number(annCvs.width || 0);
+    const frameH = Number(annCvs.height || 0);
+    for (let i = 0; i < gridRows; i++) {
+        for (let j = 0; j < gridCols; j++) {
+            const p0 = perspectiveTransform([layerColXs[i][j], layerYs[i]], M_inv);
+            const p1 = perspectiveTransform([layerColXs[i][j + 1], layerYs[i]], M_inv);
+            const p2 = perspectiveTransform([layerColXs[i][j + 1], layerYs[i + 1]], M_inv);
+            const p3 = perspectiveTransform([layerColXs[i][j], layerYs[i + 1]], M_inv);
+            const poly = [p0, p1, p2, p3];
+            const customBoxId = getEffectiveBoxId(i, j);
+            boxes.push({
+                box_id: customBoxId,
+                layer: i + 1,
+                column: j + 1,
+                video_polygon: poly,
+                video_polygon_norm: poly.map((pt) => {
+                    const xNorm = frameW > 0 ? (pt[0] / frameW) : 0;
+                    const yNorm = frameH > 0 ? (pt[1] / frameH) : 0;
+                    return [xNorm, yNorm];
+                })
+            });
+        }
+    }
+    return boxes;
+}
+
+function makeShelfPayload(shelfCode) {
+    return {
+        shelf_code: shelfCode,
+        shelf_corners: shelfPoints,
+        grid_shape: [gridRows, gridCols],
+        boxes: buildBoxes()
+    };
+}
+
+function makeAnnotationPayload() {
+    const frameW = Number(annCvs.width || 0);
+    const frameH = Number(annCvs.height || 0);
+    return {
+        annotation_size: {
+            width: frameW,
+            height: frameH
+        },
+        source_info: {
+            capture_source: annotationSource.capture_source || 'file',
+            camera_url: annotationSource.camera_url || '',
+            camera_name: annotationSource.camera_name || ''
+        },
+        shelves: shelves
+    };
+}
+
+async function uploadAndStartAnnotating() {
+    const file = document.getElementById('videoFile').files[0];
+    if (!file) {
+        alert('请先选择视频文件');
+        return;
+    }
+
+    resetAnnotationSession({ preserveCanvas: true, preserveLoaded: true, preserveGrid: true });
+    annotationSource = {
+        capture_source: 'file',
+        camera_url: '',
+        camera_name: ''
+    };
+    setStatus('正在上传视频并提取首帧...', 'warn');
+
+    const fd = new FormData();
+    fd.append('file', file);
+
+    try {
+        const uploadResp = await fetch('/api/upload_video', { method: 'POST', body: fd });
+        if (!uploadResp.ok) {
+            setStatus('上传失败，请检查 Python 服务日志。', 'err');
+            return;
+        }
+
+        const frameResp = await fetch('/api/get_first_frame');
+        if (!frameResp.ok) {
+            setStatus('提取首帧失败，请检查 Python 服务日志。', 'err');
+            return;
+        }
+
+        const data = await frameResp.json();
+        if (data.error || !data.image) {
+            setStatus(`提取首帧失败：${data.error || '未知错误'}`, 'err');
+            return;
+        }
+
+        renderFrameAndEnterAnnotating('data:image/jpeg;base64,' + data.image);
+    } catch (err) {
+        setStatus(`请求失败：${err.message || '无法连接服务'}`, 'err');
+    }
+}
+
+loadCameraIpList();
+initGridSelectors();
+initCanvasPlaceholder();
+syncShelfSelectOptions();
+loadAnnotationOnStartup();
+loadLastFrameOnStartup();
+
+annCvs.onmousedown = (e) => {
+    let rect = annCvs.getBoundingClientRect();
+    let scaleX = annCvs.width / rect.width;
+    let scaleY = annCvs.height / rect.height;
+    let x = (e.clientX - rect.left) * scaleX;
+    let y = (e.clientY - rect.top) * scaleY;
+
+    if (shelfPoints.length < 4) {
+        shelfPoints.push([x, y]);
+        if (shelfPoints.length === 4) {
+            refreshPerspectiveFromShelf();
+            initGrid();
+            boxIdOverrides = {};
+            renderBoxEditor();
+            document.getElementById('btnSave').disabled = false;
+            setStatus('网格已生成，可拖拽黄线微调后保存。', 'ok');
+        }
+    } else {
+        for (let i = 0; i < shelfPoints.length; i++) {
+            if (getPointDist([x, y], shelfPoints[i]) < 12) {
+                dragTarget = { type: 'corner', i: i };
+                return;
+            }
+        }
+
+        for (let i = 1; i < gridRows; i++) {
+            let p1 = perspectiveTransform([0, layerYs[i]], M_inv);
+            let p2 = perspectiveTransform([MAP_W, layerYs[i]], M_inv);
+            if (getDist([x, y], p1, p2) < 15) {
+                dragTarget = { type: 'h', i: i };
+                dragStartFlat = perspectiveTransform([x, y], M_fwd);
+                dragStartState = layerYs[i];
+                return;
+            }
+        }
+
+        for (let i = 0; i < gridRows; i++) {
+            for (let j = 1; j < gridCols; j++) {
+                let p1 = perspectiveTransform([layerColXs[i][j], layerYs[i]], M_inv);
+                let p2 = perspectiveTransform([layerColXs[i][j], layerYs[i + 1]], M_inv);
+                if (getDist([x, y], p1, p2) < 15) {
+                    dragTarget = { type: 'v', i: i, j: j };
+                    dragStartFlat = perspectiveTransform([x, y], M_fwd);
+                    dragStartState = layerColXs[i][j];
+                    return;
+                }
+            }
+        }
+    }
+
+    renderAnnotator();
+};
+
+annCvs.onmousemove = (e) => {
+    if (!dragTarget) return;
+
+    let rect = annCvs.getBoundingClientRect();
+    let scaleX = annCvs.width / rect.width;
+    let scaleY = annCvs.height / rect.height;
+    let canvasPt = [(e.clientX - rect.left) * scaleX, (e.clientY - rect.top) * scaleY];
+
+    if (dragTarget.type === 'corner') {
+        shelfPoints[dragTarget.i] = [canvasPt[0], canvasPt[1]];
+        refreshPerspectiveFromShelf();
+        renderAnnotator();
+        document.getElementById('btnSave').disabled = !M_inv;
+        return;
+    }
+
+    let flatPt = perspectiveTransform(canvasPt, M_fwd);
+
+    if (dragTarget.type === 'h') {
+        let i = dragTarget.i;
+        let dy = flatPt[1] - dragStartFlat[1];
+        let newY = dragStartState + dy;
+        let minY = layerYs[i - 1] + 15;
+        let maxY = layerYs[i + 1] - 15;
+        layerYs[i] = Math.max(minY, Math.min(maxY, newY));
+    } else if (dragTarget.type === 'v') {
+        let i = dragTarget.i, j = dragTarget.j;
+        let dx = flatPt[0] - dragStartFlat[0];
+        let newX = dragStartState + dx;
+        let minX = layerColXs[i][j - 1] + 10;
+        let maxX = layerColXs[i][j + 1] - 10;
+        layerColXs[i][j] = Math.max(minX, Math.min(maxX, newX));
+    }
+
+    renderAnnotator();
+    document.getElementById('btnSave').disabled = !M_inv;
+};
+
+annCvs.onmouseup = () => {
+    dragTarget = null;
+};
+
+function renderAnnotator() {
+    if (!bgImage.src) {
+        if (loadedAnnotation) {
+            renderLoadedAnnotation();
+            if (M_inv) {
+                drawEditableGridBoxes();
+            }
+        } else if (M_inv) {
+            renderEmptyCanvas();
+            drawEditableGridBoxes();
+        } else {
+            renderEmptyCanvas();
+        }
+        return;
+    }
+
+    annCtx.drawImage(bgImage, 0, 0);
+    annCtx.lineWidth = 3;
+
+    if (shelfPoints.length > 0) {
+        drawShelfOutline();
+    }
+
+    if (M_inv) {
+        drawEditableGridBoxes();
+    }
+}
+
+function drawEditableGridBoxes() {
+    if (!M_inv) return;
+
+    annCtx.strokeStyle = '#f1c40f';
+    annCtx.fillStyle = '#00ffcc';
+    annCtx.font = 'bold 18px Arial';
+    annCtx.textAlign = 'center';
+    annCtx.textBaseline = 'middle';
+
+    for (let i = 0; i < gridRows; i++) {
+        for (let j = 0; j < gridCols; j++) {
+            const p0 = perspectiveTransform([layerColXs[i][j], layerYs[i]], M_inv);
+            const p1 = perspectiveTransform([layerColXs[i][j + 1], layerYs[i]], M_inv);
+            const p2 = perspectiveTransform([layerColXs[i][j + 1], layerYs[i + 1]], M_inv);
+            const p3 = perspectiveTransform([layerColXs[i][j], layerYs[i + 1]], M_inv);
+            const poly = [p0, p1, p2, p3];
+
+            annCtx.beginPath();
+            annCtx.moveTo(poly[0][0], poly[0][1]);
+            for (let k = 1; k < poly.length; k++) {
+                annCtx.lineTo(poly[k][0], poly[k][1]);
+            }
+            annCtx.closePath();
+            annCtx.stroke();
+
+            const centerX = (poly[0][0] + poly[1][0] + poly[2][0] + poly[3][0]) / 4;
+            const centerY = (poly[0][1] + poly[1][1] + poly[2][1] + poly[3][1]) / 4;
+            const boxId = getEffectiveBoxId(i, j);
+            annCtx.fillText(boxId, centerX, centerY);
+        }
+    }
+}
+
+function initCanvasPlaceholder() {
+    if (!annCvs.width || !annCvs.height) {
+        annCvs.width = DEFAULT_CANVAS_W;
+        annCvs.height = DEFAULT_CANVAS_H;
+    }
+    renderEmptyCanvas();
+}
+
+function renderEmptyCanvas() {
+    annCtx.clearRect(0, 0, annCvs.width, annCvs.height);
+    annCtx.fillStyle = '#0f151a';
+    annCtx.fillRect(0, 0, annCvs.width, annCvs.height);
+    annCtx.fillStyle = '#7f8c8d';
+    annCtx.font = 'bold 18px Arial';
+    annCtx.textAlign = 'center';
+    annCtx.textBaseline = 'middle';
+    annCtx.fillText('等待载入标注或视频帧...', annCvs.width / 2, annCvs.height / 2);
+}
+
+function renderLoadedAnnotation() {
+    const ann = loadedAnnotation;
+    if (!ann) return;
+    drawAnnotationBoxes(ann, { overlay: false });
+    drawShelfOutline();
+}
+
+function drawShelfOutline() {
+    if (!Array.isArray(shelfPoints) || shelfPoints.length === 0) return;
+    annCtx.lineWidth = 3;
+    annCtx.strokeStyle = '#2ecc71';
+    annCtx.beginPath();
+    annCtx.moveTo(shelfPoints[0][0], shelfPoints[0][1]);
+    for (let i = 1; i < shelfPoints.length; i++) annCtx.lineTo(shelfPoints[i][0], shelfPoints[i][1]);
+    if (shelfPoints.length === 4) annCtx.closePath();
+    annCtx.stroke();
+
+    annCtx.fillStyle = '#e74c3c';
+    for (let p of shelfPoints) {
+        annCtx.beginPath();
+        annCtx.arc(p[0], p[1], 6, 0, Math.PI * 2);
+        annCtx.fill();
+    }
+}
+
+function drawAnnotationBoxes(ann, options) {
+    const opts = options || {};
+    const overlay = opts.overlay === true;
+
+    if (!overlay) {
+        annCtx.clearRect(0, 0, annCvs.width, annCvs.height);
+        annCtx.fillStyle = '#0f151a';
+        annCtx.fillRect(0, 0, annCvs.width, annCvs.height);
+    }
+
+    const boxes = Array.isArray(ann.boxes) ? ann.boxes : [];
+    if (!boxes.length) return;
+
+    annCtx.lineWidth = 2;
+    annCtx.strokeStyle = overlay ? '#00d2a0' : '#f1c40f';
+    annCtx.fillStyle = '#00ffcc';
+    annCtx.font = overlay ? 'bold 16px Arial' : 'bold 18px Arial';
+    annCtx.textAlign = 'center';
+    annCtx.textBaseline = 'middle';
+
+    for (const box of boxes) {
+        const poly = Array.isArray(box.video_polygon) ? box.video_polygon : [];
+        if (poly.length < 4) continue;
+
+        annCtx.beginPath();
+        annCtx.moveTo(poly[0][0], poly[0][1]);
+        for (let i = 1; i < poly.length; i++) {
+            annCtx.lineTo(poly[i][0], poly[i][1]);
+        }
+        annCtx.closePath();
+        annCtx.stroke();
+
+        let sumX = 0;
+        let sumY = 0;
+        let count = 0;
+        for (const pt of poly) {
+            sumX += pt[0];
+            sumY += pt[1];
+            count += 1;
+        }
+        const centerX = count ? sumX / count : poly[0][0];
+        const centerY = count ? sumY / count : poly[0][1];
+        const label = box.box_id !== undefined ? String(box.box_id) : '';
+        if (label) {
+            annCtx.fillText(label, centerX, centerY);
+        }
+    }
+}
+
+function applyAnnotationToGrid(ann) {
+    if (!ann || !Array.isArray(ann.boxes) || !M_fwd) return;
+
+    initGrid();
+
+    const rowCount = gridRows;
+    const colCount = gridCols;
+    const ySamples = Array.from({ length: rowCount + 1 }, () => []);
+    const xSamples = Array.from({ length: rowCount }, () =>
+        Array.from({ length: colCount + 1 }, () => [])
+    );
+
+    for (const box of ann.boxes) {
+        const rowIdx = Number(box.layer) - 1;
+        const colIdx = Number(box.column) - 1;
+        if (rowIdx < 0 || colIdx < 0 || rowIdx >= rowCount || colIdx >= colCount) {
+            continue;
+        }
+
+        const poly = Array.isArray(box.video_polygon) ? box.video_polygon : [];
+        if (poly.length < 4) continue;
+
+        const flat = poly.map((pt) => perspectiveTransform(pt, M_fwd));
+        const topY = (flat[0][1] + flat[1][1]) / 2;
+        const bottomY = (flat[2][1] + flat[3][1]) / 2;
+        const leftX = (flat[0][0] + flat[3][0]) / 2;
+        const rightX = (flat[1][0] + flat[2][0]) / 2;
+
+        ySamples[rowIdx].push(topY);
+        ySamples[rowIdx + 1].push(bottomY);
+        xSamples[rowIdx][colIdx].push(leftX);
+        xSamples[rowIdx][colIdx + 1].push(rightX);
+
+        const boxId = box.box_id !== undefined ? String(box.box_id) : '';
+        const defaultId = getDefaultBoxId(rowIdx, colIdx);
+        if (boxId && boxId !== defaultId) {
+            boxIdOverrides[getCellKey(rowIdx, colIdx)] = boxId;
+        }
+    }
+
+    for (let i = 0; i <= rowCount; i++) {
+        if (ySamples[i].length) {
+            layerYs[i] = averageArray(ySamples[i]);
+        }
+    }
+
+    for (let i = 0; i < rowCount; i++) {
+        for (let j = 0; j <= colCount; j++) {
+            if (xSamples[i][j].length) {
+                layerColXs[i][j] = averageArray(xSamples[i][j]);
+            }
+        }
+    }
+}
+
+function averageArray(values) {
+    let sum = 0;
+    for (const val of values) sum += val;
+    return sum / values.length;
+}
+
+async function loadAnnotationOnStartup(options) {
+    const opts = options || {};
+    const silent = opts.silent === true;
+    try {
+        const resp = await fetch('/api/annotation');
+        if (!resp.ok) {
+            return;
+        }
+
+        const payload = await resp.json();
+        const ann = payload && (payload.data || payload);
+        if (!ann) {
+            return;
+        }
+
+        if (ann.annotation_size) {
+            annCvs.width = Number(ann.annotation_size.width) || annCvs.width;
+            annCvs.height = Number(ann.annotation_size.height) || annCvs.height;
+        }
+
+        if (ann.source_info) {
+            annotationSource = {
+                capture_source: ann.source_info.capture_source || 'file',
+                camera_url: ann.source_info.camera_url || '',
+                camera_name: ann.source_info.camera_name || '',
+                shelf_code: ann.source_info.shelf_code || ''
+            };
+            if (annotationSource.camera_url) {
+                document.getElementById('cameraIpInput').value = annotationSource.camera_url;
+            }
+        }
+
+        if (Array.isArray(ann.shelves)) {
+            shelves = ann.shelves.filter((s) => s && s.shelf_code);
+            if (!shelves.length) {
+                return;
+            }
+
+            syncShelfSelectOptions(shelves[0].shelf_code);
+            activeShelfIndex = 0;
+            loadShelfIntoEditor(shelves[0]);
+            document.getElementById('cameraNameInput').value = shelves[0].shelf_code || '';
+        } else if (Array.isArray(ann.boxes) && ann.boxes.length) {
+            const legacyShelfCode = (ann.source_info && (ann.source_info.shelf_code || ann.source_info.camera_name)) || 'SHELF_1';
+            const legacyShelf = {
+                shelf_code: legacyShelfCode,
+                shelf_corners: ann.shelf_corners || [],
+                grid_shape: ann.grid_shape || [gridRows, gridCols],
+                boxes: ann.boxes
+            };
+            shelves = [legacyShelf];
+            syncShelfSelectOptions(legacyShelfCode);
+            activeShelfIndex = 0;
+            loadShelfIntoEditor(legacyShelf);
+            document.getElementById('cameraNameInput').value = legacyShelfCode;
+        } else {
+            return;
+        }
+
+        if (!silent) {
+            setStatus('已加载 annotation.json，显示网格与 box_id。', 'ok');
+        }
+    } catch (_err) {
+        // no-op: 没有标注文件时不显示
+    }
+}
+
+async function loadLastFrameOnStartup() {
+    if (bgImage.src) return;
+    try {
+        const resp = await fetch('/api/last_frame');
+        if (!resp.ok) {
+            return;
+        }
+
+        const payload = await resp.json();
+        if (!payload || !payload.image) {
+            return;
+        }
+
+        renderFrameAndEnterAnnotating('data:image/jpeg;base64,' + payload.image, '已加载上次抓帧画面。');
+    } catch (_err) {
+        // no-op: 没有缓存帧时不处理
+    }
+}
+
+function upsertShelf(payload) {
+    const code = String(payload.shelf_code || '').trim();
+    if (!code) return -1;
+    const idx = shelves.findIndex((s) => String(s.shelf_code || '') === code);
+    if (idx >= 0) {
+        shelves[idx] = payload;
+        activeShelfIndex = idx;
+    } else {
+        shelves.push(payload);
+        activeShelfIndex = shelves.length - 1;
+    }
+    syncShelfSelectOptions(code);
+    return activeShelfIndex;
+}
+
+function resetForNextShelf() {
+    resetAnnotationSession({ preserveCanvas: true, preserveLoaded: false, preserveGrid: false });
+    loadedAnnotation = null;
+    shelfPoints = [];
+    M_fwd = null;
+    M_inv = null;
+    activeShelfIndex = -1;
+    renderAnnotator();
+    renderBoxEditor();
+}
+
+async function saveAllShelvesToServer() {
+    if (!shelves.length) {
+        alert('暂无可保存的货架标注');
+        return { ok: false };
+    }
+
+    setStatus('正在保存标注...', 'warn');
+    const payload = makeAnnotationPayload();
+
+    try {
+        const resp = await fetch('/api/save_annotation', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const result = await resp.json();
+        if (resp.ok && result.status === 'success') {
+            setStatus(`标注已保存成功：${result.json_path || ''}`, 'ok');
+            await loadAnnotationOnStartup({ silent: true });
+            return { ok: true };
+        }
+
+        setStatus(`保存失败：${result.error || '未知错误'}`, 'err');
+        return { ok: false };
+    } catch (err) {
+        setStatus(`保存失败：${err.message || '无法连接服务'}`, 'err');
+        return { ok: false };
+    }
+}
+
+function finishAnnotationSession() {
+    if (shelfPoints.length >= 4 && M_inv) {
+        const shelfCode = getShelfCodeFromUI(getCameraUrlFromUI());
+        if (!shelfCode) {
+            alert('请先填写货架id名称(必选)');
+            return;
+        }
+
+        const shelfCheck = validateShelfCodeUnique(shelfCode);
+        if (!shelfCheck.ok) {
+            alert(shelfCheck.message);
+            return;
+        }
+
+        const idCheck = validateBoxIdsBeforeSave();
+        if (!idCheck.ok) {
+            alert(idCheck.message);
+            return;
+        }
+
+        const shelfPayload = makeShelfPayload(shelfCode);
+        upsertShelf(shelfPayload);
+    }
+
+    void saveAllShelvesToServer();
+}
+
+async function saveAnnotationOnly() {
+    if (shelfPoints.length < 4 || !M_inv) {
+        alert('请先完成四点标注');
+        return;
+    }
+
+    const fallbackShelfCode = activeShelfIndex >= 0 ? shelves[activeShelfIndex].shelf_code : '';
+    const shelfCode = getShelfCodeFromUI(getCameraUrlFromUI()) || fallbackShelfCode;
+    if (!shelfCode) {
+        alert('请先填写货架id名称(必选)');
+        return;
+    }
+
+    const shelfCheck = validateShelfCodeUnique(shelfCode);
+    if (!shelfCheck.ok) {
+        alert(shelfCheck.message);
+        return;
+    }
+
+    const idCheck = validateBoxIdsBeforeSave();
+    if (!idCheck.ok) {
+        alert(idCheck.message);
+        return;
+    }
+
+    const shelfPayload = makeShelfPayload(shelfCode);
+    upsertShelf(shelfPayload);
+
+    const result = await saveAllShelvesToServer();
+    if (result.ok) {
+        resetForNextShelf();
+    }
+}
+
+</script>
+</body>
+</html>

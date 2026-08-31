@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://visual-dps.local/schemas/topology-overview.schema.json",
+  "title": "TopologyOverview",
+  "type": "object",
+  "required": ["status", "generated_at", "graph", "paths", "issues"],
+  "properties": {
+    "schema": { "type": "integer", "const": 1 },
+    "status": { "type": "string", "enum": ["success", "error"] },
+    "message": { "type": "string" },
+    "generated_at": { "type": "number" },
+    "poll_recommended_ms": { "type": "integer", "minimum": 500, "default": 2500 },
+    "graph": { "$ref": "#/$defs/Graph" },
+    "paths": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/TopologyPath" }
+    },
+    "issues": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/TopologyIssue" }
+    },
+    "capabilities": { "$ref": "#/$defs/Capabilities" }
+  },
+  "$defs": {
+    "Health": {
+      "type": "string",
+      "enum": ["ok", "warn", "error", "unknown"]
+    },
+    "NodeKind": {
+      "type": "string",
+      "enum": [
+        "source",
+        "mediamtx",
+        "mediamtx_path",
+        "inference",
+        "redis",
+        "event_worker",
+        "ui",
+        "client"
+      ]
+    },
+    "PortBinding": {
+      "type": "object",
+      "required": ["name", "protocol"],
+      "properties": {
+        "name": { "type": "string" },
+        "protocol": { "type": "string", "enum": ["tcp", "udp"] },
+        "host_port": { "type": ["integer", "null"] },
+        "container_port": { "type": ["integer", "null"] },
+        "bind": { "type": "string" }
+      }
+    },
+    "TopologyNode": {
+      "type": "object",
+      "required": ["id", "kind", "label", "health"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "$ref": "#/$defs/NodeKind" },
+        "label": { "type": "string" },
+        "health": { "$ref": "#/$defs/Health" },
+        "host": { "type": "string" },
+        "hostname": { "type": "string" },
+        "ip": { "type": "string" },
+        "ports": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PortBinding" }
+        },
+        "meta": { "type": "object" }
+      }
+    },
+    "TopologyEdge": {
+      "type": "object",
+      "required": ["id", "from", "to", "direction", "protocol", "endpoint", "health"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "direction": { "type": "string", "enum": ["push", "pull"] },
+        "protocol": {
+          "type": "string",
+          "enum": ["rtsp", "redis_stream", "redis_pubsub", "http", "docker"]
+        },
+        "role": {
+          "type": "string",
+          "enum": ["publish", "play", "pose", "event", "preview", "config"]
+        },
+        "endpoint": { "type": "string" },
+        "health": { "$ref": "#/$defs/Health" },
+        "bytes_per_sec": { "type": "number" },
+        "meta": { "type": "object" }
+      }
+    },
+    "Graph": {
+      "type": "object",
+      "required": ["nodes", "edges"],
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/TopologyNode" }
+        },
+        "edges": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/TopologyEdge" }
+        }
+      }
+    },
+    "StreamProbe": {
+      "type": "object",
+      "required": ["reachable"],
+      "properties": {
+        "reachable": { "type": "boolean" },
+        "latency_ms": { "type": ["number", "null"] },
+        "error": { "type": "string" }
+      }
+    },
+    "ConfiguredEndpoints": {
+      "type": "object",
+      "properties": {
+        "playback_url": { "type": "string" },
+        "pull_url": { "type": "string" },
+        "annotation_camera_url": { "type": "string" },
+        "mtx_path": { "type": "string" },
+        "hls": { "type": "string" },
+        "whep": { "type": "string" }
+      }
+    },
+    "PosePipelineStatus": {
+      "type": "object",
+      "properties": {
+        "snapshot_present": { "type": "boolean" },
+        "last_ts_age_sec": { "type": ["number", "null"] },
+        "frame_idx": { "type": ["integer", "null"] },
+        "publishing": { "type": "boolean" },
+        "frozen": { "type": "boolean" },
+        "recent_frame_delta": { "type": ["integer", "null"] },
+        "expect_pose": { "type": "boolean" }
+      }
+    },
+    "RuntimeEndpoints": {
+      "type": "object",
+      "properties": {
+        "infer_stream_url": { "type": "string" },
+        "infer_stream_probe": { "$ref": "#/$defs/StreamProbe" },
+        "external_publish_hint": { "type": "string" },
+        "pose": { "$ref": "#/$defs/PosePipelineStatus" }
+      }
+    },
+    "MediamtxPathStatus": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string" },
+        "ready": { "type": "boolean" },
+        "available": { "type": "boolean" },
+        "source": {
+          "type": ["object", "null"],
+          "properties": {
+            "type": { "type": "string" },
+            "id": { "type": "string" }
+          }
+        },
+        "readers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string" },
+              "id": { "type": "string" }
+            }
+          }
+        },
+        "bytes_received": { "type": "integer" },
+        "bytes_sent": { "type": "integer" }
+      }
+    },
+    "InferencePathStatus": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["stopped", "starting", "running", "paused", "error"]
+        },
+        "container_name": { "type": "string" },
+        "container_id": { "type": "string" },
+        "docker_status": { "type": "string" },
+        "backend": { "type": "string" },
+        "stream_url": { "type": "string" },
+        "message": { "type": "string" },
+        "hostname": { "type": "string" },
+        "ip": { "type": "string" },
+        "gpu": {
+          "type": "object",
+          "properties": {
+            "requested": { "type": "boolean" },
+            "available": { "type": "boolean" },
+            "warning": { "type": "string" }
+          }
+        },
+        "pose_publish": {
+          "type": "object",
+          "properties": {
+            "delivery": { "type": "string" },
+            "stream_key": { "type": "string" },
+            "group": { "type": "string" }
+          }
+        }
+      }
+    },
+    "EventPathStatus": {
+      "type": "object",
+      "properties": {
+        "worker_container": { "type": "string" },
+        "consumer_group": { "type": "string" },
+        "consumer_name": { "type": "string" },
+        "redis_url": { "type": "string" },
+        "last_pose_age_sec": { "type": ["number", "null"] }
+      }
+    },
+    "TopologyPath": {
+      "type": "object",
+      "required": ["camera_id", "health"],
+      "properties": {
+        "camera_id": { "type": "string" },
+        "camera_name": { "type": "string" },
+        "source_type": {
+          "type": "string",
+          "enum": ["publisher", "rtsp_pull", "external"]
+        },
+        "configured": { "$ref": "#/$defs/ConfiguredEndpoints" },
+        "runtime": { "$ref": "#/$defs/RuntimeEndpoints" },
+        "mediamtx": { "$ref": "#/$defs/MediamtxPathStatus" },
+        "inference": { "$ref": "#/$defs/InferencePathStatus" },
+        "event": { "$ref": "#/$defs/EventPathStatus" },
+        "health": { "$ref": "#/$defs/Health" },
+        "issues": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "TopologyIssue": {
+      "type": "object",
+      "required": ["code", "severity", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "severity": { "type": "string", "enum": ["error", "warn", "info"] },
+        "camera_id": { "type": "string" },
+        "message": { "type": "string" },
+        "hint": { "type": "string" }
+      }
+    },
+    "Capabilities": {
+      "type": "object",
+      "properties": {
+        "docker": { "type": "boolean" },
+        "mediamtx_api": { "type": "boolean" },
+        "redis_info": { "type": "boolean" }
+      }
+    }
+  }
+}

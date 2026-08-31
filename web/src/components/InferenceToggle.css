@@ -1,0 +1,98 @@
+.infer-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.infer-toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.infer-toggle-track {
+  position: relative;
+  display: block;
+  width: 40px;
+  height: 22px;
+  border-radius: 11px;
+  background: #3a4f5f;
+  border: 1px solid #4a6275;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.infer-toggle-track::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #9ab1c4;
+  transition: transform 0.2s, background 0.2s;
+}
+
+.infer-toggle.on .infer-toggle-track {
+  background: #1e4d3a;
+  border-color: #2a6b4a;
+}
+
+.infer-toggle.on .infer-toggle-track::after {
+  transform: translateX(18px);
+  background: #5dffa8;
+}
+
+.infer-toggle.loading .infer-toggle-track::after {
+  opacity: 0.6;
+}
+
+.infer-toggle input:disabled + .infer-toggle-track {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.infer-toggle input:disabled ~ * {
+  cursor: not-allowed;
+}
+
+.infer-toggle input:focus-visible + .infer-toggle-track {
+  outline: 2px solid #00d4aa;
+  outline-offset: 2px;
+}
+
+.infer-toggle--labeled {
+  gap: 8px;
+  padding: 3px 8px 3px 4px;
+  border-radius: 6px;
+  border: 1px solid #2b3a45;
+  background: rgba(20, 28, 34, 0.6);
+}
+
+.infer-toggle-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #8fa3b5;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.infer-toggle--labeled.on .infer-toggle-label,
+.infer-status-running .infer-toggle-label {
+  color: #2ecc71;
+}
+
+.infer-status-starting .infer-toggle-label {
+  color: #f1c40f;
+}
+
+.infer-status-error .infer-toggle-label {
+  color: #ff6b6b;
+}
+
+.infer-status-paused .infer-toggle-label {
+  color: #8fa3b5;
+}

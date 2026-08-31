@@ -1,0 +1,87 @@
+.monitor-shelf-bar {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 4px 2px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.monitor-shelf-tab-wrap {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.monitor-shelf-tab-wrap.active .monitor-shelf-tab {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.monitor-shelf-tab {
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 6px;
+  border: 1px solid #2b3a45;
+  background: #141c22;
+  color: #8fa3b5;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+
+.monitor-shelf-tab:hover {
+  color: #eaf2f8;
+  border-color: #3d5260;
+}
+
+.monitor-shelf-tab.active {
+  color: #00d4aa;
+  border-color: rgba(0, 212, 170, 0.45);
+  background: rgba(0, 212, 170, 0.1);
+}
+
+.monitor-shelf-tab-add {
+  border-style: dashed;
+  color: #7a92a8;
+}
+
+.monitor-shelf-tab-del {
+  flex-shrink: 0;
+  width: 28px;
+  height: 32px;
+  padding: 0;
+  border-radius: 0 6px 6px 0;
+  border: 1px solid rgba(231, 76, 60, 0.45);
+  border-left: none;
+  background: rgba(231, 76, 60, 0.12);
+  color: #e74c3c;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.monitor-shelf-tab-del:hover {
+  background: rgba(231, 76, 60, 0.22);
+  color: #ff6b5a;
+}
+
+.monitor-shelf-bar.is-readonly .monitor-shelf-tab--readonly {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  cursor: default;
+  pointer-events: none;
+  user-select: none;
+  color: #8fa3b5;
+  border-color: #2b3a45;
+  background: #141c22;
+}

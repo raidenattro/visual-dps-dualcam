@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="DiDPS">
+  <defs>
+    <clipPath id="favicon-inner-clip">
+      <rect x="5.75" y="5.75" width="20.5" height="20.5" rx="4.25"/>
+    </clipPath>
+  </defs>
+  <rect width="32" height="32" rx="7" fill="#0f1419"/>
+  <g clip-path="url(#favicon-inner-clip)">
+    <rect x="5" y="5" width="22" height="22" rx="5" fill="#141c22" stroke="#2b3a45" stroke-width="1.5"/>
+    <rect x="6" y="7.5" width="2" height="17" rx="1" fill="#00d4aa"/>
+    <rect x="9" y="7.5" width="5" height="5" rx="1.5" fill="#1e2a33"/>
+    <rect x="15" y="7.5" width="5" height="5" rx="1.5" fill="#1e2a33"/>
+    <rect x="21" y="7.5" width="5" height="5" rx="1.5" fill="#1e2a33"/>
+    <rect x="9" y="13.5" width="5" height="5" rx="1.5" fill="#1e2a33"/>
+    <rect x="15" y="13.5" width="5" height="5" rx="1.5" fill="#00d4aa"/>
+    <rect x="21" y="13.5" width="5" height="5" rx="1.5" fill="#1e2a33"/>
+    <rect x="9" y="19.5" width="5" height="5" rx="1.5" fill="#1e2a33"/>
+    <rect x="15" y="19.5" width="5" height="5" rx="1.5" fill="#1e2a33"/>
+    <rect x="21" y="19.5" width="5" height="5" rx="1.5" fill="#1e2a33"/>
+  </g>
+</svg>

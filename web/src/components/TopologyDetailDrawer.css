@@ -1,0 +1,73 @@
+.topology-drawer-panel {
+  width: min(480px, 100vw);
+}
+
+.topology-drawer-section h3 {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+  color: #8b9cad;
+  font-weight: 600;
+}
+
+.topology-drawer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.topology-drawer-cam-id {
+  font-size: 0.82rem;
+  color: #7d8fa3;
+  font-family: ui-monospace, Consolas, monospace;
+}
+
+.topology-drawer-note,
+.topology-drawer-empty {
+  margin: 0;
+  color: #8b9cad;
+  font-size: 0.85rem;
+}
+
+.topology-edge-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.topology-edge-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 10px;
+  padding: 8px;
+  border-radius: 6px;
+  background: #0d1319;
+  font-size: 0.78rem;
+}
+
+.topology-edge-row.ok {
+  border-left: 3px solid #2d6a4f;
+}
+
+.topology-edge-row.warn {
+  border-left: 3px solid #e9c46a;
+}
+
+.topology-edge-row.error {
+  border-left: 3px solid #9d0208;
+}
+
+.topology-edge-row.unknown {
+  border-left: 3px solid #6d8299;
+}
+
+.topology-edge-dir {
+  font-weight: 600;
+  color: #4cc9f0;
+  white-space: nowrap;
+}
+
+.topology-edge-endpoint {
+  color: #dce4ec;
+  word-break: break-all;
+}

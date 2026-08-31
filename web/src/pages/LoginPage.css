@@ -1,0 +1,130 @@
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: radial-gradient(ellipse at top, #1a2832 0%, #0f1419 55%);
+}
+
+.login-page-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  background: #182027;
+  border: 1px solid #2b3a45;
+  border-radius: 12px;
+  padding: 28px 24px;
+}
+
+.login-brand {
+  margin: 0 0 20px;
+  padding: 0;
+  border: none;
+  font: inherit;
+  font-weight: normal;
+}
+
+.login-logo {
+  display: block;
+  width: 100%;
+  max-width: 172px;
+  height: auto;
+}
+
+.login-tagline {
+  margin: 6px 0 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #6d8496;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.login-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: #9ab1c4;
+}
+
+.login-form input {
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid #3a4f5f;
+  background: #0f1419;
+  color: #eaf2f8;
+  font-size: 1rem;
+}
+
+.login-form button {
+  margin-top: 4px;
+  padding: 10px 14px;
+  border: none;
+  border-radius: 6px;
+  background: #00d4aa;
+  color: #072018;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.login-form button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.login-error {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #3d1f1f;
+  color: #ff9a9a;
+  font-size: 0.85rem;
+}
+
+.login-oauth {
+  margin-top: 16px;
+  text-align: center;
+}
+
+.login-divider {
+  display: block;
+  color: #6b7f8f;
+  font-size: 0.8rem;
+  margin-bottom: 12px;
+}
+
+.login-oauth-btn {
+  display: block;
+  padding: 10px 14px;
+  border-radius: 6px;
+  border: 1px solid #3a4f5f;
+  background: #141c22;
+  color: #00d4aa;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.login-oauth-btn:hover {
+  background: #1e2d38;
+}
+
+.auth-loading {
+  min-height: 40vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #8fa3b5;
+}

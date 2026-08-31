@@ -1,0 +1,312 @@
+.matrix-page h1 {
+  margin: 0 0 4px;
+  font-size: 1.35rem;
+}
+
+.matrix-sub {
+  margin: 0;
+  color: #8b9cad;
+  font-size: 0.88rem;
+}
+
+.matrix-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.matrix-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.matrix-updated {
+  font-size: 0.82rem;
+  color: #7d8fa3;
+}
+
+.matrix-refresh {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid #3d5166;
+  background: #1a2430;
+  color: #e8eef4;
+  cursor: pointer;
+}
+
+.matrix-refresh:hover:not(:disabled) {
+  border-color: #00d4aa;
+}
+
+.matrix-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.matrix-legend-item {
+  font-size: 0.75rem;
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+}
+
+.matrix-msg {
+  color: #8b9cad;
+}
+
+.matrix-msg.err {
+  color: #ff6b81;
+}
+
+.matrix-cameras {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+
+.matrix-camera {
+  min-width: 0;
+  background: #121a22;
+  border: 1px solid #2b3a45;
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.matrix-camera-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 52px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #24303c;
+}
+
+.matrix-camera-link {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #e8eef4;
+  text-decoration: none;
+}
+
+.matrix-camera-link:hover {
+  color: #00d4aa;
+}
+
+.matrix-camera-id {
+  margin-left: 8px;
+  font-size: 0.78rem;
+  color: #6d8296;
+}
+
+.matrix-camera-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 6px;
+  min-height: 22px;
+  flex: 1 1 140px;
+  justify-content: flex-end;
+}
+
+.matrix-badge {
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #1e2a36;
+  color: #a8b8c8;
+  border: 1px solid #2f4050;
+}
+
+.matrix-badge.st-online {
+  color: #2ecc71;
+  border-color: rgba(46, 204, 113, 0.35);
+}
+
+.matrix-badge.st-offline {
+  color: #95a5a6;
+}
+
+.matrix-badge.infer-running {
+  color: #00d4aa;
+}
+
+.matrix-badge.infer-starting {
+  color: #f39c12;
+}
+
+.matrix-badge.infer-error {
+  color: #ff6b81;
+}
+
+.matrix-badge.warn {
+  color: #f39c12;
+}
+
+.matrix-empty-shelf {
+  margin: 0;
+  color: #7d8fa3;
+  font-size: 0.88rem;
+}
+
+.matrix-shelves {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.matrix-shelf {
+  background: #0d1218;
+  border: 1px solid #24303c;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.matrix-shelf-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.matrix-shelf-code {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.matrix-shelf-name {
+  font-size: 0.8rem;
+  color: #8b9cad;
+}
+
+.matrix-shelf-meta {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: #6d8296;
+}
+
+.matrix-grid {
+  display: grid;
+  gap: 2px;
+}
+
+.matrix-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 20px;
+  min-width: 0;
+  padding: 1px 2px;
+  border-radius: 3px;
+  border: 1px solid #2b3a45;
+  text-decoration: none;
+  font-size: 0.62rem;
+  line-height: 1;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.matrix-cell:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.matrix-cell-id {
+  font-weight: 600;
+  color: inherit;
+}
+
+.matrix-cell--compact {
+  min-height: 22px;
+  padding: 2px 6px;
+  display: inline-flex;
+}
+
+.matrix-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.matrix-unplaced {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #2b3a45;
+}
+
+.matrix-unplaced-label {
+  display: block;
+  font-size: 0.7rem;
+  color: #6d8296;
+  margin-bottom: 4px;
+}
+
+.cell-empty {
+  background: rgba(255, 255, 255, 0.03);
+  color: #4a5d6e;
+  cursor: default;
+}
+
+.cell-configured {
+  background: rgba(55, 66, 250, 0.12);
+  border-color: rgba(83, 82, 237, 0.35);
+  color: #a5b4fc;
+}
+
+.cell-monitoring {
+  background: rgba(0, 212, 170, 0.15);
+  border-color: rgba(0, 212, 170, 0.4);
+  color: #7ee8d0;
+}
+
+.cell-hit {
+  background: rgba(243, 156, 18, 0.22);
+  border-color: rgba(243, 156, 18, 0.55);
+  color: #ffeaa7;
+}
+
+.cell-alarm {
+  background: rgba(255, 71, 87, 0.28);
+  border-color: rgba(255, 107, 129, 0.65);
+  color: #ffb8c2;
+  animation: matrix-alarm-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes matrix-alarm-pulse {
+  50% {
+    box-shadow: 0 0 0 2px rgba(255, 71, 87, 0.35);
+  }
+}
+
+.matrix-legend-item.cell-empty {
+  background: rgba(255, 255, 255, 0.05);
+  color: #6d8296;
+}
+
+.matrix-legend-item.cell-configured {
+  background: rgba(55, 66, 250, 0.15);
+  color: #a5b4fc;
+}
+
+.matrix-legend-item.cell-monitoring {
+  background: rgba(0, 212, 170, 0.15);
+  color: #7ee8d0;
+}
+
+.matrix-legend-item.cell-hit {
+  background: rgba(243, 156, 18, 0.2);
+  color: #ffeaa7;
+}
+
+.matrix-legend-item.cell-alarm {
+  background: rgba(255, 71, 87, 0.22);
+  color: #ffb8c2;
+}

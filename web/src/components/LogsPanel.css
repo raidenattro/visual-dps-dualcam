@@ -1,0 +1,39 @@
+/* 日志页专用（共用样式见 SettingsPage.css） */
+
+.logs-sort-btn {
+  background: none;
+  border: none;
+  color: #9ab1c4;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0;
+}
+
+.logs-sort-btn.is-active {
+  color: #00d4aa;
+}
+
+.logs-sort-btn:hover {
+  color: #eaf2f8;
+}
+
+.logs-cell-time {
+  white-space: nowrap;
+  font-family: ui-monospace, monospace;
+  font-size: 0.82rem;
+}
+
+.logs-cell-summary {
+  max-width: 360px;
+  word-break: break-word;
+  color: #c7d6e2;
+}
+
+.log-badge-ok {
+  color: #2ecc71;
+}
+
+.log-badge-err {
+  color: #ff6b6b;
+}

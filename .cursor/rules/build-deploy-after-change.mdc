@@ -1,0 +1,47 @@
+---
+description: 改完 web/services 后必须本地构建并同步到运行中的 visual-dps-ui，勿只改代码不部署
+alwaysApply: true
+---
+
+# 改动后自动构建部署（必须）
+
+完成 **web/**、**services/**、**core/**（UI/API 运行时）相关修改后，**在同一轮对话内**执行构建与部署，再向用户汇报。不要只说「需重新构建」而不执行。
+
+## 快速热更新（本机已有 `visual-dps-ui` 容器）
+
+在仓库根目录：
+
+```bash
+# 1) 前端
+(cd web && npm run build)
+docker cp web/dist/. visual-dps-ui:/app/web/dist/
+
+# 2) 若改了 Python API（按实际路径 cp，示例）
+docker cp core/product_version.py visual-dps-ui:/app/core/product_version.py
+docker cp services/version_service.py visual-dps-ui:/app/services/version_service.py
+# 其他 services/*.py、topology 等同理
+```
+
+## 容器未运行
+
+```bash
+docker compose up -d redis mediamtx visual-dps-ui visual-dps-event-worker
+# 再执行上面的 build + docker cp
+```
+
+## 需改镜像 / Dockerfile / 依赖
+
+```bash
+./scripts/build-ui-image.sh
+# 或带启动：./scripts/build-ui-image.sh --up
+```
+
+## 验证（至少一项）
+
+- `curl -s http://127.0.0.1:${UI_PORT:-8045}/api/version`
+- 或说明已 `docker cp`，请用户 **Ctrl+Shift+R** 强刷浏览器
+
+## 注意
+
+- UI 镜像 **不会**自动包含最新 `web/dist`；未 `npm run build` + `docker cp` 则页面仍是旧版。
+- `docker cp` 路径用**仓库根**的 `web/dist`，勿在 `web/` 子目录里写错成 `web/web/dist`。
