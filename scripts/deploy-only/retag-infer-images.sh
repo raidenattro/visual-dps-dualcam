@@ -56,7 +56,10 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --skip-lite-cpu) SKIP_LITE_CPU=1; shift ;;
+    --skip-lite-cpu)
+      echo "警告: --skip-lite-cpu 已无意义（只 retag gpu-onnx），已忽略。" >&2
+      shift
+      ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "未知选项: $1（见 --help）" >&2; exit 1 ;;
     *)
@@ -132,8 +135,6 @@ fi
 [[ "${SKIP_LITE_CPU}" -eq 1 ]] && echo "    （跳过 CPU lite）"
 
 repos=(
-  visual-dps-inference-lite
-  visual-dps-inference-lite-gpu
   visual-dps-inference-lite-gpu-onnx
 )
 
@@ -161,15 +162,8 @@ retag_repo() {
 
 fail=0
 for repo in "${repos[@]}"; do
-  if [[ "${repo}" == "visual-dps-inference-lite" && "${SKIP_LITE_CPU}" -eq 1 ]]; then
-    echo "SKIP: ${repo} (--skip-lite-cpu)"
-    continue
-  fi
-
   if retag_repo "${repo}"; then
     :
-  elif [[ "${repo}" == "visual-dps-inference-lite" ]]; then
-    echo "WARN: 缺少 ${repo} 旧/新 tag（CPU lite 非 GPU 现场必需；verify 时用 --skip-lite-cpu）" >&2
   else
     echo "FAIL: ${repo} 无旧 tag（${OLD_TAG_CANDIDATES[*]}）且无 ${repo}:${NEW_TAG}" >&2
     fail=1
@@ -178,12 +172,12 @@ done
 
 if [[ "${fail}" -ne 0 ]]; then
   echo "" >&2
-  echo "提示: 确认目标机已有 gpu/gpu-onnx 推理镜像（0817 / 0813 / 0727 任一 tag）。" >&2
-  echo "      可显式指定: $0 --skip-lite-cpu <旧TAG>" >&2
+  echo "提示: 确认目标机已有 gpu-onnx 推理镜像（0817 / 0813 / 0727 任一 tag）。" >&2
+  echo "      可显式指定: $0 <旧TAG>" >&2
   echo "      0817: 20260817-feature-eventworker2-0b26d8a" >&2
   echo "      0813: 20260813-feature-eventworker2-5e4f4fe" >&2
   echo "      0727: 20260727-test-from-4841de6a-85288b7" >&2
   exit 1
 fi
 
-echo "==> retag 完成。请执行: ./verify-images.sh --skip-lite-cpu"
+echo "==> retag 完成。请执行: ./verify-images.sh"

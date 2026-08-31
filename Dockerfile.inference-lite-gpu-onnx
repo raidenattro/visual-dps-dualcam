@@ -33,5 +33,5 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 COPY services ./services
 COPY core ./core
-COPY version.json ./version.json
+COPY web/version.json ./version.json
 COPY inference_worker.py ./inference_worker.py

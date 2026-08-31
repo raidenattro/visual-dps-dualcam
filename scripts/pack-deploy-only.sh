@@ -50,7 +50,7 @@ fi
 cp "${ROOT}/docker-compose.yml" "${APP}/"
 cp "${ROOT}/docker-compose.deploy.yml" "${APP}/"
 cp "${ROOT}/app_config.json" "${APP}/"
-cp "${ROOT}/version.json" "${APP}/"
+cp "${ROOT}/web/version.json" "${APP}/"
 cp -a "${ROOT}/deploy" "${APP}/"
 [[ -f "${ROOT}/.env" ]] && cp "${ROOT}/.env" "${APP}/.env" || cp "${ROOT}/deploy/offline.env.example" "${APP}/.env"
 
@@ -65,8 +65,6 @@ patch_env() {
 }
 
 patch_env "VISUAL_DPS_IMAGE_TAG" "${TAG}"
-patch_env "INFERENCE_LITE_IMAGE" "visual-dps-inference-lite:${TAG}"
-patch_env "INFERENCE_LITE_GPU_IMAGE" "visual-dps-inference-lite-gpu:${TAG}"
 patch_env "INFERENCE_LITE_GPU_ONNX_IMAGE" "visual-dps-inference-lite-gpu-onnx:${TAG}"
 patch_env "HOST_PROJECT_ROOT" "${HOST_ROOT}"
 patch_env "TZ" "Asia/Shanghai"

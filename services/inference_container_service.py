@@ -21,8 +21,6 @@ from services.runtime_config_service import effective_pipeline_log_enabled, get_
 
 INFERENCE_CONTAINER_PREFIX = os.environ.get("INFERENCE_CONTAINER_PREFIX", "visual-dps-infer-")
 INFERENCE_IMAGE = os.environ.get("INFERENCE_IMAGE", "").strip()
-INFERENCE_LITE_IMAGE = os.environ.get("INFERENCE_LITE_IMAGE", "").strip()
-INFERENCE_LITE_GPU_IMAGE = os.environ.get("INFERENCE_LITE_GPU_IMAGE", "").strip()
 INFERENCE_LITE_GPU_ONNX_IMAGE = os.environ.get("INFERENCE_LITE_GPU_ONNX_IMAGE", "").strip()
 HOST_PROJECT_ROOT = os.environ.get("HOST_PROJECT_ROOT", "").strip()
 INFERENCE_JSON_PATH = os.environ.get(
@@ -274,43 +272,17 @@ def _first_local_image(client, repo: str) -> str:
 
 
 def _resolve_inference_image(client, backend_family: str) -> tuple[str, str]:
-    """返回 (镜像名, 后端族)。GPU 优先 lite-gpu-onnx；否则 lite / lite-gpu。"""
-    backend = backend_family
-    use_gpu = os.environ.get("INFERENCE_USE_GPU", "0") == "1"
-    lite = INFERENCE_LITE_IMAGE or _first_local_image(client, "visual-dps-inference-lite")
-    lite_gpu = INFERENCE_LITE_GPU_IMAGE or _first_local_image(client, "visual-dps-inference-lite-gpu")
-    lite_gpu_onnx = INFERENCE_LITE_GPU_ONNX_IMAGE or _first_local_image(
+    """本仓只跑 visual-dps-inference-lite-gpu-onnx，不再回退 CPU lite / lite-gpu。"""
+    backend = backend_family if backend_family in _LITE_BACKENDS else BACKEND_RTMPOSE_ONNX
+    explicit = INFERENCE_IMAGE
+    if explicit and _image_exists(client, explicit):
+        return explicit, backend
+    onnx = INFERENCE_LITE_GPU_ONNX_IMAGE or _first_local_image(
         client, "visual-dps-inference-lite-gpu-onnx"
     )
-
-    if backend in _LITE_BACKENDS and use_gpu:
-        if _image_exists(client, lite_gpu_onnx):
-            return lite_gpu_onnx, backend
-        if _image_exists(client, lite_gpu):
-            return lite_gpu, backend
-
-    explicit = INFERENCE_IMAGE
-    if explicit:
-        if _image_exists(client, explicit):
-            return explicit, backend
-        if _image_exists(client, lite):
-            return lite, backend
-        return explicit, backend
-
-    if backend in _LITE_BACKENDS:
-        if _image_exists(client, lite):
-            return lite, backend
-        if use_gpu and _image_exists(client, lite_gpu_onnx):
-            return lite_gpu_onnx, backend
-        if use_gpu and _image_exists(client, lite_gpu):
-            return lite_gpu, backend
-        return lite or "visual-dps-inference-lite:unknown", backend
-
-    if _image_exists(client, lite):
-        return lite, BACKEND_RTMPOSE_ONNX
-    if use_gpu and lite_gpu_onnx:
-        return lite_gpu_onnx, BACKEND_RTMPOSE_ONNX
-    return lite or "visual-dps-inference-lite:unknown", BACKEND_RTMPOSE_ONNX
+    if onnx and _image_exists(client, onnx):
+        return onnx, backend
+    return onnx or "visual-dps-inference-lite-gpu-onnx:unknown", backend
 
 
 def _stream_url_for_container(url: str) -> str:
@@ -487,8 +459,8 @@ def start_inference_container(camera: dict, request=None) -> dict:
             if isinstance(exc, docker.errors.ImageNotFound) or "No such image" in err:
                 return {
                     "error": (
-                        "未找到推理 Docker 镜像。本地请先执行: "
-                        "./scripts/build-inference-lite-image.sh"
+                        "未找到推理 Docker 镜像 visual-dps-inference-lite-gpu-onnx。"
+                        "请先执行: ./scripts/build-inference-lite-gpu-onnx-image.sh"
                     )
                 }
             if "HOST_PROJECT_ROOT" in err:

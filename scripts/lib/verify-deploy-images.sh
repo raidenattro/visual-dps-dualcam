@@ -15,11 +15,12 @@ visual_dps_image_ref_from_env() {
 }
 
 visual_dps_verify_deploy_images() {
-  local skip_lite_cpu="${VERIFY_SKIP_LITE_CPU:-0}"
-
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --skip-lite-cpu) skip_lite_cpu=1; shift ;;
+      --skip-lite-cpu)
+        echo "警告: --skip-lite-cpu 已无意义（本仓不再校验 CPU lite / lite-gpu），已忽略。" >&2
+        shift
+        ;;
       --skip-worker-2)
         echo "警告: --skip-worker-2 已无意义（不再校验 event-worker-2），已忽略。" >&2
         shift
@@ -31,9 +32,7 @@ visual_dps_verify_deploy_images() {
   local tag="${VISUAL_DPS_IMAGE_TAG:-}"
   [[ -n "${tag}" ]] || { echo "错误: VISUAL_DPS_IMAGE_TAG 未设置" >&2; return 1; }
 
-  local lite gpu onnx
-  lite="$(visual_dps_image_ref_from_env "${INFERENCE_LITE_IMAGE:-}" "visual-dps-inference-lite" "${tag}")"
-  gpu="$(visual_dps_image_ref_from_env "${INFERENCE_LITE_GPU_IMAGE:-}" "visual-dps-inference-lite-gpu" "${tag}")"
+  local onnx
   onnx="$(visual_dps_image_ref_from_env "${INFERENCE_LITE_GPU_ONNX_IMAGE:-}" "visual-dps-inference-lite-gpu-onnx" "${tag}")"
 
   local lib_docker="${VISUAL_DPS_PKG_ROOT:-}/scripts/lib/docker-cmd.sh"
@@ -64,18 +63,11 @@ visual_dps_verify_deploy_images() {
   _vdpi_check "bluenviron/mediamtx:1.11.3"
   _vdpi_check "visual-dps-visual-dps-ui:${tag}"
   _vdpi_check "visual-dps-event-worker:${tag}"
-  _vdpi_check "${gpu}"
   _vdpi_check "${onnx}"
-
-  if [[ "${skip_lite_cpu}" -eq 1 ]]; then
-    echo "SKIP: ${lite} (--skip-lite-cpu)"
-  else
-    _vdpi_check "${lite}"
-  fi
 
   if [[ "${fail}" -ne 0 ]]; then
     echo "" >&2
-    echo "提示: 推理镜像可从旧 tag retag，或 GPU 场景: ./verify-images.sh --skip-lite-cpu" >&2
+    echo "提示: 推理镜像请准备 visual-dps-inference-lite-gpu-onnx（可从旧 tag retag）" >&2
     return 1
   fi
   echo "==> 镜像校验通过"

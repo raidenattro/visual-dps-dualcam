@@ -41,7 +41,6 @@ IMAGES=(
   "redis:7|bluenviron/mediamtx:1.11.3"
   "visual-dps-visual-dps-ui:${TAG}"
   "visual-dps-event-worker:${TAG}"
-  "visual-dps-inference-lite-gpu:${TAG}"
   "visual-dps-inference-lite-gpu-onnx:${TAG}"
 )
 
@@ -162,7 +161,6 @@ EOF
   echo "  redis:7 + bluenviron/mediamtx:1.11.3 -> docker-images/bases-redis-mediamtx.tar"
   echo "  visual-dps-visual-dps-ui:${TAG}"
   echo "  visual-dps-event-worker:${TAG}"
-  echo "  visual-dps-inference-lite-gpu:${TAG}"
   echo "  visual-dps-inference-lite-gpu-onnx:${TAG}"
   echo ""
   echo "install:"

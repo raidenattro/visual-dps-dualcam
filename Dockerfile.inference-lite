@@ -49,7 +49,7 @@ RUN sh /tmp/pip-install.sh "${PIP_INDEX}" --upgrade pip \
 
 COPY services ./services
 COPY core ./core
-COPY version.json ./version.json
+COPY web/version.json ./version.json
 COPY inference_worker.py ./inference_worker.py
 COPY app_config.json ./app_config.json
 

@@ -28,10 +28,8 @@ sync_visual_dps_image_tag_env() {
   fi
 
   _sync_env_key "${env_file}" "VISUAL_DPS_IMAGE_TAG" "${tag}"
-  _sync_env_key "${env_file}" "INFERENCE_LITE_IMAGE" "visual-dps-inference-lite:${tag}"
-  _sync_env_key "${env_file}" "INFERENCE_LITE_GPU_IMAGE" "visual-dps-inference-lite-gpu:${tag}"
   _sync_env_key "${env_file}" "INFERENCE_LITE_GPU_ONNX_IMAGE" "visual-dps-inference-lite-gpu-onnx:${tag}"
 
   echo "  已写入 ${env_file}: VISUAL_DPS_IMAGE_TAG=${tag}"
-  echo "  已同步 INFERENCE_LITE_* → tag=${tag}"
+  echo "  已同步 INFERENCE_LITE_GPU_ONNX_IMAGE → tag=${tag}"
 }

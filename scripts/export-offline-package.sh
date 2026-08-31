@@ -8,7 +8,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 
-INFERENCE_MODE="lite"
+INFERENCE_MODE="gpu-onnx"
 OUTPUT=""
 ARCHIVE="none"       # none | tar | tar.gz
 COMPRESS="pigz"      # gzip | pigz | zstd（仅 tar.gz）
@@ -25,11 +25,12 @@ usage() {
 常用:
   ./scripts/download-model-weights.sh
   ./scripts/export-offline-complete.sh
-  ./scripts/export-offline-package.sh --inference lite -o dist/my-pkg
+  ./scripts/export-offline-package.sh --inference gpu-onnx -o dist/my-pkg
 
 选项:
   -o, --output DIR          输出目录（默认 dist/visual-dps-offline[-complete]-时间戳）
-  --inference MODE          base | lite | gpu | gpu-onnx | all
+  --inference MODE          gpu-onnx（默认）| base
+                            lite / gpu / all 已并入 gpu-onnx
   --rebuild-ui              打包前构建 UI + event-worker 镜像
   --no-models               不打包 weights/
   --allow-download-weights  源机缺权重时联网补全（默认直接失败）
@@ -45,7 +46,16 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -o|--output) OUTPUT="$2"; shift 2 ;;
-    --inference) INFERENCE_MODE="$2"; shift 2 ;;
+    --inference)
+      INFERENCE_MODE="$2"
+      case "${INFERENCE_MODE}" in
+        lite|gpu|all)
+          echo "警告: --inference ${INFERENCE_MODE} 已并入 gpu-onnx（本仓不打包 lite / lite-gpu）。" >&2
+          INFERENCE_MODE="gpu-onnx"
+          ;;
+      esac
+      shift 2
+      ;;
     --rebuild-ui) REBUILD_UI=1; shift ;;
     --skip-worker-2)
       echo "警告: --skip-worker-2 已无意义（本仓不再打包 event-worker-2），已忽略。" >&2
@@ -169,22 +179,6 @@ done
 
 case "${INFERENCE_MODE}" in
   base) ;;
-  lite)
-    lite="$(resolve_inference_repo_tag "visual-dps-inference-lite" "${INFERENCE_LITE_IMAGE:-}")"
-    [[ -n "${lite}" ]] || { echo "错误: 缺少 visual-dps-inference-lite" >&2; exit 1; }
-    require_image "${lite}"
-    IMAGES+=("${lite}")
-    EXPORTED_LITE_IMAGE="${lite}"
-    echo "  + ${lite}"
-    ;;
-  gpu)
-    gpu="$(resolve_inference_repo_tag "visual-dps-inference-lite-gpu" "${INFERENCE_LITE_GPU_IMAGE:-}")"
-    [[ -n "${gpu}" ]] || { echo "错误: 缺少 visual-dps-inference-lite-gpu" >&2; exit 1; }
-    require_image "${gpu}"
-    IMAGES+=("${gpu}")
-    EXPORTED_GPU_IMAGE="${gpu}"
-    echo "  + ${gpu}"
-    ;;
   gpu-onnx)
     onnx="$(resolve_inference_repo_tag "visual-dps-inference-lite-gpu-onnx" "${INFERENCE_LITE_GPU_ONNX_IMAGE:-}")"
     [[ -n "${onnx}" ]] || { echo "错误: 缺少 visual-dps-inference-lite-gpu-onnx" >&2; exit 1; }
@@ -193,27 +187,8 @@ case "${INFERENCE_MODE}" in
     EXPORTED_ONNX_IMAGE="${onnx}"
     echo "  + ${onnx}"
     ;;
-  all)
-    lite="$(resolve_inference_repo_tag "visual-dps-inference-lite" "")"
-    gpu="$(resolve_inference_repo_tag "visual-dps-inference-lite-gpu" "")"
-    onnx="$(resolve_inference_repo_tag "visual-dps-inference-lite-gpu-onnx" "")"
-    [[ -n "${lite}" && -n "${gpu}" && -n "${onnx}" ]] || {
-      echo "错误: 完整包需要 lite、lite-gpu、lite-gpu-onnx 镜像" >&2
-      exit 1
-    }
-    require_image "${lite}"
-    require_image "${gpu}"
-    require_image "${onnx}"
-    IMAGES+=("${lite}" "${gpu}" "${onnx}")
-    EXPORTED_LITE_IMAGE="${lite}"
-    EXPORTED_GPU_IMAGE="${gpu}"
-    EXPORTED_ONNX_IMAGE="${onnx}"
-    echo "  + ${lite}"
-    echo "  + ${gpu}"
-    echo "  + ${onnx}"
-    ;;
   *)
-    echo "错误: 未知 --inference ${INFERENCE_MODE}" >&2
+    echo "错误: 未知 --inference ${INFERENCE_MODE}（本仓仅支持 base | gpu-onnx）" >&2
     exit 1
     ;;
 esac
@@ -233,7 +208,7 @@ echo "==> 拷贝应用 -> ${APP}（不含 models）"
 cp "${ROOT}/docker-compose.yml" "${APP}/"
 cp "${ROOT}/docker-compose.deploy.yml" "${APP}/"
 cp "${ROOT}/app_config.json" "${APP}/"
-cp "${ROOT}/version.json" "${APP}/"
+cp "${ROOT}/web/version.json" "${APP}/"
 cp -a "${ROOT}/deploy" "${APP}/"
 [[ -f "${ROOT}/docker-compose.override.yml" ]] && cp "${ROOT}/docker-compose.override.yml" "${APP}/"
 cp "${ENV_FILE}" "${APP}/.env"
@@ -248,8 +223,6 @@ patch_env() {
     printf '\n%s=%s\n' "${key}" "${val}" >> "${APP}/.env"
   fi
 }
-patch_env "INFERENCE_LITE_IMAGE" "${EXPORTED_LITE_IMAGE:-}"
-patch_env "INFERENCE_LITE_GPU_IMAGE" "${EXPORTED_GPU_IMAGE:-}"
 patch_env "INFERENCE_LITE_GPU_ONNX_IMAGE" "${EXPORTED_ONNX_IMAGE:-}"
 if [[ "${EXPORTED_UI_IMAGE}" == *:* ]]; then
   patch_env "VISUAL_DPS_IMAGE_TAG" "${EXPORTED_UI_IMAGE#*:}"

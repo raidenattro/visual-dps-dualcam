@@ -11,7 +11,6 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _VERSION_CANDIDATES = (
     Path(os.environ.get("VISUAL_DPS_VERSION_FILE", "")),
-    _REPO_ROOT / "version.json",
     _REPO_ROOT / "web" / "version.json",
 )
 

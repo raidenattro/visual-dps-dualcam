@@ -32,7 +32,7 @@ COPY services ./services
 COPY core ./core
 COPY dualcam ./dualcam
 COPY app_config.json ./app_config.json
-COPY version.json ./version.json
+COPY web/version.json ./version.json
 COPY docker/ui_server.py ./ui_server.py
 
 # 由 npm run build 生成；构建前请确认 web/dist/index.html 存在

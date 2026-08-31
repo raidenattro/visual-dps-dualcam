@@ -1,17 +1,26 @@
 #!/usr/bin/env bash
 # 离线打包前预检：权重、镜像齐全、gpu-onnx 栈校验
-# 用法: ./scripts/preflight-offline-export.sh --inference all|lite|gpu|gpu-onnx|base [--no-models]
+# 用法: ./scripts/preflight-offline-export.sh --inference gpu-onnx|base [--no-models]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${ROOT}"
 
-INFERENCE_MODE="all"
+INFERENCE_MODE="gpu-onnx"
 REQUIRE_MODELS=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --inference) INFERENCE_MODE="$2"; shift 2 ;;
+    --inference)
+      INFERENCE_MODE="$2"
+      case "${INFERENCE_MODE}" in
+        lite|gpu|all)
+          echo "警告: --inference ${INFERENCE_MODE} 已并入 gpu-onnx。" >&2
+          INFERENCE_MODE="gpu-onnx"
+          ;;
+      esac
+      shift 2
+      ;;
     --no-models) REQUIRE_MODELS=0; shift ;;
     --skip-worker-2)
       echo "警告: --skip-worker-2 已无意义（本仓不再打包 event-worker-2），已忽略。" >&2
@@ -102,38 +111,14 @@ warn_latest_only "${UI}"
 ONNX_IMAGE=""
 case "${INFERENCE_MODE}" in
   base) ;;
-  lite)
-    lite="$(resolve_inference_repo_tag "visual-dps-inference-lite" "${INFERENCE_LITE_IMAGE:-}")"
-    [[ -n "${lite}" ]] || { echo "FAIL: 缺少 inference-lite" >&2; exit 1; }
-    require_image "${lite}"
-    ;;
-  gpu)
-    gpu="$(resolve_inference_repo_tag "visual-dps-inference-lite-gpu" "${INFERENCE_LITE_GPU_IMAGE:-}")"
-    [[ -n "${gpu}" ]] || { echo "FAIL: 缺少 inference-lite-gpu" >&2; exit 1; }
-    require_image "${gpu}"
-    ;;
   gpu-onnx)
     ONNX_IMAGE="$(resolve_inference_repo_tag "visual-dps-inference-lite-gpu-onnx" "${INFERENCE_LITE_GPU_ONNX_IMAGE:-}")"
     [[ -n "${ONNX_IMAGE}" ]] || { echo "FAIL: 缺少 inference-lite-gpu-onnx" >&2; exit 1; }
     require_image "${ONNX_IMAGE}"
     warn_latest_only "${ONNX_IMAGE}"
     ;;
-  all)
-    lite="$(resolve_inference_repo_tag "visual-dps-inference-lite" "")"
-    gpu="$(resolve_inference_repo_tag "visual-dps-inference-lite-gpu" "")"
-    onnx="$(resolve_inference_repo_tag "visual-dps-inference-lite-gpu-onnx" "${INFERENCE_LITE_GPU_ONNX_IMAGE:-}")"
-    [[ -n "${lite}" && -n "${gpu}" && -n "${onnx}" ]] || {
-      echo "FAIL: 完整包需 lite + lite-gpu + lite-gpu-onnx" >&2
-      exit 1
-    }
-    require_image "${lite}"
-    require_image "${gpu}"
-    require_image "${onnx}"
-    ONNX_IMAGE="${onnx}"
-    warn_latest_only "${onnx}"
-    ;;
   *)
-    echo "FAIL: 未知 --inference ${INFERENCE_MODE}" >&2
+    echo "FAIL: 未知 --inference ${INFERENCE_MODE}（本仓仅支持 base | gpu-onnx）" >&2
     exit 1
     ;;
 esac

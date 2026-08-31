@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# 构建 MediaPipe / RTMPose ONNX 轻量推理镜像
+# 本仓已取消 CPU inference-lite。现场只跑 gpu-onnx。
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "${ROOT}"
-# shellcheck disable=SC1091
-source scripts/lib/docker-build.sh
-
-visual_dps_compose_build visual-dps-inference-lite visual-dps-inference-lite inference-lite
-echo "示例: INFERENCE_BACKEND=rtmpose_t docker compose up -d visual-dps-ui"
+echo "本仓不再构建 visual-dps-inference-lite（CPU）。请改跑: $ROOT/scripts/build-inference-lite-gpu-onnx-image.sh" >&2
+exec "$ROOT/scripts/build-inference-lite-gpu-onnx-image.sh" "$@"

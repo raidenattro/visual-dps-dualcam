@@ -32,8 +32,7 @@ echo "==> [2/6] UI + Event 镜像"
 "${ROOT}/scripts/build-ui-image.sh"
 
 echo ""
-echo "==> [3/6] 推理镜像（lite / lite-gpu / lite-gpu-onnx）"
-"${ROOT}/scripts/build-inference-lite-image.sh"
+echo "==> [3/6] 推理镜像（lite-gpu 基底 + gpu-onnx）"
 "${ROOT}/scripts/build-inference-lite-gpu-image.sh"
 "${ROOT}/scripts/build-inference-lite-gpu-onnx-image.sh"
 
@@ -55,11 +54,11 @@ echo "==> [4/6] 校验 gpu-onnx: ${ONNX_REF}"
 
 echo ""
 echo "==> [5/6] 打包预检"
-"${ROOT}/scripts/preflight-offline-export.sh" --inference all
+"${ROOT}/scripts/preflight-offline-export.sh" --inference gpu-onnx
 
 echo ""
 echo "==> [6/6] 导出全量离线包"
-"${ROOT}/scripts/export-offline-package.sh" --inference all "$@"
+"${ROOT}/scripts/export-offline-package.sh" --inference gpu-onnx "$@"
 
 PKG="$(ls -dt "${ROOT}"/dist/visual-dps-offline-complete-* 2>/dev/null | head -1)"
 echo ""

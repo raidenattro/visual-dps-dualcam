@@ -24,14 +24,12 @@ if [[ -f "${PKG_ROOT}/docker-images/bundle.tar" ]]; then
       if [[ -n "${repos_json}" ]]; then
         echo "--- 镜像列表 ---"
         echo "${repos_json}" | python3 -m json.tool 2>/dev/null || echo "${repos_json}"
-        if [[ -f "${PKG_ROOT}/PACKAGE_INFO.txt" ]] && grep -q 'inference_mode: all' "${PKG_ROOT}/PACKAGE_INFO.txt"; then
-          for need in visual-dps-inference-lite visual-dps-inference-lite-gpu visual-dps-inference-lite-gpu-onnx; do
-            if echo "${repos_json}" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if '${need}' in d else 1)"; then
-              note_ok "complete 包含 ${need}"
-            else
-              note_fail "complete 包缺少 ${need}"
-            fi
-          done
+        if [[ -f "${PKG_ROOT}/PACKAGE_INFO.txt" ]] && grep -q 'inference_mode:' "${PKG_ROOT}/PACKAGE_INFO.txt"; then
+          if echo "${repos_json}" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if 'visual-dps-inference-lite-gpu-onnx' in d else 1)"; then
+            note_ok "包内包含 visual-dps-inference-lite-gpu-onnx"
+          else
+            note_fail "包缺少 visual-dps-inference-lite-gpu-onnx"
+          fi
         fi
       fi
     fi

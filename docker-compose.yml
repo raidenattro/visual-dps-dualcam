@@ -82,13 +82,11 @@ services:
       - MEDIAMTX_WEBRTC_BASE=http://mediamtx:${MEDIAMTX_WEBRTC_PORT:-8889}
       - RTSP_CAPTURE_BACKEND=opencv
       - HOST_PROJECT_ROOT=${HOST_PROJECT_ROOT:-${PWD}}
-      # 留空则由 inference_container_service 按 INFERENCE_USE_GPU / 后端自动选 lite 或 lite-gpu-onnx
+      # 检测容器只用 gpu-onnx；lite / lite-gpu 不参与运行时
       - INFERENCE_IMAGE=${INFERENCE_IMAGE:-}
-      - INFERENCE_LITE_IMAGE=${INFERENCE_LITE_IMAGE:-visual-dps-inference-lite:${VISUAL_DPS_IMAGE_TAG:-latest}}
-      - INFERENCE_LITE_GPU_IMAGE=${INFERENCE_LITE_GPU_IMAGE:-visual-dps-inference-lite-gpu:${VISUAL_DPS_IMAGE_TAG:-latest}}
       - INFERENCE_LITE_GPU_ONNX_IMAGE=${INFERENCE_LITE_GPU_ONNX_IMAGE:-visual-dps-inference-lite-gpu-onnx:${VISUAL_DPS_IMAGE_TAG:-latest}}
       - INFERENCE_CONTAINER_PREFIX=${INFERENCE_CONTAINER_PREFIX:-visual-dps-infer-}
-      - INFERENCE_USE_GPU=${INFERENCE_USE_GPU:-0}
+      - INFERENCE_USE_GPU=${INFERENCE_USE_GPU:-1}
       - INFERENCE_BACKEND=${INFERENCE_BACKEND:-rtmpose_onnx}
       - VISUAL_DPS_VERSION_FILE=/app/version.json
       - VISUAL_DPS_IMAGE_TAG=${VISUAL_DPS_IMAGE_TAG:-latest}
@@ -184,17 +182,8 @@ services:
       - /etc/localtime:/etc/localtime:ro
     restart: unless-stopped
 
-  # 以下为推理镜像构建目标（不会随 compose up 自动启动；由 UI 按摄像头 docker run）
-  # 镜像 tag 由构建脚本注入 VISUAL_DPS_IMAGE_TAG（见 AGENTS.md / scripts/lib/docker-image-tag.sh）
-  visual-dps-inference-lite:
-    profiles: ["build-only"]
-    build:
-      context: .
-      dockerfile: Dockerfile.inference-lite
-      args: *china-build-args
-    image: visual-dps-inference-lite:${VISUAL_DPS_IMAGE_TAG:?run via scripts/build-*.sh}
-    command: ["python", "inference_worker.py"]
-
+  # 推理镜像构建目标（compose up 不启动；UI 按摄像头 docker run gpu-onnx）
+  # lite-gpu 仅作 onnx Dockerfile 的 FROM 基底，不参与现场部署。
   visual-dps-inference-lite-gpu:
     profiles: ["build-only"]
     build:

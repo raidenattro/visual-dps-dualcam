@@ -98,31 +98,17 @@ def _running_inference_image_ref(client) -> str:
 def _resolve_inference_image_ref() -> str:
     client = _docker_client()
     onnx_env = os.environ.get("INFERENCE_LITE_GPU_ONNX_IMAGE", "").strip()
-    gpu_env = os.environ.get("INFERENCE_LITE_GPU_IMAGE", "").strip()
-    lite_env = os.environ.get("INFERENCE_LITE_IMAGE", "").strip()
     if client:
         running = _running_inference_image_ref(client)
         if running:
             return running
-    if not client:
-        return onnx_env or gpu_env or lite_env
-    use_gpu = os.environ.get("INFERENCE_USE_GPU", "0") == "1"
-    if use_gpu:
         for candidate in (
             onnx_env,
             _first_local_image(client, "visual-dps-inference-lite-gpu-onnx"),
-            gpu_env,
-            _first_local_image(client, "visual-dps-inference-lite-gpu"),
         ):
             if candidate and _image_exists(client, candidate):
                 return candidate
-    for candidate in (
-        lite_env,
-        _first_local_image(client, "visual-dps-inference-lite"),
-    ):
-        if candidate and _image_exists(client, candidate):
-            return candidate
-    return onnx_env or gpu_env or lite_env
+    return onnx_env
 
 
 def get_deployment_versions() -> dict:

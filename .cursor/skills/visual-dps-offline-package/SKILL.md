@@ -8,7 +8,7 @@ description: >-
 
 # Visual-DPS 全量离线打包与安装
 
-仅支持 **新机 / 整栈恢复**（7 镜像 + weights）。入口：`./scripts/export-offline-one-shot.sh`。
+仅支持 **新机 / 整栈恢复**（5 镜像 + weights）。入口：`./scripts/export-offline-one-shot.sh`。
 
 ## 包布局（v2，默认）
 
@@ -19,7 +19,7 @@ description: >-
 | `weights/` | 8 个推理权重 + `SHA256SUMS` |
 | `install.sh` / `verify-package.sh` | 目标机安装与校验 |
 
-全量通用包 = **7 镜像**（redis、mediamtx、ui、event-worker、inference-lite、lite-gpu、lite-gpu-onnx）。
+全量通用包 = **5 镜像**（redis、mediamtx、ui、event-worker、inference-lite-gpu-onnx）。
 
 ## 源机：打全量包（推荐）
 
@@ -34,7 +34,7 @@ cd <repo-root>
 ./scripts/build-ui-image.sh
 ./scripts/build-inference-lite-gpu-onnx-image.sh
 ./scripts/verify-gpu-onnx-image.sh visual-dps-inference-lite-gpu-onnx:<tag>
-./scripts/preflight-offline-export.sh --inference all
+./scripts/preflight-offline-export.sh --inference gpu-onnx
 ./scripts/export-offline-complete.sh
 ```
 
@@ -50,7 +50,7 @@ cd <repo-root>
 | `--archive tar` | 额外打未压缩 `.tar` 外壳（便于 U 盘） |
 | `--archive tar.gz --compress pigz` | 外传用压缩包（**用 pigz，勿用默认 gzip 扫 14G**） |
 | `--split 2G` | 对**外层归档**分卷 |
-| `--inference lite\|gpu-onnx\|base\|all` | 控制打进 bundle 的推理镜像 |
+| `--inference gpu-onnx\|base` | 控制打进 bundle 的推理镜像（默认 gpu-onnx） |
 | `--no-models` | 不打包 weights/ |
 | `--allow-download-weights` | 源机不齐时：**先** `deploy/recover-model-weights.sh` 从 `dist/` 旧包拷贝，**再**联网补缺失项 |
 | `FORCE_SAVE=1` | 忽略已有 `bundle.tar`，强制重做 `docker save` |
@@ -102,7 +102,7 @@ visual_dps_check_model_weights ./localdata
 |------|------|
 | export 报权重不全 | 源机 `./scripts/download-model-weights.sh` |
 | 缺镜像 | 按 inference 模式 build 对应 Dockerfile 脚本 |
-| complete 缺 lite 镜像 | 勿用 `.env` 的 `INFERENCE_LITE_IMAGE` 代替 lite；`all` 模式已固定收集三档 |
+| complete 缺 onnx 镜像 | 确认已构建 `visual-dps-inference-lite-gpu-onnx` |
 | install 报 REDIS_PASSWORD | 编辑 `app/.env` |
 | WebRTC/HLS 不可用 | 确认 `camera_ips.json` 中 RTSP 端口与 `MEDIAMTX_RTSP_PORT` 一致；运行 `regenerate-mediamtx-config.sh` |
 | 204 仅 docker-compose v1 | `install.sh` 已优先 `docker-compose.deploy.yml` |
