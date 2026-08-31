@@ -10,8 +10,18 @@ import {
 import './AisleAnnotatePage.css';
 
 const HINT = ['① 顶沿·远端', '② 顶沿·近端', '③ 底沿·近端', '④ 底沿·远端'];
-const IW = 1280;
-const IH = 720;
+const FALLBACK_W = 1280;
+const FALLBACK_H = 720;
+
+function viewSize(state, v) {
+  const s = state?.views?.[v]?.image_size;
+  if (Array.isArray(s) && s.length >= 2) {
+    const w = Number(s[0]);
+    const h = Number(s[1]);
+    if (w > 1 && h > 1) return [w, h];
+  }
+  return [FALLBACK_W, FALLBACK_H];
+}
 
 function emptyWalls() {
   return [
@@ -27,9 +37,10 @@ function emptyAisle(id) {
     contact_m: 0,
     prior: { camH: 2.84, camDist: 1.56, pitch: 45, yaw: 0 },
     cameras: { L: { camera_id: '', role: 'L' }, R: { camera_id: '', role: 'R' } },
+    aabb: { x: [-1.35, 1.35], y: [0.5, 1.65], z: [-0.12, 2.5] },
     views: {
-      L: { name: 'L', image_size: [IW, IH], walls: emptyWalls() },
-      R: { name: 'R', image_size: [IW, IH], walls: emptyWalls() },
+      L: { name: 'L', image_size: [FALLBACK_W, FALLBACK_H], prior: { camH: 2.84, camDist: 1.56, pitch: 45, yaw: 0 }, walls: emptyWalls() },
+      R: { name: 'R', image_size: [FALLBACK_W, FALLBACK_H], prior: { camH: 2.84, camDist: 1.56, pitch: 45, yaw: 0 }, walls: emptyWalls() },
     },
     slot_meshes: [],
     solved: { ok: false },
@@ -134,6 +145,7 @@ export default function AisleAnnotatePage() {
       if (!canvas) continue;
       const rect = canvas.getBoundingClientRect();
       const w = Math.max(2, Math.floor(rect.width));
+      const [IW, IH] = viewSize(state, v);
       const h = Math.max(2, Math.floor((w * IH) / IW));
       if (canvas.width !== w || canvas.height !== h) {
         canvas.width = w;
@@ -210,6 +222,7 @@ export default function AisleAnnotatePage() {
   const evtToImg = (e, v) => {
     const canvas = cvs[v].current;
     const r = canvas.getBoundingClientRect();
+    const [IW, IH] = viewSize(state, v);
     return [((e.clientX - r.left) / r.width) * IW, ((e.clientY - r.top) / r.height) * IH];
   };
 
@@ -411,6 +424,129 @@ export default function AisleAnnotatePage() {
             step="0.01"
             value={state.contact_m}
             onChange={(e) => setState({ ...state, contact_m: Number(e.target.value) })}
+          />
+        </label>
+        <p className="group-title">本巷道几何（覆盖全局默认）</p>
+        <label>
+          {activeView === 'L' ? '左路' : '右路'} 标定宽×高
+          <input
+            type="number"
+            min={320}
+            value={viewSize(state, activeView)[0]}
+            onChange={(e) => {
+              const next = { ...state, views: { ...state.views } };
+              const view = { ...(next.views[activeView] || {}) };
+              const h = viewSize(state, activeView)[1];
+              view.image_size = [Number(e.target.value), h];
+              next.views[activeView] = view;
+              setState(next);
+            }}
+          />
+          <input
+            type="number"
+            min={180}
+            value={viewSize(state, activeView)[1]}
+            onChange={(e) => {
+              const next = { ...state, views: { ...state.views } };
+              const view = { ...(next.views[activeView] || {}) };
+              const w = viewSize(state, activeView)[0];
+              view.image_size = [w, Number(e.target.value)];
+              next.views[activeView] = view;
+              setState(next);
+            }}
+          />
+        </label>
+        <label>
+          {activeView === 'L' ? '左路' : '右路'} 相机高度 m
+          <input
+            type="number"
+            step="0.01"
+            value={state.views?.[activeView]?.prior?.camH ?? state.prior?.camH ?? 2.84}
+            onChange={(e) => {
+              const next = { ...state, views: { ...state.views } };
+              const view = { ...(next.views[activeView] || {}) };
+              view.prior = { ...(view.prior || state.prior || {}), camH: Number(e.target.value) };
+              next.views[activeView] = view;
+              setState(next);
+            }}
+          />
+        </label>
+        <label>
+          {activeView === 'L' ? '左路' : '右路'} 距巷道 m
+          <input
+            type="number"
+            step="0.01"
+            value={state.views?.[activeView]?.prior?.camDist ?? state.prior?.camDist ?? 1.56}
+            onChange={(e) => {
+              const next = { ...state, views: { ...state.views } };
+              const view = { ...(next.views[activeView] || {}) };
+              view.prior = { ...(view.prior || state.prior || {}), camDist: Number(e.target.value) };
+              next.views[activeView] = view;
+              setState(next);
+            }}
+          />
+        </label>
+        <label>
+          AABB X
+          <input
+            type="number"
+            step="0.01"
+            value={(state.aabb?.x || [-1.35, 1.35])[0]}
+            onChange={(e) => {
+              const aabb = { ...(state.aabb || {}), x: [Number(e.target.value), (state.aabb?.x || [-1.35, 1.35])[1]] };
+              setState({ ...state, aabb });
+            }}
+          />
+          <input
+            type="number"
+            step="0.01"
+            value={(state.aabb?.x || [-1.35, 1.35])[1]}
+            onChange={(e) => {
+              const aabb = { ...(state.aabb || {}), x: [(state.aabb?.x || [-1.35, 1.35])[0], Number(e.target.value)] };
+              setState({ ...state, aabb });
+            }}
+          />
+        </label>
+        <label>
+          AABB Y
+          <input
+            type="number"
+            step="0.01"
+            value={(state.aabb?.y || [0.5, 1.65])[0]}
+            onChange={(e) => {
+              const aabb = { ...(state.aabb || {}), y: [Number(e.target.value), (state.aabb?.y || [0.5, 1.65])[1]] };
+              setState({ ...state, aabb });
+            }}
+          />
+          <input
+            type="number"
+            step="0.01"
+            value={(state.aabb?.y || [0.5, 1.65])[1]}
+            onChange={(e) => {
+              const aabb = { ...(state.aabb || {}), y: [(state.aabb?.y || [0.5, 1.65])[0], Number(e.target.value)] };
+              setState({ ...state, aabb });
+            }}
+          />
+        </label>
+        <label>
+          AABB Z
+          <input
+            type="number"
+            step="0.01"
+            value={(state.aabb?.z || [-0.12, 2.5])[0]}
+            onChange={(e) => {
+              const aabb = { ...(state.aabb || {}), z: [Number(e.target.value), (state.aabb?.z || [-0.12, 2.5])[1]] };
+              setState({ ...state, aabb });
+            }}
+          />
+          <input
+            type="number"
+            step="0.01"
+            value={(state.aabb?.z || [-0.12, 2.5])[1]}
+            onChange={(e) => {
+              const aabb = { ...(state.aabb || {}), z: [(state.aabb?.z || [-0.12, 2.5])[0], Number(e.target.value)] };
+              setState({ ...state, aabb });
+            }}
           />
         </label>
         <div className="btns">

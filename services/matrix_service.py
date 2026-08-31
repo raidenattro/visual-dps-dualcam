@@ -6,8 +6,10 @@ import time
 from typing import Any
 
 from services.annotation_service import flatten_annotation_boxes, load_camera_annotation
+from services.aisle_store import camera_group, load_aisle
 from services.box_identity import box_collision_token
 from services.camera_service import list_cameras_with_status
+from services.dualcam_overlay import overlay_for_role
 from services.event_bus import get_event_snapshot
 from services.inference_container_service import attach_inference_status
 
@@ -193,9 +195,21 @@ def build_matrix_overview(
         infer_status = str(infer.get("status") or "stopped")
         infer_running = infer_status in ("running", "starting")
 
-        ann = load_camera_annotation(cid, json_dir, default_json_file, camera=cam)
-        config_data = ann.get("data") if isinstance(ann.get("data"), dict) else {}
-        shelves_raw = _shelves_from_config(config_data)
+        g = camera_group(cid, json_dir)
+        overlay = None
+        if g:
+            aisle = load_aisle(g["aisle_id"], json_dir)
+            if aisle:
+                overlay = overlay_for_role(aisle, g["role"])
+
+        if overlay and overlay.get("boxes"):
+            shelves_raw = overlay.get("shelves") or []
+            annotation_found = True
+        else:
+            ann = load_camera_annotation(cid, json_dir, default_json_file, camera=cam)
+            config_data = ann.get("data") if isinstance(ann.get("data"), dict) else {}
+            shelves_raw = _shelves_from_config(config_data)
+            annotation_found = ann.get("status") == "success"
 
         event = get_event_snapshot(cid) or {}
         collisions = {str(x).strip() for x in (event.get("collisions") or []) if str(x).strip()}
@@ -211,6 +225,8 @@ def build_matrix_overview(
             for shelf in shelves_raw
         ]
         box_count = sum(s.get("box_count", 0) for s in shelves)
+        if not (overlay and overlay.get("boxes")):
+            annotation_found = bool(annotation_found) and box_count > 0
 
         cameras_out.append(
             {
@@ -227,7 +243,7 @@ def build_matrix_overview(
                     "collisions": sorted(collisions),
                     "alarm_collisions": sorted(alarms),
                 },
-                "annotation_found": ann.get("status") == "success" and box_count > 0,
+                "annotation_found": annotation_found,
                 "box_count": box_count,
                 "shelves": shelves,
             }

@@ -82,6 +82,24 @@
             "source": "visual-dps"
         }
     },
+    "dualcam": {
+        "calib_width": 1280,
+        "calib_height": 720,
+        "aabb_x_min": -1.35,
+        "aabb_x_max": 1.35,
+        "aabb_y_min": 0.50,
+        "aabb_y_max": 1.65,
+        "aabb_z_min": -0.12,
+        "aabb_z_max": 2.50,
+        "cam_h": 2.84,
+        "cam_dist": 1.56,
+        "pitch": 45,
+        "yaw": 0,
+        "contact_m": 0,
+        "pair_window_periods": 1.5,
+        "pair_window_min_sec": 0.08,
+        "pair_window_max_sec": 1.0
+    },
     "server": {
         "host": "0.0.0.0",
         "port": 8045

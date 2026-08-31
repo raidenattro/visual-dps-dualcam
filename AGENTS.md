@@ -14,12 +14,12 @@
 
 - 几何：`dualcam/solve.py`、`dualcam/geom.py`、`dualcam/lift.py`
 - 成组/标定：`services/aisle_store.py`、`services/aisle_routes.py`
-- Worker：`services/event_engine/dualcam_worker.py` → `event_worker_2.py`
+- Worker：`event_worker_2.py` → `DualcamRedisWorker`（compose 服务名 `visual-dps-event-worker`），分片键 `aisle_id`。**禁止**再启 2D worker-1 或 pick_state worker-2。
 - 标注页：`/aisle`（`web/src/pages/AisleAnnotatePage.jsx`）
 
 ## 本地测试
 
 ```bash
 cd /home/hqit/workspace/visual-dps-dualcam-exp
-python3 -m pytest tests/test_aisle_group.py tests/test_aisle_shard.py tests/test_dualcam_contact.py tests/test_dualcam_slots.py tests/test_lift_point.py -q
+python3 -m pytest tests/test_aisle_group.py tests/test_aisle_shard.py tests/test_dualcam_contact.py tests/test_dualcam_slots.py tests/test_lift_point.py tests/test_dualcam_scale.py -q
 ```

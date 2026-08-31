@@ -6,14 +6,12 @@ import logging
 import time
 
 from services.aisle_store import grouped_cameras, load_aisle
+from services.dualcam_config import pair_window_sec
 from services.event_engine.dualcam_processor import DualcamProcessor
 from services.event_engine.sharding import owns_aisle
 from services.event_engine.worker import EventRedisWorker
 
 logger = logging.getLogger(__name__)
-
-# 15fps 约 67ms/帧；窗过宽会配错人
-PAIR_WINDOW_SEC = 0.12
 
 
 class DualcamRedisWorker(EventRedisWorker):
@@ -24,6 +22,9 @@ class DualcamRedisWorker(EventRedisWorker):
         self._aisle_proc: dict[str, DualcamProcessor] = {}
         self._aisle_mtime: dict[str, float] = {}
         self._pending: dict[str, dict[str, tuple[float, dict]]] = {}
+        self._pair_window = pair_window_sec(app_config)
+        self._last_drop_log: dict[str, float] = {}
+        logger.info("dualcam pair_window=%.3fs", self._pair_window)
 
     def _json_root(self) -> str:
         return self._json_dir
@@ -31,6 +32,13 @@ class DualcamRedisWorker(EventRedisWorker):
     def _get_processor(self, camera_id: str, infer_w: int, infer_h: int):
         """单路不再建 CollisionProcessor；成组后走 aisle processor。"""
         return None
+
+    def _refresh_pair_window(self) -> float:
+        try:
+            self._pair_window = pair_window_sec(self.app_config)
+        except Exception:
+            pass
+        return self._pair_window
 
     def _aisle_processor(self, aisle_id: str) -> DualcamProcessor | None:
         import os
@@ -50,6 +58,13 @@ class DualcamRedisWorker(EventRedisWorker):
 
     def _owns_aisle(self, aisle_id: str) -> bool:
         return owns_aisle(aisle_id)
+
+    def _note(self, key: str, msg: str, *args) -> None:
+        now = time.monotonic()
+        if now - self._last_drop_log.get(key, 0.0) < 5.0:
+            return
+        self._last_drop_log[key] = now
+        logger.warning(msg, *args)
 
     async def _handle_pose_payload(self, payload: str) -> None:
         import asyncio
@@ -73,27 +88,43 @@ class DualcamRedisWorker(EventRedisWorker):
         groups = grouped_cameras(self._json_root())
         g = groups.get(camera_id)
         if not g:
-            logger.warning("dualcam worker: 未成组相机丢弃 pose camera=%s", camera_id)
+            self._note(f"ungrouped:{camera_id}", "dualcam worker: 未成组相机丢弃 pose camera=%s", camera_id)
             return
         aisle_id = g["aisle_id"]
         role = g["role"]
         if not self._owns_aisle(aisle_id):
             return
 
+        window = self._refresh_pair_window()
         now = float(pose.get("ts") or time.time())
         bucket = self._pending.setdefault(aisle_id, {})
         bucket[role] = (now, pose)
 
-        # 丢掉过期半帧
-        stale = [k for k, (t, _) in bucket.items() if now - t > PAIR_WINDOW_SEC * 3]
+        stale = [k for k, (t, _) in bucket.items() if now - t > window * 3]
         for k in stale:
             bucket.pop(k, None)
 
         if "L" not in bucket or "R" not in bucket:
+            missing = "R" if "L" in bucket else "L"
+            self._note(
+                f"wait:{aisle_id}:{missing}",
+                "dualcam worker: 巷道 %s 只收到 %s，等待对侧 %s（窗=%.3fs）。请确认左右路都已开检测。",
+                aisle_id,
+                role,
+                missing,
+                window,
+            )
             return
         t_l, pose_l = bucket["L"]
         t_r, pose_r = bucket["R"]
-        if abs(t_l - t_r) > PAIR_WINDOW_SEC:
+        if abs(t_l - t_r) > window:
+            self._note(
+                f"skew:{aisle_id}",
+                "dualcam worker: 巷道 %s L/R 时差 %.3fs 超过配对窗 %.3fs，本帧丢弃。可在设置里加大姿态间隔对应的配对窗系数。",
+                aisle_id,
+                abs(t_l - t_r),
+                window,
+            )
             return
 
         bucket.pop("L", None)
@@ -101,6 +132,8 @@ class DualcamRedisWorker(EventRedisWorker):
 
         proc = self._aisle_processor(aisle_id)
         if proc is None or not proc.ready():
+            reason = proc.not_ready_reason() if proc else f"巷道 {aisle_id} 标定文件读失败"
+            self._note(f"ready:{aisle_id}", "dualcam worker: %s，丢弃配对帧", reason)
             return
 
         started = time.monotonic()
@@ -119,6 +152,10 @@ class DualcamRedisWorker(EventRedisWorker):
             alarms=len(alarm_collisions),
         )
 
+        skel_map = {
+            proc.cam_l: result.get("skeletons_l"),
+            proc.cam_r: result.get("skeletons_r"),
+        }
         for cid in (proc.cam_l, proc.cam_r):
             if not cid:
                 continue
@@ -128,8 +165,9 @@ class DualcamRedisWorker(EventRedisWorker):
                 frame_idx=frame_idx,
                 collisions=collisions,
                 alarm_collisions=alarm_collisions,
-                skeletons=result.get("skeletons"),
+                skeletons=skel_map.get(cid),
             )
+            # 回调 JSON 契约不变；只固定走左路，避免 L/R 各报一次
             if self.callback_reporter and alarm_collisions and cid == proc.cam_l:
                 upload_tag = f"infer_{cid}"
                 video_time_sec = frame_idx / max(self._video_fps, 1.0)

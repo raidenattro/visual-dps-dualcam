@@ -5,7 +5,7 @@ import LogsPanel from '../components/LogsPanel';
 import ConfirmDialog from '../components/ConfirmDialog';
 import UserDrawer from '../components/UserDrawer';
 import FieldHint from '../components/FieldHint';
-import { CAMERA_OVERRIDE_FIELDS, GLOBAL_COLLISION_FIELDS, GLOBAL_PIPELINE_LOG_FIELDS, GLOBAL_PREFILTER_FIELDS, formatFieldDefaultValue, resolveSettingValue, settingsFieldTooltip } from '../lib/cameraSettings';
+import { CAMERA_OVERRIDE_FIELDS, GLOBAL_COLLISION_FIELDS, GLOBAL_DUALCAM_FIELDS, GLOBAL_PIPELINE_LOG_FIELDS, GLOBAL_PREFILTER_FIELDS, formatFieldDefaultValue, resolveSettingValue, settingsFieldTooltip } from '../lib/cameraSettings';
 import { InferenceModelGlobalFields } from '../components/InferenceModelFields';
 import { formatUserError } from '../lib/userFacingText';
 import './SettingsPage.css';
@@ -394,6 +394,37 @@ export default function SettingsPage() {
                         }
                       />
                     )}
+                    <span className="settings-field-default">
+                      系统默认 <strong>{formatFieldDefaultValue(field)}</strong>
+                    </span>
+                  </label>
+                );
+              })}
+              <h3 className="settings-subsection-title">双路 3D 几何</h3>
+              <p className="settings-subsection-lead">
+                标定分辨率、巷道范围与相机先验的<strong>全局默认</strong>。单巷道可在标注页覆盖。
+              </p>
+              {GLOBAL_DUALCAM_FIELDS.map((field) => {
+                const currentVal = resolveSettingValue(settings, field);
+                return (
+                  <label key={field.key}>
+                    <span className="settings-field-label">
+                      {field.label}
+                      <FieldHint text={settingsFieldTooltip(field)} />
+                    </span>
+                    <input
+                      type="number"
+                      min={field.min}
+                      max={field.max}
+                      step={field.step ?? 1}
+                      value={currentVal ?? ''}
+                      onChange={(e) =>
+                        setSettings((s) => ({
+                          ...s,
+                          [field.key]: Number(e.target.value),
+                        }))
+                      }
+                    />
                     <span className="settings-field-default">
                       系统默认 <strong>{formatFieldDefaultValue(field)}</strong>
                     </span>

@@ -2,8 +2,11 @@
 
 更新：2026-08-31
 
-从 `visual-dps` 拷出的双路 3D 实验仓。碰撞用 pick-state 的 `contact_slots`（贴墙即报），不接 `pipeline.v5_gated`。
+从 `visual-dps` 拷出的双路 3D 实验仓。碰撞只用 `contact_slots`（贴墙即报）。
 
 - 路径：`/home/hqit/workspace/visual-dps-dualcam-exp`
-- 标注：`/aisle` 勾选同一组 → 墙四角 → 反解 → 层线。未成组禁止开推理。
-- Worker：`event_worker_2.py` → `DualcamRedisWorker`，分片键 `aisle_id`。
+- 标注：`/aisle` 勾选同一组 → 墙四角 → 反解 → 层线。未成组、未反解、无层线 **禁止开推理**。
+- Worker：`visual-dps-event-worker` → `event_worker_2.py` → `DualcamRedisWorker`，分片键 `aisle_id`。
+- **不要**再启动旧的 2D `EventRedisWorker` / pick_state `v5_gated` / `visual-dps-event-worker-2`。
+
+全局标定分辨率、巷道 AABB、相机先验在设置页「双路 3D 几何」，单巷道/单路可在巷道标注页或摄像头抽屉覆盖。

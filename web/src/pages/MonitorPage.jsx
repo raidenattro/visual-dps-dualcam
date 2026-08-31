@@ -6,7 +6,7 @@ import MonitorPreviewStage from '../components/MonitorPreviewStage';
 import ShelfBar from '../components/ShelfBar';
 import ShelfDrawer, { emptyShelfForm } from '../components/ShelfDrawer';
 import { useAnnotateTool } from '../features/annotate/useAnnotateTool';
-import { boxMatchesAnyCollision, parseAnnotationPayload } from '../lib/annotation';
+import { boxMatchesAnyCollision, overlayToAnnotation, parseAnnotationPayload } from '../lib/annotation';
 import { getPerspectiveTransform, perspectiveTransform } from '../lib/geometry';
 import { apiGet, apiPost, cameraPlaybackUrl, openCameraLiveStream } from '../api/client';
 import { resolveCameraModelLabel } from '../lib/cameraSettings';
@@ -547,9 +547,11 @@ export default function MonitorPage() {
       try {
         const camPath = `/api/cameras/${encodeURIComponent(cameraId)}?settings=0`;
         const annPath = `/api/cameras/${encodeURIComponent(cameraId)}/annotation`;
-        const [data, annRes] = await Promise.all([
+        const aislePath = `/api/aisles/by-camera/${encodeURIComponent(cameraId)}`;
+        const [data, annRes, aisleRes] = await Promise.all([
           apiGet(camPath),
           apiGet(annPath).catch(() => null),
+          apiGet(aislePath).catch(() => null),
         ]);
         if (cancelled) return;
         if (data.error || !data.camera) {
@@ -559,7 +561,9 @@ export default function MonitorPage() {
           return;
         }
         setMonitorCamera(data.camera);
-        if (annRes?.status === 'success') {
+        if (aisleRes?.status === 'success' && aisleRes.overlay?.boxes?.length) {
+          setAnnotation(overlayToAnnotation(aisleRes.overlay));
+        } else if (annRes?.status === 'success') {
           setAnnotation(parseAnnotationPayload(annRes));
           applyAnnotationPayloadRef.current(annRes, { silent: true });
         } else {
@@ -625,6 +629,11 @@ export default function MonitorPage() {
   const loadAnnotation = useCallback(async () => {
     if (!cameraId) return;
     try {
+      const aisleRes = await apiGet(`/api/aisles/by-camera/${encodeURIComponent(cameraId)}`).catch(() => null);
+      if (aisleRes?.status === 'success' && aisleRes.overlay?.boxes?.length) {
+        setAnnotation(overlayToAnnotation(aisleRes.overlay));
+        return;
+      }
       const res = await apiGet(`/api/cameras/${encodeURIComponent(cameraId)}/annotation`);
       if (res.status === 'success') {
         setAnnotation(parseAnnotationPayload(res));

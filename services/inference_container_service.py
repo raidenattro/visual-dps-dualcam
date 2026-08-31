@@ -325,9 +325,9 @@ def start_inference_container(camera: dict, request=None) -> dict:
     if not camera_id:
         return {"error": "摄像头信息不完整"}
 
-    from services.aisle_store import require_grouped
+    from services.aisle_store import require_inference_ready
 
-    grouped, group_err = require_grouped(camera_id)
+    grouped, group_err = require_inference_ready(camera_id)
     if group_err:
         return {"error": group_err}
 

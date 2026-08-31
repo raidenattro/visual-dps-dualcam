@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import InferenceToggle from './InferenceToggle';
 import { InferenceModelOverrideCard } from './InferenceModelFields';
 import {
@@ -13,7 +15,7 @@ import {
   defaultPlaybackUrl,
   sourceTypeLabel,
 } from '../lib/cameraStreamForm';
-import { formatDuration, thumbnailUrl } from '../api/client';
+import { apiGet, apiPut, formatDuration, thumbnailUrl } from '../api/client';
 import './CameraSetupDrawer.css';
 
 function DetailRow({ label, value, mono, title }) {
@@ -272,6 +274,8 @@ export default function CameraSetupDrawer({
             </form>
           </section>
 
+          {!isCreate && camera?.id ? <DualcamGeomSection cameraId={camera.id} /> : null}
+
           {!isCreate && (
             <section className="drawer-section drawer-section-inference">
               <div className="drawer-section-head">
@@ -408,5 +412,126 @@ export default function CameraSetupDrawer({
         </footer>
       </aside>
     </div>
+  );
+}
+
+function DualcamGeomSection({ cameraId }) {
+  const [info, setInfo] = useState(null);
+  const [msg, setMsg] = useState('');
+  const [savingGeom, setSavingGeom] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setInfo(null);
+    setMsg('');
+    if (!cameraId) return undefined;
+    apiGet(`/api/aisles/by-camera/${encodeURIComponent(cameraId)}`)
+      .then((d) => {
+        if (!cancelled && d?.status === 'success') setInfo(d);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [cameraId]);
+
+  if (!info) {
+    return (
+      <section className="drawer-section">
+        <div className="drawer-section-head">
+          <h3>双路 3D 几何</h3>
+          <p className="drawer-section-desc">
+            该路尚未编入巷道同一组。请先到 <Link to="/aisle">巷道标注</Link> 勾选左右路，否则禁止开推理。
+          </p>
+        </div>
+      </section>
+    );
+  }
+
+  const aisle = info.aisle || {};
+  const role = info.role;
+  const view = aisle.views?.[role] || {};
+  const size = view.image_size || [1280, 720];
+  const prior = view.prior || aisle.prior || {};
+
+  const patchView = (patch) => {
+    setInfo((prev) => {
+      const nextAisle = { ...prev.aisle, views: { ...prev.aisle.views } };
+      nextAisle.views[role] = { ...(nextAisle.views[role] || {}), ...patch };
+      return { ...prev, aisle: nextAisle };
+    });
+  };
+
+  const save = async () => {
+    setSavingGeom(true);
+    setMsg('');
+    try {
+      const d = await apiPut(`/api/aisles/${encodeURIComponent(aisle.aisle_id)}`, aisle);
+      if (d.status !== 'success') {
+        setMsg(d.error || '保存失败');
+        return;
+      }
+      setInfo((prev) => ({ ...prev, aisle: d.aisle }));
+      setMsg('几何已保存，请重新反解后再开检测');
+    } catch (e) {
+      setMsg(e.message || '保存失败');
+    } finally {
+      setSavingGeom(false);
+    }
+  };
+
+  return (
+    <section className="drawer-section">
+      <div className="drawer-section-head">
+        <h3>双路 3D 几何</h3>
+        <p className="drawer-section-desc">
+          巷道 {aisle.aisle_id} · 本路 {role === 'L' ? '左路' : '右路'}。宽高是标定像素。
+          {' '}
+          <Link to="/aisle">打开巷道标注</Link>
+        </p>
+      </div>
+      <label>
+        标定宽度 (px)
+        <input
+          type="number"
+          min={320}
+          value={size[0]}
+          onChange={(e) => patchView({ image_size: [Number(e.target.value), Number(size[1])] })}
+        />
+      </label>
+      <label>
+        标定高度 (px)
+        <input
+          type="number"
+          min={180}
+          value={size[1]}
+          onChange={(e) => patchView({ image_size: [Number(size[0]), Number(e.target.value)] })}
+        />
+      </label>
+      <label>
+        相机离地 (m)
+        <input
+          type="number"
+          step="0.01"
+          value={prior.camH ?? ''}
+          onChange={(e) => patchView({ prior: { ...prior, camH: Number(e.target.value) } })}
+        />
+      </label>
+      <label>
+        距巷道 (m)
+        <input
+          type="number"
+          step="0.01"
+          value={prior.camDist ?? ''}
+          onChange={(e) => patchView({ prior: { ...prior, camDist: Number(e.target.value) } })}
+        />
+      </label>
+      <div style={{ marginTop: 8 }}>
+        <button type="button" className="secondary" disabled={savingGeom} onClick={save}>
+          {savingGeom ? '保存中…' : '保存本路几何'}
+        </button>
+      </div>
+      {msg ? <p className="drawer-field-hint">{msg}</p> : null}
+    </section>
   );
 }

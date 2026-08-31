@@ -42,6 +42,18 @@ PUBLIC_KEYS = {
     "pipeline_log.stdout": ("pipeline_log", "stdout", bool),
     "pipeline_log.max_bytes": ("pipeline_log", "max_bytes", int),
     "pipeline_log.backup_count": ("pipeline_log", "backup_count", int),
+    "dualcam.calib_width": ("dualcam", "calib_width", int),
+    "dualcam.calib_height": ("dualcam", "calib_height", int),
+    "dualcam.aabb_x_min": ("dualcam", "aabb_x_min", float),
+    "dualcam.aabb_x_max": ("dualcam", "aabb_x_max", float),
+    "dualcam.aabb_y_min": ("dualcam", "aabb_y_min", float),
+    "dualcam.aabb_y_max": ("dualcam", "aabb_y_max", float),
+    "dualcam.aabb_z_min": ("dualcam", "aabb_z_min", float),
+    "dualcam.aabb_z_max": ("dualcam", "aabb_z_max", float),
+    "dualcam.cam_h": ("dualcam", "cam_h", float),
+    "dualcam.cam_dist": ("dualcam", "cam_dist", float),
+    "dualcam.pair_window_periods": ("dualcam", "pair_window_periods", float),
+    "dualcam.contact_m": ("dualcam", "contact_m", float),
 }
 
 # 仅全局设置页暴露，event-worker 读取；不支持按摄像头覆盖
@@ -64,6 +76,18 @@ GLOBAL_ONLY_KEYS = frozenset(
         "pipeline_log.stdout",
         "pipeline_log.max_bytes",
         "pipeline_log.backup_count",
+        "dualcam.calib_width",
+        "dualcam.calib_height",
+        "dualcam.aabb_x_min",
+        "dualcam.aabb_x_max",
+        "dualcam.aabb_y_min",
+        "dualcam.aabb_y_max",
+        "dualcam.aabb_z_min",
+        "dualcam.aabb_z_max",
+        "dualcam.cam_h",
+        "dualcam.cam_dist",
+        "dualcam.pair_window_periods",
+        "dualcam.contact_m",
     }
 )
 
@@ -238,6 +262,13 @@ def _coerce_setting_value(pub_key: str, raw: Any, typ: type) -> Any:
         return max(0.0, float(raw))
     if pub_key.startswith("collision_prefilter.") and typ is float:
         return float(raw)
+    if pub_key.startswith("dualcam.") and typ is float:
+        return float(raw)
+    if pub_key.startswith("dualcam.") and typ is int:
+        val = int(raw)
+        if val <= 0:
+            raise ValueError("must be positive")
+        return val
     if typ is bool:
         if isinstance(raw, bool):
             return raw
@@ -297,7 +328,7 @@ def get_public_settings(app_config: dict | None, path: str = DEFAULT_PATH) -> di
     except ValueError:
         det = DEFAULT_DET_VARIANT
 
-    return {
+    result = {
         "status": "success",
         "items": {
             "models.backend": backend,
@@ -361,6 +392,23 @@ def get_public_settings(app_config: dict | None, path: str = DEFAULT_PATH) -> di
             ),
         },
     }
+    from services.dualcam_config import get_dualcam_section
+
+    dual = get_dualcam_section(merged)
+    items = result["items"]
+    items["dualcam.calib_width"] = int(dual["calib_width"])
+    items["dualcam.calib_height"] = int(dual["calib_height"])
+    items["dualcam.aabb_x_min"] = float(dual["aabb_x_min"])
+    items["dualcam.aabb_x_max"] = float(dual["aabb_x_max"])
+    items["dualcam.aabb_y_min"] = float(dual["aabb_y_min"])
+    items["dualcam.aabb_y_max"] = float(dual["aabb_y_max"])
+    items["dualcam.aabb_z_min"] = float(dual["aabb_z_min"])
+    items["dualcam.aabb_z_max"] = float(dual["aabb_z_max"])
+    items["dualcam.cam_h"] = float(dual["cam_h"])
+    items["dualcam.cam_dist"] = float(dual["cam_dist"])
+    items["dualcam.pair_window_periods"] = float(dual["pair_window_periods"])
+    items["dualcam.contact_m"] = float(dual["contact_m"])
+    return result
 
 
 def patch_public_settings(updates: dict, path: str = DEFAULT_PATH) -> dict:
@@ -388,6 +436,12 @@ def patch_public_settings(updates: dict, path: str = DEFAULT_PATH) -> dict:
                 val = max(0.0, float(raw))
             elif pub_key.startswith("collision_prefilter.") and typ is float:
                 val = float(raw)
+            elif pub_key.startswith("dualcam.") and typ is float:
+                val = float(raw)
+            elif pub_key.startswith("dualcam.") and typ is int:
+                val = int(raw)
+                if val <= 0:
+                    raise ValueError("must be positive")
             elif typ is bool:
                 val = bool(raw) if not isinstance(raw, str) else raw.lower() in ("1", "true", "yes", "on")
             elif typ is int:

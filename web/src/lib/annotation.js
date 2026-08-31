@@ -193,6 +193,23 @@ export function dedupeAnnotationBoxes(boxes) {
   return out;
 }
 
+export function overlayToAnnotation(overlay) {
+  if (!overlay || typeof overlay !== 'object') {
+    return { boxes: [], shelves: [], shelfCorners: [], annotationSize: null, gridShape: [] };
+  }
+  const boxes = Array.isArray(overlay.boxes) ? overlay.boxes : [];
+  const shelves = Array.isArray(overlay.shelves) ? overlay.shelves : [];
+  const w = Number(overlay.annotation_width) || 0;
+  const h = Number(overlay.annotation_height) || 0;
+  return {
+    boxes,
+    shelves,
+    shelfCorners: [],
+    annotationSize: w > 0 && h > 0 ? { width: w, height: h } : null,
+    gridShape: shelves[0]?.grid_shape || [],
+  };
+}
+
 export function parseCollisionToken(token) {
   const text = String(token || '').trim();
   if (!text) return { shelf_code: '', box_id: '' };

@@ -27,6 +27,7 @@ docker cp services/version_service.py visual-dps-ui:/app/services/version_servic
 ```bash
 docker compose up -d redis mediamtx visual-dps-ui visual-dps-event-worker
 # 再执行上面的 build + docker cp
+# 本仓 event-worker 已是双路 3D；勿再启动 visual-dps-event-worker-2
 ```
 
 ## 需改镜像 / Dockerfile / 依赖

@@ -22,6 +22,7 @@ PAIR_MIN_JOINTS = 3
 NMS_TORSO_PX = 50.0
 PREFER_PX = 90.0
 DUPLICATE_M = 0.40
+# 仅作缺省；运行时请用 dualcam_config.aabb_from_section / 巷道 JSON
 AISLE_AABB = {"x": (-1.35, 1.35), "y": (0.50, 1.65), "z": (-0.12, 2.50)}
 # 可贴墙的源：立体或高分路主导。hold/mono 只显示不报警。
 CONTACT_SRC = frozenset({"stereo", "L", "R"})
@@ -214,10 +215,11 @@ def _torso_xyz(kl, sl, kr, sr, cams: dict) -> np.ndarray | None:
     return np.mean(pts, axis=0)
 
 
-def in_aisle(p: np.ndarray | None) -> bool:
+def in_aisle(p: np.ndarray | None, aabb: dict | None = None) -> bool:
     if p is None:
         return False
-    for ax, (lo, hi) in AISLE_AABB.items():
+    box = aabb or AISLE_AABB
+    for ax, (lo, hi) in box.items():
         v = float(p[{"x": 0, "y": 1, "z": 2}[ax]])
         if v < lo or v > hi:
             return False
@@ -230,6 +232,7 @@ def pick_pairs(
     cams: dict,
     gap_max: float = PAIR_GAP_MAX,
     prefer: list[tuple[np.ndarray, np.ndarray]] | None = None,
+    aabb: dict | None = None,
 ) -> list[tuple[int, int, float]]:
     """左右路匹配：先 NMS，再续上帧，再贪心。"""
     li = nms_indices(fl["k"], fl["s"])
@@ -289,7 +292,7 @@ def pick_pairs(
     cents: list[np.ndarray] = []
     for i, j, g in sorted(out, key=lambda x: x[2]):
         c = _torso_xyz(fl["k"][i], fl["s"][i], fr["k"][j], fr["s"][j], cams)
-        if not in_aisle(c):
+        if not in_aisle(c, aabb):
             continue
         if any(float(np.linalg.norm(c - p)) < DUPLICATE_M for p in cents):
             continue

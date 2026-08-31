@@ -8,11 +8,13 @@ from dualcam.geom import make_layer_mesh, wall_by_id
 from dualcam.solve import solve_dual
 from services.aisle_store import (
     bind_group,
+    camera_group,
     list_aisles,
     load_aisle,
     save_aisle,
     unbind_group,
 )
+from services.dualcam_overlay import overlay_for_role
 from services.event_engine.sharding import logical_shard_id
 
 
@@ -23,6 +25,23 @@ def register_aisle_routes(router: APIRouter, *, json_dir: str = "localdata/json"
         for it in items:
             it["logical_shard"] = logical_shard_id(it["aisle_id"])
         return {"status": "success", "items": items}
+
+    @router.get("/aisles/by-camera/{camera_id}")
+    async def api_aisle_by_camera(camera_id: str):
+        g = camera_group(camera_id, json_dir)
+        if not g:
+            return {"status": "error", "error": "该摄像头尚未编入巷道同一组"}
+        data = load_aisle(g["aisle_id"], json_dir)
+        if not data:
+            return {"status": "error", "error": "巷道标定文件缺失"}
+        aisle = dict(data)
+        aisle["logical_shard"] = logical_shard_id(g["aisle_id"])
+        return {
+            "status": "success",
+            "aisle": aisle,
+            "role": g["role"],
+            "overlay": overlay_for_role(aisle, g["role"]),
+        }
 
     @router.get("/aisles/{aisle_id}")
     async def api_get_aisle(aisle_id: str):
@@ -93,7 +112,10 @@ def register_aisle_routes(router: APIRouter, *, json_dir: str = "localdata/json"
             return {"status": "error", "error": "巷道不存在"}
         solved = data.get("solved") or {}
         if not solved.get("ok"):
-            return {"status": "error", "error": "请先反解并对齐"}
+            return {
+                "status": "error",
+                "error": "尚未反解：请先点「1. 反解并对齐」。没有墙面世界坐标就无法生成货格层线。",
+            }
         wall_id = int(payload.get("wall_id") or 1)
         wall = wall_by_id(solved, wall_id)
         if not wall:

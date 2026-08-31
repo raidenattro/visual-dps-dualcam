@@ -18,7 +18,7 @@
 }
 .muted { color: #8a8a8a; }
 .hint { color: #e0b060; min-height: 2.4em; }
-.ok { color: #7ec8ff; }
+.group-title { font-weight: 600; color: #ccc; margin: 10px 0 4px; }
 .msg { color: #9ad; white-space: pre-wrap; }
 .aisle-panel label {
   display: flex;
@@ -67,7 +67,7 @@
   display: block;
   width: 100%;
   aspect-ratio: 16 / 9;
-  object-fit: cover;
+  object-fit: contain;
   background: #000;
 }
 .pane .bg.empty {

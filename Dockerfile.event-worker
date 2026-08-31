@@ -1,5 +1,6 @@
-# 事件 Worker：碰撞/报警/回调，无 MediaPipe。
-# 构建: docker compose --profile ui build visual-dps-event-worker
+# 事件 Worker：仅双路 3D DualcamRedisWorker（contact_slots）。
+# 不再运行 2D CollisionProcessor / pick_state v5_gated。
+# 构建: docker compose build visual-dps-event-worker
 
 FROM python:3.10-slim
 
@@ -26,11 +27,14 @@ RUN sh /tmp/pip-install.sh "${PIP_INDEX}" --upgrade pip \
     && sh /tmp/pip-install.sh "${PIP_INDEX}" \
         opencv-python-headless \
         numpy \
-        redis
+        redis \
+    && rm -f /tmp/pip-install.sh
 
 COPY services ./services
 COPY core ./core
+COPY dualcam ./dualcam
 COPY event_worker.py ./event_worker.py
+COPY event_worker_2.py ./event_worker_2.py
 COPY app_config.json ./app_config.json
 
-CMD ["python", "event_worker.py"]
+CMD ["python", "event_worker_2.py"]

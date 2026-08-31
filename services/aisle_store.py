@@ -45,23 +45,30 @@ def _write(path: str, data: dict) -> None:
 
 
 def empty_aisle(aisle_id: str) -> dict[str, Any]:
+    from services.dualcam_config import aabb_from_section, default_prior, get_dualcam_section
+
+    sec = get_dualcam_section()
+    prior = default_prior(sec)
+    aabb = aabb_from_section(sec)
+    size = [int(sec["calib_width"]), int(sec["calib_height"])]
     return {
         "aisle_id": aisle_id,
         "aisle": 2.0,
-        "contact_m": 0.0,
-        "prior": {"camH": 2.84, "camDist": 1.56, "pitch": 45, "yaw": 0},
+        "contact_m": float(sec["contact_m"]),
+        "prior": dict(prior),
+        "aabb": {k: [v[0], v[1]] for k, v in aabb.items()},
         "cameras": {"L": {"camera_id": "", "role": "L"}, "R": {"camera_id": "", "role": "R"}},
         "views": {
             "L": {
                 "name": "L",
-                "image_size": [1280, 720],
-                "prior": {"camH": 2.84, "camDist": 1.56, "pitch": 45, "yaw": 0},
+                "image_size": list(size),
+                "prior": dict(prior),
                 "walls": _empty_walls(),
             },
             "R": {
                 "name": "R",
-                "image_size": [1280, 720],
-                "prior": {"camH": 2.84, "camDist": 1.56, "pitch": 45, "yaw": 0},
+                "image_size": list(size),
+                "prior": dict(prior),
                 "walls": _empty_walls(),
             },
         },
@@ -89,11 +96,13 @@ def list_aisles(json_dir: str | None = None) -> list[dict]:
         if not data:
             continue
         cams = data.get("cameras") or {}
+        meshes = data.get("slot_meshes") or []
         out.append({
             "aisle_id": data.get("aisle_id") or name[:-5],
             "camera_l": (cams.get("L") or {}).get("camera_id") or "",
             "camera_r": (cams.get("R") or {}).get("camera_id") or "",
             "solved": bool((data.get("solved") or {}).get("ok")),
+            "mesh_walls": len(meshes) if isinstance(meshes, list) else 0,
         })
     return out
 
@@ -163,6 +172,30 @@ def require_grouped(camera_id: str, json_dir: str | None = None) -> tuple[dict |
     if left == right:
         return None, "左右路不能是同一台摄像头"
     return {"aisle_id": g["aisle_id"], "role": g["role"], "L": left, "R": right}, None
+
+
+def require_inference_ready(camera_id: str, json_dir: str | None = None) -> tuple[dict | None, str | None]:
+    """开推理前：成组 + 已反解 + 已有至少一面墙的层线。缺哪一步就说哪一步。"""
+    grouped, err = require_grouped(camera_id, json_dir)
+    if err:
+        return None, err
+    aid = grouped["aisle_id"]
+    data = load_aisle(aid, json_dir) or {}
+    solved = data.get("solved") or {}
+    if not solved.get("ok"):
+        return None, (
+            f"巷道 {aid} 尚未反解：请到「巷道标注」页点「1. 反解并对齐」。"
+            "没有相机外参无法把 2D 姿态抬到 3D，开了检测也不会产生碰撞事件。"
+        )
+    meshes = [m for m in (data.get("slot_meshes") or []) if isinstance(m, dict)]
+    if not meshes:
+        return None, (
+            f"巷道 {aid} 尚未生成货格层线：请先点「2. 生成本墙层线」。"
+            "没有 slot_meshes（货格网格）就无法做 3D 贴墙碰撞。"
+        )
+    grouped["solved"] = True
+    grouped["mesh_walls"] = len(meshes)
+    return grouped, None
 
 
 def bind_group(
