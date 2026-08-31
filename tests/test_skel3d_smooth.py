@@ -15,7 +15,9 @@ from scripts.skel3d_smooth import (
     _gauss_smooth,
     _reject_speed,
     assign_tracks,
+    copy_pose_pack,
     smooth_frames,
+    smooth_pose2d,
     torso_centroid,
     wrist_jump_stats,
 )
@@ -109,6 +111,42 @@ def test_smooth_frames_cuts_wrist_jitter():
     w0 = np.array(frames[0]["persons"][0]["xyz"][9], float)
     w1 = np.array(frames[-1]["persons"][0]["xyz"][9], float)
     assert w1[2] - w0[2] > 0.10
+
+
+def test_smooth_pose2d_reduces_pixel_jitter_keeps_scores():
+    rng = np.random.default_rng(2)
+    pack = []
+    true_u = []
+    for i in range(40):
+        t = i * 0.04
+        u = 400.0 + 2.0 * i
+        true_u.append(u)
+        k = np.zeros((17, 2))
+        k[5] = [u, 200]
+        k[6] = [u + 40, 200]
+        k[11] = [u, 400]
+        k[12] = [u + 40, 400]
+        k[9] = [u + 20 + rng.normal(0, 6), 280 + rng.normal(0, 6)]
+        s = np.full(17, 0.8)
+        pack.append({
+            "i": i,
+            "t": t,
+            "L": {"k": [k.copy()], "s": [s.copy()]},
+            "R": {"k": [k.copy()], "s": [s.copy()]},
+        })
+    raw = [float(fr["L"]["k"][0][9][0]) for fr in pack]
+    copied = copy_pose_pack(pack)
+    info = smooth_pose2d(copied)
+    assert info["n_wrist_in"] > 0
+    sm = [float(fr["L"]["k"][0][9][0]) for fr in copied]
+    jump_raw = np.max(np.abs(np.diff(raw)))
+    jump_sm = np.max(np.abs(np.diff(sm)))
+    assert jump_sm < 0.7 * jump_raw
+    assert copied[-1]["L"]["k"][0][9][0] - copied[0]["L"]["k"][0][9][0] > 50
+    assert np.allclose(copied[0]["L"]["s"][0], 0.8)
+    raw10 = float(pack[10]["L"]["k"][0][9][0])
+    smooth_pose2d(copied)  # 再滤也不该写回原 pack
+    assert float(pack[10]["L"]["k"][0][9][0]) == raw10
 
 
 def test_torso_mean_and_empty():

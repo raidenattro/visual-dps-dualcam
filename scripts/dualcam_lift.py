@@ -92,24 +92,26 @@ def lift_point(
     plane: dict | None,
     prev: np.ndarray | None = None,
 ) -> tuple[np.ndarray | None, float | None, str | None]:
-    """用高置信度路建 3D。双路都过门槛才立体；单路则沿该射线借上一帧深度。
+    """按左右路置信度加权抬 3D。双路都过门槛才立体；单路则沿该射线借上一帧深度。
 
-    src: stereo=两路分接近且缝小；L/R=两路都看见、钉在高分射线（可贴墙）；
+    src: stereo=两路分接近且缝小（点=分数加权）；L/R=高分路主导（可贴墙）；
     Lhold/Rhold=只一路高分、沿射线借上一帧深度（只显示）；
     Lmono/Rmono=没有深度先验、射线∩拣货面（只显示，不报贴墙）。
     """
-    ok_l, ok_r = float(s_l) >= KPT_MIN, float(s_r) >= KPT_MIN
+    sl, sr = float(s_l), float(s_r)
+    ok_l, ok_r = sl >= KPT_MIN, sr >= KPT_MIN
     if ok_l and ok_r:
         p1, p2, g = triangulate_ends(uv_l, uv_r, cams)
-        if g <= JOINT_GAP_MAX and abs(float(s_l) - float(s_r)) < CONF_MARGIN:
-            return 0.5 * (p1 + p2), g, "stereo"
-        winner_l = float(s_l) >= float(s_r)
-        p_win, uv, cam = (p1, uv_l, cams["L"]) if winner_l else (p2, uv_r, cams["R"])
+        if g <= JOINT_GAP_MAX:
+            p = (sl * p1 + sr * p2) / (sl + sr)
+            if abs(sl - sr) < CONF_MARGIN:
+                return p, g, "stereo"
+            return p, g, "L" if sl >= sr else "R"
+        winner_l = sl >= sr
+        uv, cam = (uv_l, cams["L"]) if winner_l else (uv_r, cams["R"])
         src = "L" if winner_l else "R"
-        if g > JOINT_GAP_MAX:
-            ref = prev if prev is not None else p_win
-            p_win = point_on_ray(uv, cam, ref)
-        return p_win, g, src
+        ref = prev if prev is not None else (p1 if winner_l else p2)
+        return point_on_ray(uv, cam, ref), g, src
     if ok_l:
         if prev is not None:
             return point_on_ray(uv_l, cams["L"], prev), None, "Lhold"

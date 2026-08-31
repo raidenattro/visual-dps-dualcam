@@ -1,7 +1,7 @@
-"""双路 3D 骨架时序平滑。只用于 /play 验证，不进推理。
+"""骨架时序平滑。只用于 /play 验证，不进推理。
 
-腕点是贴墙判定的输入，三角化又会把 2D 噪声放大，所以腕/肘比躯干滤得更狠。
-离线零相位（时间高斯），伸手动作不往后拖。
+先滤左右路 2D（短窗），再三角化；3D 只做轻滤波 + 骨长。
+离线零相位（时间高斯），伸手动作不往后拖。分数不平滑。
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from scripts.dualcam_lift import LWRIST, RWRIST, signed_x
+from scripts.dualcam_lift import KPT_MIN, LWRIST, RWRIST, _torso_xy, signed_x
 
 # COCO-17
 LSHO, RSHO, LELB, RELB = 5, 6, 7, 8
@@ -26,12 +26,17 @@ BONE_LEN_RANGE = {
     (RELB, RWRIST): (0.15, 0.38),
 }
 
-# 秒。腕 100ms 能压掉 10Hz 级抖，0.4s 级伸手还在。
-SIGMA_BODY = 0.045
-SIGMA_ELBOW = 0.070
-SIGMA_WRIST = 0.100
+# 秒。2D 先滤短窗；3D 只收残差，避免同一动作滤两遍。
+SIGMA_2D_BODY = 0.045
+SIGMA_2D_ELBOW = 0.055
+SIGMA_2D_WRIST = 0.070
+SIGMA_BODY = 0.030
+SIGMA_ELBOW = 0.045
+SIGMA_WRIST = 0.055
+VMAX_2D_PX = 1200.0
 VMAX_BODY = 3.0
 VMAX_WRIST = 4.0
+TRACK_2D_PX = 140.0
 TRACK_MAX_M = 0.60
 TRACK_MAX_GAP_S = 0.48
 BONE_TOL = 0.12  # 相对中位，超出才拉回
@@ -70,6 +75,115 @@ def joint_vmax(j: int) -> float:
     if j in (LWRIST, RWRIST, LELB, RELB):
         return VMAX_WRIST
     return VMAX_BODY
+
+
+def joint_sigma_2d(j: int) -> float:
+    if j in (LWRIST, RWRIST):
+        return SIGMA_2D_WRIST
+    if j in (LELB, RELB):
+        return SIGMA_2D_ELBOW
+    return SIGMA_2D_BODY
+
+
+def copy_pose_pack(pack) -> list[dict]:
+    """深拷贝左右路 k/s，避免改到 npz 原数组。"""
+    out: list[dict] = []
+    for fr in pack:
+        rec: dict = {"i": fr["i"], "t": fr["t"]}
+        for view in ("L", "R"):
+            v = fr[view]
+            rec[view] = {
+                "k": [np.array(p, dtype=np.float64, copy=True) for p in v["k"]],
+                "s": [np.array(sc, dtype=np.float64, copy=True) for sc in v["s"]],
+            }
+        out.append(rec)
+    return out
+
+
+def assign_tracks_2d(
+    pack: list[dict],
+    view: str,
+    *,
+    max_px: float = TRACK_2D_PX,
+    max_gap_s: float = TRACK_MAX_GAP_S,
+) -> dict[int, list[tuple[int, int]]]:
+    """单路按躯干 2D 续 track，返回 tid → [(frame_i, det_i)]。"""
+    active: list[_Track] = []
+    next_id = 0
+    tracks: dict[int, list[tuple[int, int]]] = {}
+    for fi, fr in enumerate(pack):
+        t = float(fr.get("t") or 0.0)
+        klist, slist = fr[view]["k"], fr[view]["s"]
+        xys = [_torso_xy(klist[i], slist[i]) for i in range(len(klist))]
+        alive = [tr for tr in active if (t - tr.last_t) <= max_gap_s]
+        cands: list[tuple[float, int, int]] = []
+        for di, xy in enumerate(xys):
+            if xy is None:
+                continue
+            for ti, tr in enumerate(alive):
+                cands.append((float(np.linalg.norm(xy - tr.last_torso)), di, ti))
+        cands.sort()
+        used_d: set[int] = set()
+        used_t: set[int] = set()
+        for dist, di, ti in cands:
+            if di in used_d or ti in used_t or dist > max_px:
+                continue
+            tr = alive[ti]
+            tr.members.append((fi, di))
+            tr.last_torso = xys[di]  # type: ignore[assignment]
+            tr.last_t = t
+            tracks[tr.tid].append((fi, di))
+            used_d.add(di)
+            used_t.add(ti)
+        for di, xy in enumerate(xys):
+            if di in used_d or xy is None:
+                continue
+            tr = _Track(next_id, xy, t, [(fi, di)])
+            tracks[next_id] = [(fi, di)]
+            next_id += 1
+            alive.append(tr)
+        active = alive
+    return tracks
+
+
+def smooth_pose2d(pack: list[dict]) -> dict:
+    """就地平滑 pack[*][L/R].k 的像素坐标，分数不动。"""
+    n_tracks = 0
+    n_in = n_out = 0
+    for view in ("L", "R"):
+        tracks = assign_tracks_2d(pack, view)
+        n_tracks += len(tracks)
+        for members in tracks.values():
+            if len(members) < 2:
+                continue
+            times = np.array([float(pack[fi]["t"]) for fi, _ in members], dtype=np.float64)
+            for j in range(N_JOINTS):
+                vals = np.zeros((len(members), 2), dtype=np.float64)
+                mask = np.zeros(len(members), dtype=bool)
+                for i, (fi, di) in enumerate(members):
+                    k = pack[fi][view]["k"][di]
+                    s = pack[fi][view]["s"][di]
+                    if float(s[j]) < KPT_MIN:
+                        continue
+                    uv = np.asarray(k[j], dtype=np.float64).reshape(-1)
+                    if uv.size < 2 or not np.all(np.isfinite(uv[:2])):
+                        continue
+                    vals[i] = uv[:2]
+                    mask[i] = True
+                if j in (LWRIST, RWRIST):
+                    n_in += int(mask.sum())
+                _reject_speed(vals, mask, times, VMAX_2D_PX)
+                sm, sm_mask = _gauss_smooth(vals, mask, times, joint_sigma_2d(j))
+                if j in (LWRIST, RWRIST):
+                    n_out += int(sm_mask.sum())
+                for i, (fi, di) in enumerate(members):
+                    if not sm_mask[i]:
+                        continue
+                    arr = np.array(pack[fi][view]["k"][di][j], dtype=np.float64, copy=True)
+                    arr[0] = sm[i, 0]
+                    arr[1] = sm[i, 1]
+                    pack[fi][view]["k"][di][j] = arr
+    return {"n_tracks": n_tracks, "n_wrist_in": n_in, "n_wrist_out": n_out}
 
 
 @dataclass

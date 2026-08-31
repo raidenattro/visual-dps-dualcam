@@ -3,7 +3,8 @@
 
 每帧可有多个人：左右路 NMS + 续帧匹配，只保留两路都看见且落在巷道内的人。
 单路闪断最多沿用 8 帧。腕点跟高置信度那路建 3D；单路∩面只显示不报贴墙。
-默认对 3D 做时序平滑（腕/肘更强），贴墙判定与画面用同一套坐标。
+默认先短窗平滑左右路 2D 再抬 3D，3D 只做轻滤波+骨长。
+L/R 仍是原始检测（贴墙确认）；Lsm/Rsm 仅供画面看平滑效果。
 """
 
 from __future__ import annotations
@@ -31,7 +32,14 @@ from scripts.dualcam_lift import (
     pick_pairs,
     signed_x,
 )
-from scripts.skel3d_smooth import assign_tracks, smooth_frames, torso_centroid, wrist_jump_stats
+from scripts.skel3d_smooth import (
+    assign_tracks,
+    copy_pose_pack,
+    smooth_frames,
+    smooth_pose2d,
+    torso_centroid,
+    wrist_jump_stats,
+)
 
 NPZ = ROOT / "output/dualcam/poses_5fps.npz"
 OUT = ROOT / "output/dualcam/skel3d.json"
@@ -62,14 +70,27 @@ LSHO, RSHO = 5, 6
 
 
 def _lift_person(
-    kl, sl, kr, sr, gap: float, cams: dict, plane: dict, prev_xyz: list | None = None
+    kl,
+    sl,
+    kr,
+    sr,
+    gap: float,
+    cams: dict,
+    plane: dict,
+    prev_xyz: list | None = None,
+    kl_raw=None,
+    kr_raw=None,
 ) -> dict:
-    xyz, vis, L2, R2, sL, sR, jg, src = [], [], [], [], [], [], [], []
+    xyz, vis, L2, R2, Lsm, Rsm, sL, sR, jg, src = [], [], [], [], [], [], [], [], [], []
     dL = dR = None
     raw3 = [None] * 17
+    kl_raw = kl if kl_raw is None else kl_raw
+    kr_raw = kr if kr_raw is None else kr_raw
     for k in range(17):
-        L2.append(_xy(kl[k]))
-        R2.append(_xy(kr[k]))
+        L2.append(_xy(kl_raw[k]))
+        R2.append(_xy(kr_raw[k]))
+        Lsm.append(_xy(kl[k]))
+        Rsm.append(_xy(kr[k]))
         sL.append(round(float(sl[k]), 2))
         sR.append(round(float(sr[k]), 2))
         prev = None
@@ -110,6 +131,8 @@ def _lift_person(
         "src": src,
         "L": L2,
         "R": R2,
+        "Lsm": Lsm,
+        "Rsm": Rsm,
         "sL": sL,
         "sR": sR,
         "dL": dL,
@@ -135,20 +158,25 @@ def _prefer_of(persons: list[dict]) -> list[tuple]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="从已落姿态三角化 17 点，默认对腕/肘做时序平滑")
-    ap.add_argument("--no-smooth", action="store_true", help="不平滑，写出原始三角化")
+    ap = argparse.ArgumentParser(description="从已落姿态三角化 17 点，默认先滤 2D 再轻滤 3D")
+    ap.add_argument("--no-smooth", action="store_true", help="2D/3D 都不平滑，写出原始三角化")
     args = ap.parse_args()
 
     cams, plane, sol = load_cams()
-    pack = np.load(NPZ, allow_pickle=True)["frames"]
-    stride = _infer_stride(pack)
+    raw_pack = list(np.load(NPZ, allow_pickle=True)["frames"])
+    stride = _infer_stride(raw_pack)
+    pack = copy_pose_pack(raw_pack)
+    smooth2d_info = None
+    if not args.no_smooth:
+        smooth2d_info = smooth_pose2d(pack)
     frames = []
     n_paired = 0
     n_people = 0
     prefer: list = []
     holds: list[tuple[dict, int, np.ndarray]] = []  # person, miss, torso
-    for fr in pack:
+    for fi, fr in enumerate(pack):
         rec = {"i": int(fr["i"]), "t": round(float(fr["t"]), 3)}
+        raw = raw_pack[fi]
         pairs = pick_pairs(fr["L"], fr["R"], cams, prefer=prefer)
         persons = []
         for a, b, gap in pairs:
@@ -169,7 +197,12 @@ def main() -> int:
                     if d < best_d:
                         best_d = d
                         prev_xyz = prev.get("xyz")
-            persons.append(_lift_person(kl, sl, kr, sr, gap, cams, plane, prev_xyz))
+            persons.append(
+                _lift_person(
+                    kl, sl, kr, sr, gap, cams, plane, prev_xyz,
+                    kl_raw=raw["L"]["k"][a], kr_raw=raw["R"]["k"][b],
+                )
+            )
         cents = [torso_centroid(p.get("xyz") or []) for p in persons]
         used: set[int] = set()
         new_holds: list[tuple[dict, int, np.ndarray]] = []
@@ -236,6 +269,7 @@ def main() -> int:
         "n_frames": len(frames),
         "n_paired": n_paired,
         "n_people": n_people,
+        "smooth2d": smooth2d_info,
         "smooth": smooth_info,
         "frames": frames,
     }
@@ -244,9 +278,14 @@ def main() -> int:
         f"wrote {OUT}  frames={len(frames)} paired={n_paired} people={n_people} "
         f"stride={stride}  {OUT.stat().st_size / 1e6:.1f}MB"
     )
+    if smooth2d_info:
+        print(
+            f"smooth2d tracks={smooth2d_info['n_tracks']}  "
+            f"wrist {smooth2d_info['n_wrist_in']}→{smooth2d_info['n_wrist_out']}"
+        )
     if smooth_info:
         print(
-            f"smooth tracks={smooth_info['n_tracks']}  "
+            f"smooth3d tracks={smooth_info['n_tracks']}  "
             f"wrist {smooth_info['n_wrist_in']}→{smooth_info['n_wrist_out']}"
         )
         if jump_before and jump_after:
