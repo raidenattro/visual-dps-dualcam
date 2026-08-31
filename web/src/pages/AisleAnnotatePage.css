@@ -1,68 +1,228 @@
 .aisle-page {
   display: grid;
-  grid-template-columns: 340px 1fr;
-  height: calc(100vh - 56px);
-  background: #111;
-  color: #ddd;
-  font: 13px/1.4 system-ui, sans-serif;
+  grid-template-columns: minmax(280px, 360px) 1fr;
+  height: calc(100dvh - 148px);
+  min-height: 480px;
+  background: var(--bg-panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  font: 13px/1.45 'Segoe UI', 'Microsoft YaHei', sans-serif;
 }
+
 .aisle-panel {
-  border-right: 1px solid #333;
-  padding: 12px 14px;
-  overflow: auto;
-}
-.aisle-panel h1 {
-  margin: 0 0 8px;
-  font-size: 16px;
-  color: #fff;
-}
-.muted { color: #8a8a8a; }
-.hint { color: #e0b060; min-height: 2.4em; }
-.group-title { font-weight: 600; color: #ccc; margin: 10px 0 4px; }
-.msg { color: #9ad; white-space: pre-wrap; }
-.aisle-panel label {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 8px;
-  margin: 6px 0;
+  border-right: 1px solid var(--border);
+  padding: 14px 16px 20px;
+  overflow: auto;
+  background: var(--bg-panel);
 }
-.aisle-panel label.check { font-weight: 600; }
-.aisle-panel input,
-.aisle-panel select {
-  background: #222;
-  color: #ddd;
-  border: 1px solid #444;
-  padding: 4px 6px;
+
+.aisle-panel h1 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.muted {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.hint {
+  margin: 0;
+  color: #e0b060;
+  font-size: 0.8rem;
+  min-height: 1.5em;
+}
+
+.group-title {
+  margin: 0;
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-label);
+}
+
+.msg {
+  margin: 10px 0 0;
+  color: #9ad;
+  white-space: pre-wrap;
+  font-size: 0.8rem;
+}
+
+.ok {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--accent);
+}
+
+.aisle-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.aisle-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   min-width: 0;
-  flex: 1;
 }
-.aisle-panel table { width: 100%; border-collapse: collapse; margin: 8px 0; }
-.aisle-panel th, .aisle-panel td { padding: 3px 4px; text-align: left; }
-.aisle-panel tr.active td { background: #24323d; }
-.aisle-panel td input { width: 52px; flex: none; }
-.btns { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
-.aisle-panel button {
-  background: #2a2a2a;
-  color: #eee;
-  border: 1px solid #444;
-  padding: 6px 10px;
-  cursor: pointer;
+
+.aisle-field-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-label);
+  line-height: 1.35;
 }
-.aisle-panel button.pri { background: #2a4a3a; border-color: #5c8; }
-.aisle-views {
+
+.aisle-field-pair {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
-  padding: 10px;
   min-width: 0;
 }
+
+.aisle-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #c5d4df;
+  cursor: pointer;
+}
+
+.aisle-check input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex: none;
+  accent-color: var(--accent);
+}
+
+.aisle-panel input[type='text'],
+.aisle-panel input[type='number'],
+.aisle-panel select {
+  display: block;
+  width: 100%;
+  height: var(--control-h);
+  box-sizing: border-box;
+  min-width: 0;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 0 10px;
+  font-size: 0.85rem;
+}
+
+.aisle-panel input:focus,
+.aisle-panel select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.aisle-panel table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0;
+}
+
+.aisle-panel th,
+.aisle-panel td {
+  padding: 4px 4px 4px 0;
+  text-align: left;
+  font-size: 0.75rem;
+  color: var(--text-label);
+}
+
+.aisle-panel th {
+  font-weight: 600;
+}
+
+.aisle-panel tr.active td {
+  background: rgba(0, 212, 170, 0.08);
+}
+
+.aisle-panel td {
+  color: var(--text);
+}
+
+.aisle-panel td input {
+  height: 30px;
+  padding: 0 6px;
+  font-size: 0.78rem;
+}
+
+.btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+}
+
+.aisle-panel button {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  background: #1e2d38;
+  color: #e8f0f6;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.aisle-panel button.pri {
+  background: var(--accent);
+  border-color: #00b894;
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.aisle-panel button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.aisle-panel button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.aisle-views {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 12px;
+  min-width: 0;
+  background: var(--bg);
+}
+
 .pane {
   position: relative;
   background: #000;
-  border: 1px solid #333;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
   min-height: 0;
 }
-.pane.on { border-color: #5c8; }
+
+.pane.on {
+  border-color: var(--accent);
+}
+
 .pane .bg {
   display: block;
   width: 100%;
@@ -70,11 +230,13 @@
   object-fit: contain;
   background: #000;
 }
+
 .pane .bg.empty {
   display: grid;
   place-items: center;
-  color: #666;
+  color: #5a6d7d;
 }
+
 .pane canvas.ov {
   position: absolute;
   left: 0;
@@ -83,17 +245,42 @@
   aspect-ratio: 16 / 9;
   cursor: crosshair;
 }
+
 .tag {
   position: absolute;
   left: 8px;
   top: 8px;
   z-index: 2;
-  background: rgba(0, 0, 0, 0.7);
+  background: rgba(0, 0, 0, 0.72);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   padding: 2px 8px;
+  font-size: 0.75rem;
 }
+
 .cell-edit {
-  border: 1px solid #2b3a45;
-  padding: 8px;
-  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
-.group-title { color: #9ab1c4; font-size: 12px; margin-bottom: 6px; }
+
+@media (max-width: 900px) {
+  .aisle-page {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .aisle-panel {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    max-height: 52vh;
+  }
+
+  .aisle-views {
+    grid-template-columns: 1fr;
+  }
+}

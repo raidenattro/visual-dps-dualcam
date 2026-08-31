@@ -490,46 +490,48 @@ function DualcamGeomSection({ cameraId }) {
           <Link to="/aisle">打开巷道标注</Link>
         </p>
       </div>
-      <label>
-        标定宽度 (px)
-        <input
-          type="number"
-          min={320}
-          value={size[0]}
-          onChange={(e) => patchView({ image_size: [Number(e.target.value), Number(size[1])] })}
-        />
-      </label>
-      <label>
-        标定高度 (px)
-        <input
-          type="number"
-          min={180}
-          value={size[1]}
-          onChange={(e) => patchView({ image_size: [Number(size[0]), Number(e.target.value)] })}
-        />
-      </label>
-      <label>
-        相机离地 (m)
-        <input
-          type="number"
-          step="0.01"
-          value={prior.camH ?? ''}
-          onChange={(e) => patchView({ prior: { ...prior, camH: Number(e.target.value) } })}
-        />
-      </label>
-      <label>
-        距巷道 (m)
-        <input
-          type="number"
-          step="0.01"
-          value={prior.camDist ?? ''}
-          onChange={(e) => patchView({ prior: { ...prior, camDist: Number(e.target.value) } })}
-        />
-      </label>
-      <div style={{ marginTop: 8 }}>
-        <button type="button" className="secondary" disabled={savingGeom} onClick={save}>
-          {savingGeom ? '保存中…' : '保存本路几何'}
-        </button>
+      <div className="drawer-form drawer-settings-grid">
+        <label>
+          标定宽度 (px)
+          <input
+            type="number"
+            min={320}
+            value={size[0]}
+            onChange={(e) => patchView({ image_size: [Number(e.target.value), Number(size[1])] })}
+          />
+        </label>
+        <label>
+          标定高度 (px)
+          <input
+            type="number"
+            min={180}
+            value={size[1]}
+            onChange={(e) => patchView({ image_size: [Number(size[0]), Number(e.target.value)] })}
+          />
+        </label>
+        <label>
+          相机离地 (m)
+          <input
+            type="number"
+            step="0.01"
+            value={prior.camH ?? ''}
+            onChange={(e) => patchView({ prior: { ...prior, camH: Number(e.target.value) } })}
+          />
+        </label>
+        <label>
+          距巷道 (m)
+          <input
+            type="number"
+            step="0.01"
+            value={prior.camDist ?? ''}
+            onChange={(e) => patchView({ prior: { ...prior, camDist: Number(e.target.value) } })}
+          />
+        </label>
+        <div className="drawer-geom-actions">
+          <button type="button" className="drawer-btn drawer-btn-primary" disabled={savingGeom} onClick={save}>
+            {savingGeom ? '保存中…' : '保存本路几何'}
+          </button>
+        </div>
       </div>
       {msg ? <p className="drawer-field-hint">{msg}</p> : null}
     </section>

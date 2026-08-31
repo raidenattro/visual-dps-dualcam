@@ -383,28 +383,30 @@ export default function AisleAnnotatePage() {
           3D 真值只在本页：勾选同一组 → 标墙四角 → 反解 → 生层线 → 填写货架号/货位号。
           监控页不再提供 2D 标注。开推理会校验本巷道已勾选的拣货墙是否都有层线和货架号。
         </p>
-        <label>
-          巷道编号
+        <div className="aisle-field">
+          <span className="aisle-field-label">巷道编号</span>
           <input value={aisleId} onChange={(e) => setAisleId(e.target.value)} />
-        </label>
-        <label className="check">
+        </div>
+        <label className="aisle-check">
           <input type="checkbox" checked={sameGroup} onChange={(e) => setSameGroup(e.target.checked)} />
           两台摄像头为同一组
         </label>
-        <label>
-          左路
-          <select value={camL} onChange={(e) => setCamL(e.target.value)} disabled={!sameGroup}>
-            <option value="">选择摄像头</option>
-            {camOptions}
-          </select>
-        </label>
-        <label>
-          右路
-          <select value={camR} onChange={(e) => setCamR(e.target.value)} disabled={!sameGroup}>
-            <option value="">选择摄像头</option>
-            {camOptions}
-          </select>
-        </label>
+        <div className="aisle-field-pair">
+          <div className="aisle-field">
+            <span className="aisle-field-label">左路</span>
+            <select value={camL} onChange={(e) => setCamL(e.target.value)} disabled={!sameGroup}>
+              <option value="">选择摄像头</option>
+              {camOptions}
+            </select>
+          </div>
+          <div className="aisle-field">
+            <span className="aisle-field-label">右路</span>
+            <select value={camR} onChange={(e) => setCamR(e.target.value)} disabled={!sameGroup}>
+              <option value="">选择摄像头</option>
+              {camOptions}
+            </select>
+          </div>
+        </div>
         <div className="btns">
           <button type="button" className="pri" onClick={bind} disabled={!grouped}>
             保存同一组
@@ -417,11 +419,11 @@ export default function AisleAnnotatePage() {
           <p className="ok">logical shard = {shard}（L/R 共用）</p>
         )}
 
-        <hr />
+        <section className="aisle-section">
         <p className="group-title">拣货墙面（开推理按此项校验）</p>
         <p className="muted">现场只有一面货架时只勾那一面；两面都拣货则两面都勾。</p>
         {wallsL.map((w) => (
-          <label key={`req-${w.wall_id}`} className="check">
+          <label key={`req-${w.wall_id}`} className="aisle-check">
             <input
               type="checkbox"
               checked={requiredWallIds(state).includes(w.wall_id)}
@@ -460,157 +462,172 @@ export default function AisleAnnotatePage() {
             ))}
           </tbody>
         </table>
-        <label>
-          货架号（墙{wallsL[activeWall]?.wall_id}）
+        <div className="aisle-field">
+          <span className="aisle-field-label">货架号（墙{wallsL[activeWall]?.wall_id}）</span>
           <input
             value={wallsL[activeWall]?.shelf_code || ''}
             placeholder="与 visual-dps 相同，写入事件 token"
             onChange={(e) => setWallField(activeWall, 'shelf_code', e.target.value)}
             onBlur={(e) => setWallField(activeWall, 'shelf_code', e.target.value, true)}
           />
-        </label>
+        </div>
         <p className="hint">
           {activeView === 'L' ? '左路' : '右路'} 墙{wallsL[activeWall]?.wall_id}：
           {(state.views?.[activeView]?.walls?.[activeWall]?.quad || []).length < 4
             ? `点 ${HINT[(state.views?.[activeView]?.walls?.[activeWall]?.quad || []).length]}`
             : '点「反解并对齐」后生成层线'}
         </p>
-        <label>
-          巷道净宽 m
-          <input type="number" step="0.01" value={state.aisle} onChange={(e) => setState({ ...state, aisle: Number(e.target.value) })} />
-        </label>
-        <label>
-          报警阈值 m
-          <input
-            type="number"
-            step="0.01"
-            value={state.contact_m}
-            onChange={(e) => setState({ ...state, contact_m: Number(e.target.value) })}
-          />
-        </label>
+        </section>
+
+        <section className="aisle-section">
         <p className="group-title">本巷道几何（覆盖全局默认）</p>
-        <label>
-          {activeView === 'L' ? '左路' : '右路'} 标定宽×高
-          <input
-            type="number"
-            min={320}
-            value={viewSize(state, activeView)[0]}
-            onChange={(e) => {
-              const next = { ...state, views: { ...state.views } };
-              const view = { ...(next.views[activeView] || {}) };
-              const h = viewSize(state, activeView)[1];
-              view.image_size = [Number(e.target.value), h];
-              next.views[activeView] = view;
-              setState(next);
-            }}
-          />
-          <input
-            type="number"
-            min={180}
-            value={viewSize(state, activeView)[1]}
-            onChange={(e) => {
-              const next = { ...state, views: { ...state.views } };
-              const view = { ...(next.views[activeView] || {}) };
-              const w = viewSize(state, activeView)[0];
-              view.image_size = [w, Number(e.target.value)];
-              next.views[activeView] = view;
-              setState(next);
-            }}
-          />
-        </label>
-        <label>
-          {activeView === 'L' ? '左路' : '右路'} 相机高度 m
-          <input
-            type="number"
-            step="0.01"
-            value={state.views?.[activeView]?.prior?.camH ?? state.prior?.camH ?? 2.84}
-            onChange={(e) => {
-              const next = { ...state, views: { ...state.views } };
-              const view = { ...(next.views[activeView] || {}) };
-              view.prior = { ...(view.prior || state.prior || {}), camH: Number(e.target.value) };
-              next.views[activeView] = view;
-              setState(next);
-            }}
-          />
-        </label>
-        <label>
-          {activeView === 'L' ? '左路' : '右路'} 距巷道 m
-          <input
-            type="number"
-            step="0.01"
-            value={state.views?.[activeView]?.prior?.camDist ?? state.prior?.camDist ?? 1.56}
-            onChange={(e) => {
-              const next = { ...state, views: { ...state.views } };
-              const view = { ...(next.views[activeView] || {}) };
-              view.prior = { ...(view.prior || state.prior || {}), camDist: Number(e.target.value) };
-              next.views[activeView] = view;
-              setState(next);
-            }}
-          />
-        </label>
-        <label>
-          AABB X
-          <input
-            type="number"
-            step="0.01"
-            value={(state.aabb?.x || [-1.35, 1.35])[0]}
-            onChange={(e) => {
-              const aabb = { ...(state.aabb || {}), x: [Number(e.target.value), (state.aabb?.x || [-1.35, 1.35])[1]] };
-              setState({ ...state, aabb });
-            }}
-          />
-          <input
-            type="number"
-            step="0.01"
-            value={(state.aabb?.x || [-1.35, 1.35])[1]}
-            onChange={(e) => {
-              const aabb = { ...(state.aabb || {}), x: [(state.aabb?.x || [-1.35, 1.35])[0], Number(e.target.value)] };
-              setState({ ...state, aabb });
-            }}
-          />
-        </label>
-        <label>
-          AABB Y
-          <input
-            type="number"
-            step="0.01"
-            value={(state.aabb?.y || [0.5, 1.65])[0]}
-            onChange={(e) => {
-              const aabb = { ...(state.aabb || {}), y: [Number(e.target.value), (state.aabb?.y || [0.5, 1.65])[1]] };
-              setState({ ...state, aabb });
-            }}
-          />
-          <input
-            type="number"
-            step="0.01"
-            value={(state.aabb?.y || [0.5, 1.65])[1]}
-            onChange={(e) => {
-              const aabb = { ...(state.aabb || {}), y: [(state.aabb?.y || [0.5, 1.65])[0], Number(e.target.value)] };
-              setState({ ...state, aabb });
-            }}
-          />
-        </label>
-        <label>
-          AABB Z
-          <input
-            type="number"
-            step="0.01"
-            value={(state.aabb?.z || [-0.12, 2.5])[0]}
-            onChange={(e) => {
-              const aabb = { ...(state.aabb || {}), z: [Number(e.target.value), (state.aabb?.z || [-0.12, 2.5])[1]] };
-              setState({ ...state, aabb });
-            }}
-          />
-          <input
-            type="number"
-            step="0.01"
-            value={(state.aabb?.z || [-0.12, 2.5])[1]}
-            onChange={(e) => {
-              const aabb = { ...(state.aabb || {}), z: [(state.aabb?.z || [-0.12, 2.5])[0], Number(e.target.value)] };
-              setState({ ...state, aabb });
-            }}
-          />
-        </label>
+        <div className="aisle-field-pair">
+          <div className="aisle-field">
+            <span className="aisle-field-label">巷道净宽 (m)</span>
+            <input type="number" step="0.01" value={state.aisle} onChange={(e) => setState({ ...state, aisle: Number(e.target.value) })} />
+          </div>
+          <div className="aisle-field">
+            <span className="aisle-field-label">报警阈值 (m)</span>
+            <input
+              type="number"
+              step="0.01"
+              value={state.contact_m}
+              onChange={(e) => setState({ ...state, contact_m: Number(e.target.value) })}
+            />
+          </div>
+        </div>
+        <div className="aisle-field">
+          <span className="aisle-field-label">{activeView === 'L' ? '左路' : '右路'} 标定宽 × 高 (px)</span>
+          <div className="aisle-field-pair">
+            <input
+              type="number"
+              min={320}
+              value={viewSize(state, activeView)[0]}
+              onChange={(e) => {
+                const next = { ...state, views: { ...state.views } };
+                const view = { ...(next.views[activeView] || {}) };
+                const h = viewSize(state, activeView)[1];
+                view.image_size = [Number(e.target.value), h];
+                next.views[activeView] = view;
+                setState(next);
+              }}
+            />
+            <input
+              type="number"
+              min={180}
+              value={viewSize(state, activeView)[1]}
+              onChange={(e) => {
+                const next = { ...state, views: { ...state.views } };
+                const view = { ...(next.views[activeView] || {}) };
+                const w = viewSize(state, activeView)[0];
+                view.image_size = [w, Number(e.target.value)];
+                next.views[activeView] = view;
+                setState(next);
+              }}
+            />
+          </div>
+        </div>
+        <div className="aisle-field-pair">
+          <div className="aisle-field">
+            <span className="aisle-field-label">{activeView === 'L' ? '左路' : '右路'} 相机高度 (m)</span>
+            <input
+              type="number"
+              step="0.01"
+              value={state.views?.[activeView]?.prior?.camH ?? state.prior?.camH ?? 2.84}
+              onChange={(e) => {
+                const next = { ...state, views: { ...state.views } };
+                const view = { ...(next.views[activeView] || {}) };
+                view.prior = { ...(view.prior || state.prior || {}), camH: Number(e.target.value) };
+                next.views[activeView] = view;
+                setState(next);
+              }}
+            />
+          </div>
+          <div className="aisle-field">
+            <span className="aisle-field-label">{activeView === 'L' ? '左路' : '右路'} 距巷道 (m)</span>
+            <input
+              type="number"
+              step="0.01"
+              value={state.views?.[activeView]?.prior?.camDist ?? state.prior?.camDist ?? 1.56}
+              onChange={(e) => {
+                const next = { ...state, views: { ...state.views } };
+                const view = { ...(next.views[activeView] || {}) };
+                view.prior = { ...(view.prior || state.prior || {}), camDist: Number(e.target.value) };
+                next.views[activeView] = view;
+                setState(next);
+              }}
+            />
+          </div>
+        </div>
+        <div className="aisle-field">
+          <span className="aisle-field-label">AABB X 最小 / 最大</span>
+          <div className="aisle-field-pair">
+            <input
+              type="number"
+              step="0.01"
+              value={(state.aabb?.x || [-1.35, 1.35])[0]}
+              onChange={(e) => {
+                const aabb = { ...(state.aabb || {}), x: [Number(e.target.value), (state.aabb?.x || [-1.35, 1.35])[1]] };
+                setState({ ...state, aabb });
+              }}
+            />
+            <input
+              type="number"
+              step="0.01"
+              value={(state.aabb?.x || [-1.35, 1.35])[1]}
+              onChange={(e) => {
+                const aabb = { ...(state.aabb || {}), x: [(state.aabb?.x || [-1.35, 1.35])[0], Number(e.target.value)] };
+                setState({ ...state, aabb });
+              }}
+            />
+          </div>
+        </div>
+        <div className="aisle-field">
+          <span className="aisle-field-label">AABB Y 最小 / 最大</span>
+          <div className="aisle-field-pair">
+            <input
+              type="number"
+              step="0.01"
+              value={(state.aabb?.y || [0.5, 1.65])[0]}
+              onChange={(e) => {
+                const aabb = { ...(state.aabb || {}), y: [Number(e.target.value), (state.aabb?.y || [0.5, 1.65])[1]] };
+                setState({ ...state, aabb });
+              }}
+            />
+            <input
+              type="number"
+              step="0.01"
+              value={(state.aabb?.y || [0.5, 1.65])[1]}
+              onChange={(e) => {
+                const aabb = { ...(state.aabb || {}), y: [(state.aabb?.y || [0.5, 1.65])[0], Number(e.target.value)] };
+                setState({ ...state, aabb });
+              }}
+            />
+          </div>
+        </div>
+        <div className="aisle-field">
+          <span className="aisle-field-label">AABB Z 最小 / 最大</span>
+          <div className="aisle-field-pair">
+            <input
+              type="number"
+              step="0.01"
+              value={(state.aabb?.z || [-0.12, 2.5])[0]}
+              onChange={(e) => {
+                const aabb = { ...(state.aabb || {}), z: [Number(e.target.value), (state.aabb?.z || [-0.12, 2.5])[1]] };
+                setState({ ...state, aabb });
+              }}
+            />
+            <input
+              type="number"
+              step="0.01"
+              value={(state.aabb?.z || [-0.12, 2.5])[1]}
+              onChange={(e) => {
+                const aabb = { ...(state.aabb || {}), z: [(state.aabb?.z || [-0.12, 2.5])[0], Number(e.target.value)] };
+                setState({ ...state, aabb });
+              }}
+            />
+          </div>
+        </div>
         <div className="btns">
           <button type="button" className="pri" onClick={solve} disabled={!grouped}>
             1. 反解并对齐
@@ -619,14 +636,16 @@ export default function AisleAnnotatePage() {
             保存标定
           </button>
         </div>
-        <label>
-          层数
-          <input type="number" min={1} max={8} value={nLayers} onChange={(e) => setNLayers(Number(e.target.value))} />
-        </label>
-        <label>
-          列数
-          <input type="number" min={1} max={8} value={nCols} onChange={(e) => setNCols(Number(e.target.value))} />
-        </label>
+        <div className="aisle-field-pair">
+          <div className="aisle-field">
+            <span className="aisle-field-label">层数</span>
+            <input type="number" min={1} max={8} value={nLayers} onChange={(e) => setNLayers(Number(e.target.value))} />
+          </div>
+          <div className="aisle-field">
+            <span className="aisle-field-label">列数</span>
+            <input type="number" min={1} max={8} value={nCols} onChange={(e) => setNCols(Number(e.target.value))} />
+          </div>
+        </div>
         <div className="btns">
           <button type="button" className="pri" onClick={genMesh} disabled={!state.solved?.ok}>
             2. 生成本墙层线
@@ -635,10 +654,10 @@ export default function AisleAnnotatePage() {
         {selected && (
           <div className="cell-edit">
             <div className="group-title">选中货格</div>
-            <label>
-              货位号
+            <div className="aisle-field">
+              <span className="aisle-field-label">货位号</span>
               <input value={boxIdEdit} onChange={(e) => setBoxIdEdit(e.target.value)} placeholder="如 A-01" />
-            </label>
+            </div>
             <div className="btns">
               <button type="button" className="pri" onClick={applyBoxId}>
                 应用编号
@@ -649,6 +668,7 @@ export default function AisleAnnotatePage() {
             </div>
           </div>
         )}
+        </section>
         <p className="msg">{msg}</p>
       </aside>
       <div className="aisle-views">

@@ -225,17 +225,24 @@
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
-  background: #0f151a;
-  border: 1px solid #334653;
-  color: #eaf2f8;
-  border-radius: 6px;
-  padding: 9px 10px;
-  font-size: 0.9rem;
+  height: var(--control-h);
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 0 10px;
+  font-size: 0.85rem;
 }
 
 .drawer-form input:read-only {
   opacity: 0.75;
   cursor: default;
+}
+
+.drawer-form input[type='checkbox'] {
+  width: auto;
+  height: auto;
+  padding: 0;
 }
 
 .detail-row--switch {
@@ -571,4 +578,39 @@
 .drawer-footer button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.drawer-geom-actions {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+}
+
+.drawer-btn {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--radius);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.drawer-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.drawer-btn-primary {
+  border: none;
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.drawer-btn-primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.drawer-btn-secondary {
+  border: 1px solid var(--border-strong);
+  background: #1e2d38;
+  color: #e8f0f6;
 }

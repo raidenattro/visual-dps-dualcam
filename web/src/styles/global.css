@@ -2,15 +2,33 @@
   box-sizing: border-box;
 }
 
+:root {
+  --bg: #0f1419;
+  --bg-panel: #141c22;
+  --bg-elev: #182027;
+  --bg-input: #0f1419;
+  --border: #2b3a45;
+  --border-strong: #3a4f5f;
+  --text: #eaf2f8;
+  --text-muted: #8fa3b5;
+  --text-label: #9ab1c4;
+  --accent: #00d4aa;
+  --accent-ink: #072018;
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-md: 8px;
+  --control-h: 36px;
+}
+
 body {
   margin: 0;
-  background: #0f1419;
-  color: #e8f0f6;
+  background: var(--bg);
+  color: var(--text);
   font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
 }
 
 a {
-  color: #00d4aa;
+  color: var(--accent);
 }
 
 button {
