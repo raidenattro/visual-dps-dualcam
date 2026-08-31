@@ -58,7 +58,7 @@ EVENT_WORKER_SHARD_END=7
 EVENT_WORKER_B_SHARD_START=8
 EVENT_WORKER_B_SHARD_END=15
 
-docker compose --profile worker-dual up -d \
+docker compose up -d \
   visual-dps-event-worker visual-dps-event-worker-b
 ```
 

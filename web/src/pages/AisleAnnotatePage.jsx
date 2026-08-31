@@ -80,6 +80,11 @@ export default function AisleAnnotatePage() {
   const grouped = sameGroup && camL && camR && camL !== camR;
   const wallsL = state.views?.L?.walls || emptyWalls();
   const wallsR = state.views?.R?.walls || emptyWalls();
+  const selectedCell = selected
+    ? (state.slot_meshes || []).flatMap((mesh) => meshCells(mesh).map((cell) => ({ mesh, cell }))).find(
+        ({ mesh, cell }) => `${mesh.wall_id}:${cell.slot_key || `r${cell.row}c${cell.col}`}` === selected,
+      )?.cell
+    : null;
 
   useEffect(() => {
     apiGet('/api/cameras?probe=0').then((d) => setCameras(d.items || [])).catch(() => {});
@@ -151,7 +156,7 @@ export default function AisleAnnotatePage() {
     setState(d.aisle);
     setMsg(
       (wallsL[activeWall]?.shelf_code || '').trim()
-        ? '已生成本墙层线，拖水平分格线对齐隔板；点选货格可改货位号。'
+        ? '已生成本墙层线，拖水平分格线对齐隔板；点选货格可改货位编号。'
         : '已生成本墙层线。请填写本墙货架号并保存，否则无法开推理。',
     );
   };
@@ -380,7 +385,7 @@ export default function AisleAnnotatePage() {
       <aside className="aisle-panel">
         <h1>巷道双路标注</h1>
         <p className="muted">
-          3D 真值只在本页：勾选同一组 → 标墙四角 → 反解 → 生层线 → 填写货架号/货位号。
+          3D 真值只在本页：勾选同一组 → 标墙四角 → 反解 → 生层线 → 填写货架号 / 货位编号。
           监控页不再提供 2D 标注。开推理会校验本巷道已勾选的拣货墙是否都有层线和货架号。
         </p>
         <div className="aisle-field">
@@ -462,15 +467,18 @@ export default function AisleAnnotatePage() {
             ))}
           </tbody>
         </table>
-        <div className="aisle-field">
-          <span className="aisle-field-label">货架号（墙{wallsL[activeWall]?.wall_id}）</span>
+        <label className="aisle-field">
+          <span className="aisle-field-label">
+            货架号
+            <span className="aisle-field-extra">shelf_code · 墙{wallsL[activeWall]?.wall_id}</span>
+          </span>
           <input
             value={wallsL[activeWall]?.shelf_code || ''}
-            placeholder="与 visual-dps 相同，写入事件 token"
+            placeholder="必填"
             onChange={(e) => setWallField(activeWall, 'shelf_code', e.target.value)}
             onBlur={(e) => setWallField(activeWall, 'shelf_code', e.target.value, true)}
           />
-        </div>
+        </label>
         <p className="hint">
           {activeView === 'L' ? '左路' : '右路'} 墙{wallsL[activeWall]?.wall_id}：
           {(state.views?.[activeView]?.walls?.[activeWall]?.quad || []).length < 4
@@ -653,17 +661,22 @@ export default function AisleAnnotatePage() {
         </div>
         {selected && (
           <div className="cell-edit">
-            <div className="group-title">选中货格</div>
-            <div className="aisle-field">
-              <span className="aisle-field-label">货位号</span>
-              <input value={boxIdEdit} onChange={(e) => setBoxIdEdit(e.target.value)} placeholder="如 A-01" />
-            </div>
+            <p className="group-title">货位编号</p>
+            <p className="muted">
+              {selectedCell
+                ? `第 ${selectedCell.row + 1} 层 · 第 ${selectedCell.col + 1} 列`
+                : '点击画面中的货位进行编辑'}
+            </p>
+            <label className="aisle-field">
+              <span className="aisle-field-label">编号</span>
+              <input value={boxIdEdit} onChange={(e) => setBoxIdEdit(e.target.value)} />
+            </label>
             <div className="btns">
               <button type="button" className="pri" onClick={applyBoxId}>
                 应用编号
               </button>
               <button type="button" onClick={deleteCell}>
-                删除此格
+                删除货位
               </button>
             </div>
           </div>

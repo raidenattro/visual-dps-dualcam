@@ -11,7 +11,7 @@ from services.dualcam_config import calib_size_from_view, get_dualcam_section
 
 
 def collision_token(shelf_code: str, box_id: Any) -> str:
-    """与 visual-dps 相同：``{货架号}:{货位号}``。"""
+    """与 visual-dps 相同：``{shelf_code}:{货位编号}``。"""
     return box_collision_token({
         "shelf_code": str(shelf_code or "").strip(),
         "box_id": str(box_id or "").strip(),
@@ -26,7 +26,7 @@ def _view_cam(aisle: dict, role: str) -> dict | None:
 
 
 def overlay_for_role(aisle: dict, role: str) -> dict[str, Any]:
-    """投影本路看到的货格：video_polygon 在标定像素系，token 用货架号+货位号。"""
+    """投影本路看到的货格：video_polygon 在标定像素系，token 用货架号+货位编号。"""
     aid = str(aisle.get("aisle_id") or "").strip()
     role = str(role or "").strip().upper() or "L"
     views = aisle.get("views") or {}

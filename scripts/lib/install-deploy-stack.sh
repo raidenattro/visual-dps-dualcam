@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # install.sh 共用：启动 compose 栈（须已定义 compose_cmd）
-# 只启双路 3D visual-dps-event-worker；停掉本机残留的 pick_state worker-2。
+# 只启双路 3D visual-dps-event-worker（默认 a+b）；停掉本机残留的 pick_state worker-2。
 
 visual_dps_compose_up_stack() {
   echo "==> 启动服务（双路 3D event-worker）"

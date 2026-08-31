@@ -1,4 +1,4 @@
-"""UV letterbox 缩放、配对窗、开推理校验、货架号:货位号 token。"""
+"""UV letterbox 缩放、配对窗、开推理校验、货架号:货位编号 token。"""
 
 from __future__ import annotations
 

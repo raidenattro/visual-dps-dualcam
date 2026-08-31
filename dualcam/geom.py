@@ -170,7 +170,7 @@ def row_ys_from_mesh(mesh: dict, corners: Any = None) -> list[float]:
 
 
 def _with_mesh_identity(out: dict, extra: dict | None) -> dict:
-    """拖层线重建网格时保留货架号 / 货位号 / 已删格。"""
+    """拖层线重建网格时保留货架号 / 货位编号 / 已删格。"""
     if not isinstance(extra, dict):
         return out
     sc = str(extra.get("shelf_code") or "").strip()

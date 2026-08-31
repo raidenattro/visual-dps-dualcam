@@ -109,6 +109,9 @@ services:
       - POSE_LOGICAL_SHARD_COUNT=${POSE_LOGICAL_SHARD_COUNT:-16}
       - POSE_STREAM_KEY_PREFIX=${POSE_STREAM_KEY_PREFIX:-pose:stream}
       - POSE_STREAM_GROUP=event-workers
+      - EVENT_WORKER_SHARD_START=${EVENT_WORKER_SHARD_START:-0}
+      - EVENT_WORKER_SHARD_END=${EVENT_WORKER_SHARD_END:-7}
+      - EVENT_WORKER_CONSUMER_NAME=${EVENT_WORKER_CONSUMER_NAME:-worker-a}
       - EVENT_WORKER_ENABLE_CALLBACKS=${EVENT_WORKER_ENABLE_CALLBACKS:-1}
       - COLLISION_LOG=${COLLISION_LOG:-0}
       - TZ=${TZ:-Asia/Shanghai}
@@ -120,7 +123,6 @@ services:
 
 
   visual-dps-event-worker-b:
-    profiles: ["worker-dual"]
     image: visual-dps-event-worker:${VISUAL_DPS_IMAGE_TAG:-latest}
     container_name: visual-dps-event-worker-b
     depends_on:

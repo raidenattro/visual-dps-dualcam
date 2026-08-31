@@ -293,8 +293,8 @@ def require_inference_ready(camera_id: str, json_dir: str | None = None) -> tupl
         walls = "、".join(f"墙{w}" for w in no_shelf)
         return None, (
             f"巷道 {aid} 的{walls}未填写货架号。"
-            "碰撞事件按「货架号:货位号」上报（与 visual-dps 相同），"
-            "请在巷道标注页填写该墙的货架号并保存。"
+            "请到「巷道标注」页填写该墙的货架号（shelf_code）并保存。"
+            "碰撞事件按「货架号:货位编号」上报。"
         )
     grouped["solved"] = True
     grouped["mesh_walls"] = len(need)
