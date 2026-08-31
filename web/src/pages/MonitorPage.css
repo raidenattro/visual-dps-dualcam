@@ -196,36 +196,14 @@
   text-decoration: underline;
 }
 
-.monitor-view-switch {
-  display: inline-flex;
-  gap: 0;
-  margin: 0;
-  padding: 3px;
-  background: #141c22;
-  border: 1px solid #2b3a45;
-  border-radius: 8px;
+.monitor-aisle-link {
+  color: #9ad;
+  text-decoration: none;
+  font-size: 13px;
+  white-space: nowrap;
 }
-
-.monitor-view-switch button {
-  min-width: 88px;
-  height: 32px;
-  padding: 0 12px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: #8fa3b5;
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.monitor-view-switch button.active {
-  background: #00d4aa;
-  color: #072018;
-}
-
-.monitor-view-switch button:not(.active):hover {
-  color: #eaf2f8;
+.monitor-aisle-link:hover {
+  text-decoration: underline;
 }
 
 .monitor-page .status-banner {

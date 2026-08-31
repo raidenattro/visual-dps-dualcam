@@ -16,13 +16,14 @@ from dualcam.lift import (
     pick_pairs,
     wall_plane_from_solved,
 )
+from services.aisle_store import required_wall_ids, wall_shelf_code
+from services.box_identity import box_collision_token
 from services.dualcam_config import (
     aabb_from_section,
     calib_size_from_view,
     get_dualcam_section,
     scale_keypoints_to_calib,
 )
-from services.dualcam_overlay import collision_token
 
 
 def _wrist_uv_score(k: np.ndarray, s: np.ndarray, idx: int) -> tuple[np.ndarray, float]:
@@ -62,27 +63,42 @@ class DualcamProcessor:
         cams = aisle.get("cameras") or {}
         self.cam_l = str((cams.get("L") or {}).get("camera_id") or "")
         self.cam_r = str((cams.get("R") or {}).get("camera_id") or "")
-        self.shelf_code = self.aisle_id
+        self.required_walls = required_wall_ids(aisle)
         views = aisle.get("views") or {}
         self.calib_l = calib_size_from_view(views.get("L") if isinstance(views, dict) else None, self.section)
         self.calib_r = calib_size_from_view(views.get("R") if isinstance(views, dict) else None, self.section)
         self.aabb = aabb_from_section(self.section, aisle)
 
     def ready(self) -> bool:
-        return bool(
-            self.solved.get("ok")
-            and "L" in self.cams
-            and "R" in self.cams
-            and self.meshes
-        )
+        return not bool(self.not_ready_reason())
 
     def not_ready_reason(self) -> str:
         if not self.solved.get("ok"):
             return f"巷道 {self.aisle_id} 尚未反解"
         if "L" not in self.cams or "R" not in self.cams:
             return f"巷道 {self.aisle_id} 反解结果缺少 L/R 相机"
-        if not self.meshes:
-            return f"巷道 {self.aisle_id} 尚未生成货格层线"
+        by_wall: dict[int, dict] = {}
+        for mesh in self.meshes:
+            if not isinstance(mesh, dict):
+                continue
+            try:
+                wid = int(mesh.get("wall_id"))
+            except (TypeError, ValueError):
+                continue
+            by_wall[wid] = mesh
+        missing = [w for w in self.required_walls if w not in by_wall]
+        if missing:
+            walls = "、".join(f"墙{w}" for w in missing)
+            return f"巷道 {self.aisle_id} 拣货墙缺少层线：{walls}"
+        no_shelf = []
+        for wid in self.required_walls:
+            mesh = by_wall.get(wid) or {}
+            code = str(mesh.get("shelf_code") or "").strip() or wall_shelf_code(self.aisle, wid)
+            if not code:
+                no_shelf.append(wid)
+        if no_shelf:
+            walls = "、".join(f"墙{w}" for w in no_shelf)
+            return f"巷道 {self.aisle_id} 的{walls}未填写货架号"
         return ""
 
     def process_pair(self, pose_l: dict, pose_r: dict) -> dict[str, Any]:
@@ -123,8 +139,12 @@ class DualcamProcessor:
                 new_prev[(i, idx)] = p
                 hits = contact_slots(p, self.meshes, self.solved, self.contact_m)
                 for hit in hits:
-                    tok = collision_token(self.aisle_id, hit.get("wall_id"), hit.get("box_id"))
-                    if tok and tok not in tokens:
+                    shelf = str(hit.get("shelf_code") or "").strip() or wall_shelf_code(
+                        self.aisle, int(hit.get("wall_id") or 0)
+                    )
+                    box_id = str(hit.get("box_id") or "").strip()
+                    tok = box_collision_token({"shelf_code": shelf, "box_id": box_id})
+                    if tok and ":" in tok and tok not in tokens:
                         tokens.append(tok)
 
         self._prefer = new_prefer

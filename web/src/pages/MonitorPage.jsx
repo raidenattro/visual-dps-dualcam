@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
-import AnnotateControls from '../components/AnnotateControls';
 import InferenceToggle from '../components/InferenceToggle';
 import MonitorPreviewStage from '../components/MonitorPreviewStage';
 import ShelfBar from '../components/ShelfBar';
-import ShelfDrawer, { emptyShelfForm } from '../components/ShelfDrawer';
-import { useAnnotateTool } from '../features/annotate/useAnnotateTool';
-import { boxMatchesAnyCollision, overlayToAnnotation, parseAnnotationPayload } from '../lib/annotation';
+import { overlayToAnnotation } from '../lib/annotation';
 import { getPerspectiveTransform, perspectiveTransform } from '../lib/geometry';
 import { apiGet, apiPost, cameraPlaybackUrl, openCameraLiveStream } from '../api/client';
 import { resolveCameraModelLabel } from '../lib/cameraSettings';
@@ -36,24 +33,8 @@ function getDist(p, a, b) {
 }
 
 export default function MonitorPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const cameraId = searchParams.get('camera')?.trim() || '';
-  const viewMode = searchParams.get('mode') === 'annotate' ? 'annotate' : 'monitor';
-
-  const setViewMode = useCallback(
-    (mode) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          if (mode === 'annotate') next.set('mode', 'annotate');
-          else next.delete('mode');
-          return next;
-        },
-        { replace: true },
-      );
-    },
-    [setSearchParams],
-  );
 
   const [monitorCamera, setMonitorCamera] = useState(null);
   const [cameraLoadState, setCameraLoadState] = useState('loading');
@@ -77,20 +58,6 @@ export default function MonitorPage() {
     setShowVideoLayer(false);
   }, [cameraId]);
   const [inferLoading, setInferLoading] = useState(false);
-  const [shelfDrawerOpen, setShelfDrawerOpen] = useState(false);
-  const [shelfDrawerForm, setShelfDrawerForm] = useState(emptyShelfForm);
-  const [shelfDrawerSaving, setShelfDrawerSaving] = useState(false);
-  const annotateCanvasRef = useRef(null);
-  const applyAnnotationPayloadRef = useRef(() => false);
-  const annotateTool = useAnnotateTool(annotateCanvasRef, {
-    fixedCamera: monitorCamera
-      ? { id: monitorCamera.id, name: monitorCamera.name, url: monitorCamera.url }
-      : null,
-    embedded: true,
-    streamOverlay: true,
-    canvasActive: viewMode === 'annotate',
-  });
-  applyAnnotationPayloadRef.current = annotateTool.applyAnnotationPayload;
   const [status, setStatus] = useState({
     title: '🟡 步骤 1：准备就绪',
     desc: '请先上传视频并完成货架网格标注，保存后再启动智能检测。',
@@ -546,11 +513,9 @@ export default function MonitorPage() {
     (async () => {
       try {
         const camPath = `/api/cameras/${encodeURIComponent(cameraId)}?settings=0`;
-        const annPath = `/api/cameras/${encodeURIComponent(cameraId)}/annotation`;
         const aislePath = `/api/aisles/by-camera/${encodeURIComponent(cameraId)}`;
-        const [data, annRes, aisleRes] = await Promise.all([
+        const [data, aisleRes] = await Promise.all([
           apiGet(camPath),
-          apiGet(annPath).catch(() => null),
           apiGet(aislePath).catch(() => null),
         ]);
         if (cancelled) return;
@@ -563,9 +528,6 @@ export default function MonitorPage() {
         setMonitorCamera(data.camera);
         if (aisleRes?.status === 'success' && aisleRes.overlay?.boxes?.length) {
           setAnnotation(overlayToAnnotation(aisleRes.overlay));
-        } else if (annRes?.status === 'success') {
-          setAnnotation(parseAnnotationPayload(annRes));
-          applyAnnotationPayloadRef.current(annRes, { silent: true });
         } else {
           setAnnotation(EMPTY_ANNOTATION);
         }
@@ -602,6 +564,20 @@ export default function MonitorPage() {
     }
   }, [cameraId]);
 
+  const loadAnnotation = useCallback(async () => {
+    if (!cameraId) return;
+    try {
+      const aisleRes = await apiGet(`/api/aisles/by-camera/${encodeURIComponent(cameraId)}`).catch(() => null);
+      if (aisleRes?.status === 'success' && aisleRes.overlay?.boxes?.length) {
+        setAnnotation(overlayToAnnotation(aisleRes.overlay));
+        return;
+      }
+      setAnnotation(EMPTY_ANNOTATION);
+    } catch {
+      setAnnotation(EMPTY_ANNOTATION);
+    }
+  }, [cameraId]);
+
   const handleInferToggle = useCallback(
     async (turnOn) => {
       if (!cameraId || inferLoading) return;
@@ -617,89 +593,20 @@ export default function MonitorPage() {
           return;
         }
         await refreshCameraMeta();
+        await loadAnnotation();
       } catch (e) {
         alert(formatUserError(e.message) || (turnOn ? '启动检测失败' : '停止检测失败'));
       } finally {
         setInferLoading(false);
       }
     },
-    [cameraId, inferLoading, refreshCameraMeta],
+    [cameraId, inferLoading, refreshCameraMeta, loadAnnotation],
   );
 
-  const loadAnnotation = useCallback(async () => {
-    if (!cameraId) return;
-    try {
-      const aisleRes = await apiGet(`/api/aisles/by-camera/${encodeURIComponent(cameraId)}`).catch(() => null);
-      if (aisleRes?.status === 'success' && aisleRes.overlay?.boxes?.length) {
-        setAnnotation(overlayToAnnotation(aisleRes.overlay));
-        return;
-      }
-      const res = await apiGet(`/api/cameras/${encodeURIComponent(cameraId)}/annotation`);
-      if (res.status === 'success') {
-        setAnnotation(parseAnnotationPayload(res));
-        applyAnnotationPayloadRef.current(res, { silent: true });
-      } else {
-        setAnnotation(EMPTY_ANNOTATION);
-      }
-    } catch {
-      setAnnotation(EMPTY_ANNOTATION);
-    }
-  }, [cameraId]);
-
-  const switchViewMode = useCallback(
-    async (mode) => {
-      if (viewMode === 'annotate' && mode === 'monitor') {
-        await annotateTool.flushAutoSave();
-        await loadAnnotation();
-      }
-      setViewMode(mode);
-    },
-    [viewMode, annotateTool, loadAnnotation, setViewMode],
-  );
+  const handlePreviewFrameSize = useCallback(() => {}, []);
 
   useEffect(() => {
-    if (!cameraId || viewMode !== 'annotate') return;
-    loadAnnotation();
-  }, [cameraId, viewMode, loadAnnotation]);
-
-  const openShelfDrawer = useCallback(() => {
-    setShelfDrawerForm(emptyShelfForm());
-    setShelfDrawerOpen(true);
-  }, []);
-
-  const closeShelfDrawer = useCallback(() => {
-    if (shelfDrawerSaving) return;
-    setShelfDrawerOpen(false);
-  }, [shelfDrawerSaving]);
-
-  const handleShelfDrawerChange = useCallback((field, value) => {
-    setShelfDrawerForm((prev) => ({ ...prev, [field]: value }));
-  }, []);
-
-  const confirmShelfDrawer = useCallback(async () => {
-    setShelfDrawerSaving(true);
-    try {
-      const result = await annotateTool.createShelfFromDrawer(shelfDrawerForm);
-      if (result?.ok) setShelfDrawerOpen(false);
-    } finally {
-      setShelfDrawerSaving(false);
-    }
-  }, [annotateTool, shelfDrawerForm]);
-
-  const syncCanvasSizeRef = useRef(annotateTool.syncCanvasSize);
-  syncCanvasSizeRef.current = annotateTool.syncCanvasSize;
-
-  const handlePreviewFrameSize = useCallback(
-    ({ width, height }) => {
-      if (viewMode === 'annotate') {
-        syncCanvasSizeRef.current(width, height);
-      }
-    },
-    [viewMode],
-  );
-
-  useEffect(() => {
-    if (!cameraId || viewMode !== 'monitor') return undefined;
+    if (!cameraId) return undefined;
     const running =
       monitorCamera?.inference?.status === 'running' ||
       monitorCamera?.inference?.status === 'starting';
@@ -734,7 +641,7 @@ export default function MonitorPage() {
       cancelled = true;
       closeStream();
     };
-  }, [cameraId, viewMode, monitorCamera?.inference?.status]);
+  }, [cameraId, monitorCamera?.inference?.status]);
 
   useEffect(() => {
     if (!cameraId || monitorCamera?.inference?.status !== 'starting') return undefined;
@@ -803,8 +710,7 @@ export default function MonitorPage() {
                 }
                 onToggle={handleInferToggle}
               />
-              {viewMode === 'monitor' ? (
-                <div className="monitor-header-layers" role="group" aria-label="画面叠加层">
+              <div className="monitor-header-layers" role="group" aria-label="画面叠加层">
                   <label
                     className={`monitor-layer-switch${showVideoLayer ? ' on' : ''}`}
                     title="实时视频预览（WebRTC/HLS/MJPEG）"
@@ -845,28 +751,10 @@ export default function MonitorPage() {
                     <span className="monitor-layer-switch-label">ROI</span>
                   </label>
                 </div>
-              ) : null}
             </div>
-            <div className="monitor-view-switch" role="tablist" aria-label="查看模式">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={viewMode === 'monitor'}
-                className={viewMode === 'monitor' ? 'active' : ''}
-                onClick={() => switchViewMode('monitor')}
-              >
-                实时监控
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={viewMode === 'annotate'}
-                className={viewMode === 'annotate' ? 'active' : ''}
-                onClick={() => switchViewMode('annotate')}
-              >
-                标注
-              </button>
-            </div>
+            <Link to="/aisle" className="monitor-aisle-link">
+              去巷道标注
+            </Link>
           </div>
         </header>
       ) : null}
@@ -903,40 +791,13 @@ export default function MonitorPage() {
           liveSkeletons={liveSkeletons}
           liveInferWidth={liveInferSize.w}
           liveInferHeight={liveInferSize.h}
-          showVideoLayer={viewMode === 'annotate' ? true : showVideoLayer}
+          showVideoLayer={showVideoLayer}
           showSkeletonLayer={showSkeletonLayer}
           showRoiLayer={showRoiLayer}
-          annotateMode={viewMode === 'annotate'}
-          annotateCanvasRef={annotateCanvasRef}
           onFrameSize={handlePreviewFrameSize}
-          annotatePanel={<AnnotateControls tool={annotateTool} embedded />}
-          shelfBar={
-            viewMode === 'annotate' ? (
-              <ShelfBar
-                shelves={annotateTool.shelves}
-                selectedCode={annotateTool.selectedShelfCode}
-                showDraft={!annotateTool.selectedShelfCode}
-                draftLabel={annotateTool.cameraName?.trim() || '新货架'}
-                onSelect={annotateTool.switchShelfTab}
-                onCreate={openShelfDrawer}
-                onDelete={annotateTool.deleteSelectedShelf}
-              />
-            ) : (
-              <ShelfBar readOnly shelves={annotation.shelves} />
-            )
-          }
+          shelfBar={<ShelfBar readOnly shelves={annotation.shelves} />}
         />
       ) : null}
-
-      <ShelfDrawer
-        open={shelfDrawerOpen}
-        mode="create"
-        form={shelfDrawerForm}
-        onChange={handleShelfDrawerChange}
-        onClose={closeShelfDrawer}
-        onConfirm={confirmShelfDrawer}
-        saving={shelfDrawerSaving}
-      />
     </div>
   );
 }

@@ -5,7 +5,7 @@ import LogsPanel from '../components/LogsPanel';
 import ConfirmDialog from '../components/ConfirmDialog';
 import UserDrawer from '../components/UserDrawer';
 import FieldHint from '../components/FieldHint';
-import { CAMERA_OVERRIDE_FIELDS, GLOBAL_COLLISION_FIELDS, GLOBAL_DUALCAM_FIELDS, GLOBAL_PIPELINE_LOG_FIELDS, GLOBAL_PREFILTER_FIELDS, formatFieldDefaultValue, resolveSettingValue, settingsFieldTooltip } from '../lib/cameraSettings';
+import { CAMERA_OVERRIDE_FIELDS, GLOBAL_COLLISION_FIELDS, GLOBAL_DUALCAM_FIELDS, GLOBAL_ONLY_INFERENCE_FIELDS, GLOBAL_PIPELINE_LOG_FIELDS, GLOBAL_PREFILTER_FIELDS, formatFieldDefaultValue, resolveSettingValue, settingsFieldTooltip } from '../lib/cameraSettings';
 import { InferenceModelGlobalFields } from '../components/InferenceModelFields';
 import { formatUserError } from '../lib/userFacingText';
 import './SettingsPage.css';
@@ -272,7 +272,7 @@ export default function SettingsPage() {
         {tab === 'system' && isAdmin && (
           <form className="settings-panel" onSubmit={saveSettings}>
             <p className="settings-panel-lead">
-              以下为<strong>全局默认值</strong>。未单独配置的摄像头将自动使用；在摄像头设置中可勾选「自定义」覆盖。
+              以下为<strong>全局默认值</strong>。帧率、推理高度等可在摄像头设置中勾选「自定义」覆盖；姿态检测间隔仅全局生效，保证左右路配对窗一致。
             </p>
             <div className="settings-form-fields">
               <InferenceModelGlobalFields
@@ -283,7 +283,7 @@ export default function SettingsPage() {
                 }
                 onDetChange={(value) => setSettings((s) => ({ ...s, 'models.det': value }))}
               />
-              {CAMERA_OVERRIDE_FIELDS.map((field) => (
+              {[...CAMERA_OVERRIDE_FIELDS, ...GLOBAL_ONLY_INFERENCE_FIELDS].map((field) => (
                 <label key={field.key}>
                   <span className="settings-field-label">
                     {field.label}

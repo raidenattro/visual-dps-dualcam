@@ -1,11 +1,10 @@
-import { Routes, Route } from 'react-router-dom';
+import { Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import PageTitle from './components/PageTitle';
 import AppLayout from './components/AppLayout';
 import RequireAuth from './components/RequireAuth';
 import DashboardPage from './pages/DashboardPage';
 import MonitorPage from './pages/MonitorPage';
-import AnnotatePage from './pages/AnnotatePage';
 import AisleAnnotatePage from './pages/AisleAnnotatePage';
 import LoginPage from './pages/LoginPage';
 import SettingsPage from './pages/SettingsPage';
@@ -29,7 +28,7 @@ export default function App() {
           <Route path="/matrix" element={<MatrixPage />} />
           <Route path="/topology" element={<TopologyPage />} />
           <Route path="/monitor" element={<MonitorPage />} />
-        <Route path="/annotate" element={<AnnotatePage />} />
+        <Route path="/annotate" element={<Navigate to="/aisle" replace />} />
         <Route path="/aisle" element={<AisleAnnotatePage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>

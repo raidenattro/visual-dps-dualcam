@@ -13,6 +13,7 @@ from services.aisle_store import (
     load_aisle,
     save_aisle,
     unbind_group,
+    wall_shelf_code,
 )
 from services.dualcam_overlay import overlay_for_role
 from services.event_engine.sharding import logical_shard_id
@@ -122,7 +123,24 @@ def register_aisle_routes(router: APIRouter, *, json_dir: str = "localdata/json"
             return {"status": "error", "error": f"没有墙 {wall_id}"}
         n_layers = int(payload.get("n_layers") or payload.get("rows") or 4)
         n_cols = int(payload.get("n_cols") or payload.get("cols") or 4)
+        old = next(
+            (
+                m for m in (data.get("slot_meshes") or [])
+                if isinstance(m, dict) and int(m.get("wall_id") or 0) == wall_id
+            ),
+            None,
+        )
         mesh = make_layer_mesh(wall_id, wall["corners"], n_layers=n_layers, cols=n_cols)
+        shelf = str(payload.get("shelf_code") or "").strip() or wall_shelf_code(data, wall_id)
+        if old and isinstance(old, dict):
+            if not shelf:
+                shelf = str(old.get("shelf_code") or "").strip()
+            if old.get("cell_ids"):
+                mesh["cell_ids"] = old["cell_ids"]
+            if old.get("deleted"):
+                mesh["deleted"] = old["deleted"]
+        if shelf:
+            mesh["shelf_code"] = shelf
         meshes = [m for m in (data.get("slot_meshes") or []) if int(m.get("wall_id") or 0) != wall_id]
         meshes.append(mesh)
         data["slot_meshes"] = meshes

@@ -169,8 +169,24 @@ def row_ys_from_mesh(mesh: dict, corners: Any = None) -> list[float]:
     return [float(verts[vert_index(rows, cols, r, 0)][1]) for r in range(rows + 1)]
 
 
+def _with_mesh_identity(out: dict, extra: dict | None) -> dict:
+    """拖层线重建网格时保留货架号 / 货位号 / 已删格。"""
+    if not isinstance(extra, dict):
+        return out
+    sc = str(extra.get("shelf_code") or "").strip()
+    if sc:
+        out["shelf_code"] = sc
+    ids = extra.get("cell_ids")
+    if isinstance(ids, dict) and ids:
+        out["cell_ids"] = ids
+    deleted = extra.get("deleted")
+    if isinstance(deleted, list) and deleted:
+        out["deleted"] = deleted
+    return out
+
+
 def mesh_from_row_ys(
-    wall_id: int, corners: Any, row_ys: list[float], cols: int = 4,
+    wall_id: int, corners: Any, row_ys: list[float], cols: int = 4, extra: dict | None = None,
 ) -> dict:
     """用逐行 Y 界生成网格；列沿墙面均分。row_ys 从顶到底，含顶沿和底沿。"""
     y_bot, y_top = wall_y_span(corners)
@@ -187,14 +203,14 @@ def mesh_from_row_ys(
         for c in range(cols + 1):
             verts.append(bilinear_on_wall(corners, ty, c / cols if cols else 0.0))
     rows = len(ys) - 1
-    return {
+    return _with_mesh_identity({
         "wall_id": int(wall_id),
         "rows": rows,
         "cols": cols,
         "n_layers": rows,
         "row_ys": [round(y, 4) for y in ys],
         "vertices": verts,
-    }
+    }, extra)
 
 
 def move_layer_row(mesh: dict, corners: Any, r: int, y: float) -> dict:
@@ -203,7 +219,7 @@ def move_layer_row(mesh: dict, corners: Any, r: int, y: float) -> dict:
     rows = len(ys) - 1
     r = int(r)
     if r <= 0 or r >= rows:
-        return mesh_from_row_ys(mesh["wall_id"], corners, ys, int(mesh["cols"]))
+        return mesh_from_row_ys(mesh["wall_id"], corners, ys, int(mesh["cols"]), extra=mesh)
     hi = ys[r - 1] - MIN_LAYER_GAP
     lo = ys[r + 1] + MIN_LAYER_GAP
     if hi < lo:
@@ -211,7 +227,7 @@ def move_layer_row(mesh: dict, corners: Any, r: int, y: float) -> dict:
     else:
         y = min(max(float(y), lo), hi)
     ys[r] = y
-    return mesh_from_row_ys(mesh["wall_id"], corners, ys, int(mesh["cols"]))
+    return mesh_from_row_ys(mesh["wall_id"], corners, ys, int(mesh["cols"]), extra=mesh)
 
 
 def make_layer_mesh(
@@ -307,6 +323,7 @@ def contact_slots(
             if _point_in_poly(yz, poly):
                 hits.append({
                     "wall_id": mesh["wall_id"],
+                    "shelf_code": str(mesh.get("shelf_code") or "").strip(),
                     "box_id": cell["box_id"],
                     "row": cell["row"],
                     "col": cell["col"],

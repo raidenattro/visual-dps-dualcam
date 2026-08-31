@@ -99,7 +99,6 @@ CAMERA_OVERRIDE_KEYS = {
         "models.det",
         "inference.frame_rate",
         "inference.height",
-        "inference.pose_frame_interval",
         "debug-info.enabled",
         "pipeline_log.enabled",
     )

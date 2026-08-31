@@ -1,4 +1,21 @@
-/** 计算 object-fit: contain 下图像在容器内的绘制区域 */
+/** 均匀缩放 + 居中黑边：src 画布映射到 dst（letterbox / pillarbox） */
+export function letterboxParams(srcW, srcH, dstW, dstH) {
+  const sw = Math.max(1, Number(srcW) || 1);
+  const sh = Math.max(1, Number(srcH) || 1);
+  const dw = Math.max(1, Number(dstW) || 1);
+  const dh = Math.max(1, Number(dstH) || 1);
+  const scale = Math.min(dw / sw, dh / sh);
+  return {
+    scale,
+    padX: (dw - sw * scale) / 2,
+    padY: (dh - sh * scale) / 2,
+  };
+}
+
+export function letterboxMapPoint(x, y, srcW, srcH, dstW, dstH) {
+  const { scale, padX, padY } = letterboxParams(srcW, srcH, dstW, dstH);
+  return [Number(x) * scale + padX, Number(y) * scale + padY];
+}
 
 export function computeContainLayout(containerW, containerH, frameW, frameH) {
   const cw = Math.max(1, containerW);
@@ -57,11 +74,9 @@ export function resolvePolygonFramePoints(polygon, normPolygon, annotationSize, 
   const { maxX, maxY } = polygonMaxExtent(polygon);
   const annW = Math.max(1, Number(annotationSize?.width) || tw);
   const annH = Math.max(1, Number(annotationSize?.height) || th);
-  let sx = tw / annW;
-  let sy = th / annH;
-  if (maxX > annW * 1.05) sx = maxX > 0 ? tw / maxX : sx;
-  if (maxY > annH * 1.05) sy = maxY > 0 ? th / maxY : sy;
-  return polygon.map(([x, y]) => [Number(x) * sx, Number(y) * sy]);
+  const srcW = maxX > annW * 1.05 && maxX > 0 ? maxX : annW;
+  const srcH = maxY > annH * 1.05 && maxY > 0 ? maxY : annH;
+  return polygon.map(([x, y]) => letterboxMapPoint(x, y, srcW, srcH, tw, th));
 }
 
 /** 帧坐标 → viewport 显示坐标（layout 由 computeContainLayout 得到） */

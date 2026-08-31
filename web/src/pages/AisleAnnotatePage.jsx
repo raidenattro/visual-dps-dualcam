@@ -25,8 +25,8 @@ function viewSize(state, v) {
 
 function emptyWalls() {
   return [
-    { wall_id: 1, width: 2.2, height: 2.0, base: 0, quad: [] },
-    { wall_id: 2, width: 2.2, height: 2.0, base: 0, quad: [] },
+    { wall_id: 1, width: 2.2, height: 2.0, base: 0, quad: [], shelf_code: '' },
+    { wall_id: 2, width: 2.2, height: 2.0, base: 0, quad: [], shelf_code: '' },
   ];
 }
 
@@ -43,8 +43,20 @@ function emptyAisle(id) {
       R: { name: 'R', image_size: [FALLBACK_W, FALLBACK_H], prior: { camH: 2.84, camDist: 1.56, pitch: 45, yaw: 0 }, walls: emptyWalls() },
     },
     slot_meshes: [],
+    required_wall_ids: [1],
     solved: { ok: false },
   };
+}
+
+function requiredWallIds(state) {
+  const raw = state?.required_wall_ids;
+  if (Array.isArray(raw) && raw.length) {
+    return [...new Set(raw.map(Number).filter((n) => n >= 1))];
+  }
+  const fromMesh = [
+    ...new Set((state?.slot_meshes || []).map((m) => Number(m.wall_id)).filter((n) => n >= 1)),
+  ];
+  return fromMesh.length ? fromMesh : [1];
 }
 
 export default function AisleAnnotatePage() {
@@ -130,13 +142,18 @@ export default function AisleAnnotatePage() {
       n_layers: nLayers,
       n_cols: nCols,
       contact_m: state.contact_m,
+      shelf_code: wallsL[activeWall]?.shelf_code || '',
     });
     if (d.status !== 'success') {
       setMsg(d.error || '生成层线失败');
       return;
     }
     setState(d.aisle);
-    setMsg('已生成本墙层线，拖水平分格线对齐隔板');
+    setMsg(
+      (wallsL[activeWall]?.shelf_code || '').trim()
+        ? '已生成本墙层线，拖水平分格线对齐隔板；点选货格可改货位号。'
+        : '已生成本墙层线。请填写本墙货架号并保存，否则无法开推理。',
+    );
   };
 
   const draw = useCallback(() => {
@@ -324,11 +341,32 @@ export default function AisleAnnotatePage() {
     save(next);
   };
 
-  const setWallField = (i, key, val) => {
+  const setWallField = (i, key, val, persist = false) => {
     const next = structuredClone(state);
     next.views.L.walls[i][key] = val;
     next.views.R.walls[i][key] = val;
+    if (key === 'shelf_code') {
+      const wallId = next.views.L.walls[i].wall_id;
+      next.slot_meshes = (next.slot_meshes || []).map((m) => (
+        m.wall_id === wallId ? { ...m, shelf_code: val } : m
+      ));
+    }
     setState(next);
+    if (persist) save(next);
+  };
+
+  const toggleRequiredWall = (wallId, on) => {
+    const cur = requiredWallIds(state);
+    const nextIds = on
+      ? [...new Set([...cur, wallId])]
+      : cur.filter((id) => id !== wallId);
+    if (!nextIds.length) {
+      setMsg('至少勾选一面拣货墙。现场只有一面货架时只勾那一面即可。');
+      return;
+    }
+    const next = { ...state, required_wall_ids: nextIds };
+    setState(next);
+    save(next);
   };
 
   const camOptions = cameras.map((c) => (
@@ -341,7 +379,10 @@ export default function AisleAnnotatePage() {
     <div className="aisle-page">
       <aside className="aisle-panel">
         <h1>巷道双路标注</h1>
-        <p className="muted">先勾选同一组并指定左右路，才能反解、切格和开推理。成组后两路分到同一 worker。</p>
+        <p className="muted">
+          3D 真值只在本页：勾选同一组 → 标墙四角 → 反解 → 生层线 → 填写货架号/货位号。
+          监控页不再提供 2D 标注。开推理会校验本巷道已勾选的拣货墙是否都有层线和货架号。
+        </p>
         <label>
           巷道编号
           <input value={aisleId} onChange={(e) => setAisleId(e.target.value)} />
@@ -377,6 +418,18 @@ export default function AisleAnnotatePage() {
         )}
 
         <hr />
+        <p className="group-title">拣货墙面（开推理按此项校验）</p>
+        <p className="muted">现场只有一面货架时只勾那一面；两面都拣货则两面都勾。</p>
+        {wallsL.map((w) => (
+          <label key={`req-${w.wall_id}`} className="check">
+            <input
+              type="checkbox"
+              checked={requiredWallIds(state).includes(w.wall_id)}
+              onChange={(e) => toggleRequiredWall(w.wall_id, e.target.checked)}
+            />
+            墙{w.wall_id} 参与拣货
+          </label>
+        ))}
         <table>
           <thead>
             <tr>
@@ -407,6 +460,15 @@ export default function AisleAnnotatePage() {
             ))}
           </tbody>
         </table>
+        <label>
+          货架号（墙{wallsL[activeWall]?.wall_id}）
+          <input
+            value={wallsL[activeWall]?.shelf_code || ''}
+            placeholder="与 visual-dps 相同，写入事件 token"
+            onChange={(e) => setWallField(activeWall, 'shelf_code', e.target.value)}
+            onBlur={(e) => setWallField(activeWall, 'shelf_code', e.target.value, true)}
+          />
+        </label>
         <p className="hint">
           {activeView === 'L' ? '左路' : '右路'} 墙{wallsL[activeWall]?.wall_id}：
           {(state.views?.[activeView]?.walls?.[activeWall]?.quad || []).length < 4
@@ -574,8 +636,8 @@ export default function AisleAnnotatePage() {
           <div className="cell-edit">
             <div className="group-title">选中货格</div>
             <label>
-              box_id
-              <input value={boxIdEdit} onChange={(e) => setBoxIdEdit(e.target.value)} />
+              货位号
+              <input value={boxIdEdit} onChange={(e) => setBoxIdEdit(e.target.value)} placeholder="如 A-01" />
             </label>
             <div className="btns">
               <button type="button" className="pri" onClick={applyBoxId}>

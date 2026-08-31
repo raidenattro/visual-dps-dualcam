@@ -4,6 +4,7 @@ import { usePreviewStream } from '../hooks/usePreviewStream';
 import { boxMatchesAnyCollision, boxRoiKey, resolveMonitorShelves } from '../lib/annotation';
 import {
   computeContainLayout,
+  letterboxMapPoint,
   mapPointsToVideoFrame,
   polygonToFramePoints,
 } from '../lib/previewLayout';
@@ -34,7 +35,7 @@ const SKELETON_CONF = 0.2;
 
 function scaleInferPoint(x, y, inferW, inferH, frameW, frameH) {
   if (!inferW || !inferH) return [x, y];
-  return [(x * frameW) / inferW, (y * frameH) / inferH];
+  return letterboxMapPoint(x, y, inferW, inferH, frameW, frameH);
 }
 
 function resolveRoiState(box, { inferRunning, hits, alarms }) {

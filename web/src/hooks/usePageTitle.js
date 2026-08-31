@@ -9,6 +9,7 @@ const ROUTE_TITLES = {
   '/matrix': '事件矩阵',
   '/topology': '服务拓扑',
   '/monitor': '检测监控',
+  '/aisle': '巷道标注',
   '/settings': '系统设置',
 };
 

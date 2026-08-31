@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from services.annotation_service import flatten_annotation_boxes, load_camera_annotation
 from services.aisle_store import camera_group, load_aisle
 from services.box_identity import box_collision_token
 from services.camera_service import list_cameras_with_status
@@ -50,57 +49,6 @@ def _grid_dims(boxes: list[dict], grid_shape: list) -> tuple[int, int]:
         if column > 0:
             cols = max(cols, column)
     return rows, cols
-
-
-def _shelves_from_config(config_data: dict) -> list[dict]:
-    if not isinstance(config_data, dict):
-        return []
-
-    shelves_out: list[dict] = []
-    shelves_raw = config_data.get("shelves")
-    if isinstance(shelves_raw, list) and shelves_raw:
-        for shelf in shelves_raw:
-            if not isinstance(shelf, dict):
-                continue
-            shelf_code = str(shelf.get("shelf_code") or "").strip()
-            if not shelf_code:
-                continue
-            boxes = [
-                dict(b, shelf_code=str(b.get("shelf_code") or shelf_code).strip() or shelf_code)
-                for b in (shelf.get("boxes") or [])
-                if isinstance(b, dict)
-            ]
-            shelves_out.append(
-                {
-                    "shelf_code": shelf_code,
-                    "shelf_name": str(shelf.get("shelf_name") or "").strip(),
-                    "grid_shape": shelf.get("grid_shape") if isinstance(shelf.get("grid_shape"), list) else [],
-                    "boxes": boxes,
-                }
-            )
-        if shelves_out:
-            return shelves_out
-
-    flat = flatten_annotation_boxes(config_data)
-    if not flat:
-        return []
-
-    grouped: dict[str, dict] = {}
-    for box in flat:
-        if not isinstance(box, dict):
-            continue
-        shelf_code = str(box.get("shelf_code") or "").strip() or "DEFAULT"
-        grouped.setdefault(
-            shelf_code,
-            {
-                "shelf_code": shelf_code,
-                "shelf_name": "",
-                "grid_shape": config_data.get("grid_shape") if isinstance(config_data.get("grid_shape"), list) else [],
-                "boxes": [],
-            },
-        )
-        grouped[shelf_code]["boxes"].append(box)
-    return list(grouped.values())
 
 
 def _build_shelf_matrix(
@@ -202,14 +150,8 @@ def build_matrix_overview(
             if aisle:
                 overlay = overlay_for_role(aisle, g["role"])
 
-        if overlay and overlay.get("boxes"):
-            shelves_raw = overlay.get("shelves") or []
-            annotation_found = True
-        else:
-            ann = load_camera_annotation(cid, json_dir, default_json_file, camera=cam)
-            config_data = ann.get("data") if isinstance(ann.get("data"), dict) else {}
-            shelves_raw = _shelves_from_config(config_data)
-            annotation_found = ann.get("status") == "success"
+        shelves_raw = overlay.get("shelves") or [] if overlay else []
+        annotation_found = bool(overlay and overlay.get("boxes"))
 
         event = get_event_snapshot(cid) or {}
         collisions = {str(x).strip() for x in (event.get("collisions") or []) if str(x).strip()}
@@ -225,8 +167,7 @@ def build_matrix_overview(
             for shelf in shelves_raw
         ]
         box_count = sum(s.get("box_count", 0) for s in shelves)
-        if not (overlay and overlay.get("boxes")):
-            annotation_found = bool(annotation_found) and box_count > 0
+        annotation_found = bool(annotation_found) and box_count > 0
 
         cameras_out.append(
             {

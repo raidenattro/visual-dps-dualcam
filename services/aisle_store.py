@@ -73,15 +73,80 @@ def empty_aisle(aisle_id: str) -> dict[str, Any]:
             },
         },
         "slot_meshes": [],
+        "required_wall_ids": [1],
         "solved": {"ok": False},
     }
 
 
 def _empty_walls() -> list[dict]:
     return [
-        {"wall_id": 1, "width": 2.2, "height": 2.0, "base": 0.0, "quad": []},
-        {"wall_id": 2, "width": 2.2, "height": 2.0, "base": 0.0, "quad": []},
+        {"wall_id": 1, "width": 2.2, "height": 2.0, "base": 0.0, "quad": [], "shelf_code": ""},
+        {"wall_id": 2, "width": 2.2, "height": 2.0, "base": 0.0, "quad": [], "shelf_code": ""},
     ]
+
+
+def parse_wall_ids(raw: Any) -> list[int]:
+    out: list[int] = []
+    if not isinstance(raw, (list, tuple)):
+        return out
+    for item in raw:
+        try:
+            wid = int(item)
+        except (TypeError, ValueError):
+            continue
+        if wid >= 1 and wid not in out:
+            out.append(wid)
+    return out
+
+
+def required_wall_ids(aisle: dict | None) -> list[int]:
+    """本巷道参与拣货的墙。现场只有一面货架时只填那一面。"""
+    data = aisle if isinstance(aisle, dict) else {}
+    parsed = parse_wall_ids(data.get("required_wall_ids"))
+    if parsed:
+        return parsed
+    from_mesh: list[int] = []
+    for mesh in data.get("slot_meshes") or []:
+        if not isinstance(mesh, dict):
+            continue
+        try:
+            wid = int(mesh.get("wall_id"))
+        except (TypeError, ValueError):
+            continue
+        if wid >= 1 and wid not in from_mesh:
+            from_mesh.append(wid)
+    return from_mesh or [1]
+
+
+def wall_shelf_code(aisle: dict | None, wall_id: int) -> str:
+    data = aisle if isinstance(aisle, dict) else {}
+    views = data.get("views") or {}
+    for role in ROLES:
+        walls = (views.get(role) or {}).get("walls") if isinstance(views, dict) else None
+        if not isinstance(walls, list):
+            continue
+        for wall in walls:
+            if not isinstance(wall, dict):
+                continue
+            try:
+                wid = int(wall.get("wall_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if wid != int(wall_id):
+                continue
+            code = str(wall.get("shelf_code") or "").strip()
+            if code:
+                return code
+    for mesh in data.get("slot_meshes") or []:
+        if not isinstance(mesh, dict):
+            continue
+        try:
+            wid = int(mesh.get("wall_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if wid == int(wall_id):
+            return str(mesh.get("shelf_code") or "").strip()
+    return ""
 
 
 def list_aisles(json_dir: str | None = None) -> list[dict]:
@@ -120,6 +185,24 @@ def save_aisle(data: dict, json_dir: str | None = None) -> dict:
         raise ValueError("巷道编号仅支持字母、数字、下划线、中划线（1–64）")
     data = dict(data)
     data["aisle_id"] = aid
+    data["required_wall_ids"] = required_wall_ids(data)
+    meshes = data.get("slot_meshes")
+    if isinstance(meshes, list):
+        synced = []
+        for mesh in meshes:
+            if not isinstance(mesh, dict):
+                continue
+            m = dict(mesh)
+            try:
+                wid = int(m.get("wall_id") or 0)
+            except (TypeError, ValueError):
+                synced.append(m)
+                continue
+            sc = str(m.get("shelf_code") or "").strip() or wall_shelf_code(data, wid)
+            if sc:
+                m["shelf_code"] = sc
+            synced.append(m)
+        data["slot_meshes"] = synced
     _write(aisle_path(aid, json_dir), data)
     return data
 
@@ -175,7 +258,7 @@ def require_grouped(camera_id: str, json_dir: str | None = None) -> tuple[dict |
 
 
 def require_inference_ready(camera_id: str, json_dir: str | None = None) -> tuple[dict | None, str | None]:
-    """开推理前：成组 + 已反解 + 已有至少一面墙的层线。缺哪一步就说哪一步。"""
+    """开推理前：成组 + 已反解 + 已勾选拣货墙都有层线和货架号。缺哪一步就说哪一步。"""
     grouped, err = require_grouped(camera_id, json_dir)
     if err:
         return None, err
@@ -187,14 +270,35 @@ def require_inference_ready(camera_id: str, json_dir: str | None = None) -> tupl
             f"巷道 {aid} 尚未反解：请到「巷道标注」页点「1. 反解并对齐」。"
             "没有相机外参无法把 2D 姿态抬到 3D，开了检测也不会产生碰撞事件。"
         )
+    need = required_wall_ids(data)
     meshes = [m for m in (data.get("slot_meshes") or []) if isinstance(m, dict)]
-    if not meshes:
+    by_wall: dict[int, dict] = {}
+    for mesh in meshes:
+        try:
+            wid = int(mesh.get("wall_id"))
+        except (TypeError, ValueError):
+            continue
+        by_wall[wid] = mesh
+    missing = [w for w in need if w not in by_wall]
+    if missing:
+        walls = "、".join(f"墙{w}" for w in missing)
         return None, (
-            f"巷道 {aid} 尚未生成货格层线：请先点「2. 生成本墙层线」。"
-            "没有 slot_meshes（货格网格）就无法做 3D 贴墙碰撞。"
+            f"巷道 {aid} 已配置拣货墙 {[f'墙{w}' for w in need]}，但{walls}尚未生成货格层线。"
+            "请到「巷道标注」选中该墙后点「2. 生成本墙层线」。"
+            "没有 slot_meshes 就无法做 3D 贴墙碰撞。"
+        )
+    no_shelf = [w for w in need if not str((by_wall[w] or {}).get("shelf_code") or "").strip()
+                and not wall_shelf_code(data, w)]
+    if no_shelf:
+        walls = "、".join(f"墙{w}" for w in no_shelf)
+        return None, (
+            f"巷道 {aid} 的{walls}未填写货架号。"
+            "碰撞事件按「货架号:货位号」上报（与 visual-dps 相同），"
+            "请在巷道标注页填写该墙的货架号并保存。"
         )
     grouped["solved"] = True
-    grouped["mesh_walls"] = len(meshes)
+    grouped["mesh_walls"] = len(need)
+    grouped["required_wall_ids"] = need
     return grouped, None
 
 

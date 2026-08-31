@@ -61,15 +61,6 @@ export const CAMERA_OVERRIDE_FIELDS = [
     effectHint: '保存后需重新「启动智能检测」（visual-dps-infer-{摄像头ID} 推理容器）。',
   },
   {
-    key: 'inference.pose_frame_interval',
-    label: '姿态检测间隔 (帧)',
-    type: 'number',
-    min: 1,
-    max: 120,
-    hint: '每隔 N 帧做一次姿态推理；越大负载越低、碰撞采样越稀疏。',
-    effectHint: '保存后需重新「启动智能检测」（visual-dps-infer-{摄像头ID} 推理容器）。',
-  },
-  {
     key: 'debug-info.enabled',
     label: '推理调试日志',
     type: 'boolean',
@@ -83,6 +74,19 @@ export const CAMERA_OVERRIDE_FIELDS = [
     hint: '记录该路采帧、推理发布及 Worker 消费阶段（[PIPELINE]）。显式开启时优先于全局默认（全局默认关）；关闭可减轻 worker.log 积压。',
     effectHint:
       '保存后需重新「启动智能检测」；Worker 侧会随 camera_ips.json 热更新，infer 侧需重启容器。',
+  },
+];
+
+/** 仅全局设置：不允许按摄像头覆盖，避免左右路姿态周期不一致导致配对窗错位 */
+export const GLOBAL_ONLY_INFERENCE_FIELDS = [
+  {
+    key: 'inference.pose_frame_interval',
+    label: '姿态检测间隔 (帧)',
+    type: 'number',
+    min: 1,
+    max: 120,
+    hint: '每隔 N 帧做一次姿态推理。双路共用此时长计算 L/R 配对窗，摄像头不可单独覆盖。',
+    effectHint: '保存后需重新启动各路「智能检测」（visual-dps-infer-*）以及 visual-dps-event-worker。',
   },
 ];
 

@@ -154,6 +154,27 @@ def pair_window_sec(
     return min(hi, max(lo, raw))
 
 
+def letterbox_params(
+    src_w: int | float,
+    src_h: int | float,
+    dst_w: int | float,
+    dst_h: int | float,
+) -> tuple[float, float, float]:
+    """把 src 画布均匀缩放到刚好放进 dst，不足的边居中留黑边。
+
+    返回 (scale, pad_x, pad_y)，映射：x' = x * scale + pad_x。
+    dst 更宽时左右 pillarbox；dst 更高时上下 letterbox。
+    """
+    sw = max(1.0, float(src_w))
+    sh = max(1.0, float(src_h))
+    dw = max(1.0, float(dst_w))
+    dh = max(1.0, float(dst_h))
+    scale = min(dw / sw, dh / sh)
+    pad_x = (dw - sw * scale) / 2.0
+    pad_y = (dh - sh * scale) / 2.0
+    return scale, pad_x, pad_y
+
+
 def scale_keypoints_to_calib(
     persons: list | None,
     infer_w: int,
@@ -161,10 +182,14 @@ def scale_keypoints_to_calib(
     calib_w: int,
     calib_h: int,
 ) -> tuple[list, dict[str, Any]]:
-    """把推理像素映射到标定像素。
+    """把推理像素映射到标定像素（针孔内参所在坐标系）。
 
+    推理按源图等比缩放（只改 height，宽随比例），纵横比不变。标定 (f, cx, cy)
+    定义在 calib 像素系。映射必须是相似变换（均匀缩放 + 平移）：
+
+    - 各轴独立 sx、sy 会改变 fx/fy 比，等价于换了一台相机，三角化射线会偏。
+    - letterbox/pillarbox 只做均匀缩放并居中垫边，像素仍是正方形，射线方向与标定一致。
     - 两边尺寸一致：原样（identity）
-    - 两边都有效且不一致：按比例 sx=calib_w/infer_w（ratio），这是主路径
     - 推理尺寸缺失且坐标像 0–1：按标定宽高展开（normalize，仅保底）
     """
     src = list(persons or [])
@@ -173,7 +198,7 @@ def scale_keypoints_to_calib(
     iw = int(infer_w or 0)
     ih = int(infer_h or 0)
 
-    def _apply(sx: float, sy: float) -> list:
+    def _apply(sx: float, sy: float, ox: float = 0.0, oy: float = 0.0) -> list:
         out = []
         for person in src:
             if not isinstance(person, dict):
@@ -184,8 +209,8 @@ def scale_keypoints_to_calib(
                 if not isinstance(kp, (list, tuple)) or len(kp) < 2:
                     kpts.append(kp)
                     continue
-                x = float(kp[0]) * sx
-                y = float(kp[1]) * sy
+                x = float(kp[0]) * sx + ox
+                y = float(kp[1]) * sy + oy
                 extra = [float(v) for v in kp[2:]]
                 kpts.append([x, y, *extra])
             cloned = dict(person)
@@ -193,13 +218,27 @@ def scale_keypoints_to_calib(
             out.append(cloned)
         return out
 
-    meta = {"infer": [iw, ih], "calib": [int(cw), int(ch)], "sx": 1.0, "sy": 1.0, "mode": "identity"}
+    meta = {
+        "infer": [iw, ih],
+        "calib": [int(cw), int(ch)],
+        "sx": 1.0,
+        "sy": 1.0,
+        "pad_x": 0.0,
+        "pad_y": 0.0,
+        "mode": "identity",
+    }
     if iw > 0 and ih > 0:
         if iw == int(cw) and ih == int(ch):
             return src, meta
-        sx, sy = cw / float(iw), ch / float(ih)
-        meta.update({"mode": "ratio", "sx": round(sx, 6), "sy": round(sy, 6)})
-        return _apply(sx, sy), meta
+        scale, pad_x, pad_y = letterbox_params(iw, ih, cw, ch)
+        meta.update({
+            "mode": "letterbox",
+            "sx": round(scale, 6),
+            "sy": round(scale, 6),
+            "pad_x": round(pad_x, 4),
+            "pad_y": round(pad_y, 4),
+        })
+        return _apply(scale, scale, pad_x, pad_y), meta
 
     max_x = 0.0
     max_y = 0.0

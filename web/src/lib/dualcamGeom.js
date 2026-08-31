@@ -135,7 +135,7 @@ export function rowYsFromMesh(mesh) {
   return ys;
 }
 
-export function meshFromRowYs(wallId, corners, rowYs, cols = 4) {
+export function meshFromRowYs(wallId, corners, rowYs, cols = 4, extra = null) {
   const [yBot, yTop] = wallYSpan(corners);
   let ys = (rowYs && rowYs.length >= 2) ? rowYs.map(Number) : [yTop, yBot];
   ys[0] = yTop;
@@ -148,7 +148,7 @@ export function meshFromRowYs(wallId, corners, rowYs, cols = 4) {
     for (let c = 0; c <= cols; c++) vertices.push(bilinearOnWall(corners, ty, c / cols));
   }
   const rows = ys.length - 1;
-  return {
+  const out = {
     wall_id: wallId,
     rows,
     cols,
@@ -156,18 +156,25 @@ export function meshFromRowYs(wallId, corners, rowYs, cols = 4) {
     row_ys: ys.map((y) => Math.round(y * 1e4) / 1e4),
     vertices,
   };
+  if (extra && typeof extra === 'object') {
+    const code = String(extra.shelf_code || '').trim();
+    if (code) out.shelf_code = code;
+    if (extra.cell_ids && typeof extra.cell_ids === 'object') out.cell_ids = extra.cell_ids;
+    if (Array.isArray(extra.deleted) && extra.deleted.length) out.deleted = extra.deleted;
+  }
+  return out;
 }
 
 export function moveLayerRow(mesh, corners, r, y) {
   const ys = rowYsFromMesh(mesh);
   const rows = ys.length - 1;
   r = Math.round(Number(r));
-  if (r <= 0 || r >= rows) return meshFromRowYs(mesh.wall_id, corners, ys, mesh.cols);
+  if (r <= 0 || r >= rows) return meshFromRowYs(mesh.wall_id, corners, ys, mesh.cols, mesh);
   const hi = ys[r - 1] - MIN_LAYER_GAP;
   const lo = ys[r + 1] + MIN_LAYER_GAP;
   if (hi < lo) ys[r] = 0.5 * (ys[r - 1] + ys[r + 1]);
   else ys[r] = Math.min(Math.max(Number(y), lo), hi);
-  return meshFromRowYs(mesh.wall_id, corners, ys, mesh.cols);
+  return meshFromRowYs(mesh.wall_id, corners, ys, mesh.cols, mesh);
 }
 
 export function makeLayerMesh(wallId, corners, pitch = DEFAULT_LAYER_PITCH, nLayers = 4, cols = 4) {
