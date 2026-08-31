@@ -16,7 +16,7 @@ usage() {
 用法: ./scripts/retag-infer-images.sh [选项] [旧TAG] [新TAG]
 
   将目标机已有的推理镜像从旧 tag 复制为新 tag（docker tag，不重建镜像）。
-  适用于增量包只升级 UI/Event/worker-2，推理镜像本体未变、仅 .env 中 tag 变更的场景。
+  适用于增量包只升级 UI / event-worker，推理镜像本体未变、仅 .env 中 tag 变更的场景。
 
 参数:
   旧TAG   可选；指定则只从该 tag retag

@@ -4,7 +4,6 @@ import json
 import os
 
 from fastapi import APIRouter, FastAPI, File, UploadFile, WebSocket
-from fastapi.responses import FileResponse, JSONResponse
 
 from core.auth_middleware import AuthMiddleware
 from core.auth_settings import load_auth_settings
@@ -68,23 +67,7 @@ def create_app():
         os.path.join(paths["base_localdata_dir"], "mediamtx.yml"),
     )
     frontend_dist = os.environ.get("FRONTEND_DIST", os.path.join("web", "dist"))
-    spa_enabled = os.path.isfile(os.path.join(frontend_dist, "index.html"))
-    if spa_enabled:
-        mount_spa(app, frontend_dist)
-    else:
-        dashboard_html = os.path.join(paths["templates_dir"], "dashboard.html")
-
-        @app.get("/")
-        async def read_dashboard():
-            return FileResponse(dashboard_html)
-
-        @app.get("/monitor")
-        async def read_monitor():
-            return FileResponse(paths["index_html"])
-
-        @app.get("/annotate")
-        async def read_annotate():
-            return FileResponse(paths["annotation_html"])
+    mount_spa(app, frontend_dist)
 
     @api_router.post("/upload_video")
     async def upload_video(file: UploadFile = File(...)):
@@ -180,7 +163,6 @@ def create_app():
 
     app.include_router(api_router)
 
-    if spa_enabled:
-        register_spa_fallback(app, frontend_dist)
+    register_spa_fallback(app, frontend_dist)
 
     return app, app_config

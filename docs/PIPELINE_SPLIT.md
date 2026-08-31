@@ -31,7 +31,7 @@ camera_id ──crc32 % N──► logical shard (0..N-1) ──► pose:stream:
                     worker-B: shard 8~15
 ```
 
-同一路 camera 永远进同一 shard，pick_state 连续状态不跨 worker。
+同一巷道的 L/R 永远进同一 shard（分片键 `aisle_id`），不要把左右路拆到不同 worker。
 
 ## 水平扩展（logical shard + 多 worker）
 
@@ -49,20 +49,20 @@ camera_id ──crc32 % N──► logical shard (0..N-1) ──► pose:stream:
 
 未设 `START/END/IDS` 且仅 1 个 worker 时：消费 **全部** shard。
 
-**24 路双 worker-2 示例（deploy）**
+**24 路双 3D worker 示例**
 
 ```bash
 # .env
-EVENT_WORKER_2_SHARD_START=0
-EVENT_WORKER_2_SHARD_END=7
-EVENT_WORKER_2B_SHARD_START=8
-EVENT_WORKER_2B_SHARD_END=15
+EVENT_WORKER_SHARD_START=0
+EVENT_WORKER_SHARD_END=7
+EVENT_WORKER_B_SHARD_START=8
+EVENT_WORKER_B_SHARD_END=15
 
-docker compose -f docker-compose.deploy.yml --profile worker-2 --profile worker-2-dual up -d \
-  visual-dps-event-worker-2 visual-dps-event-worker-2-b
+docker compose --profile worker-dual up -d \
+  visual-dps-event-worker visual-dps-event-worker-b
 ```
 
-**勿**在同一 shard 上跑两个 consumer；**勿**与 worker-1 双开抢重叠 shard。
+**勿**在同一 shard 上跑两个 consumer。
 
 `POSE_LOGICAL_SHARD_COUNT=1` 时回退单流 `pose:stream`（兼容旧部署）。
 

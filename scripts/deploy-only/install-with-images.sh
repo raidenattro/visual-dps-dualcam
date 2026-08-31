@@ -6,7 +6,6 @@ HOST_IP=""
 WEIGHTS_DIR=""
 STOP_INFER=0
 SKIP_LOAD=0
-WORKER_2=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -14,15 +13,17 @@ while [[ $# -gt 0 ]]; do
     --weights-dir) WEIGHTS_DIR="$2"; shift 2 ;;
     --stop-infer) STOP_INFER=1; shift ;;
     --skip-load) SKIP_LOAD=1; shift ;;
-    --worker-2) WORKER_2=1; shift ;;
+    --worker-2)
+      echo "警告: --worker-2 已废弃（本仓只跑双路 3D visual-dps-event-worker），已忽略。" >&2
+      shift
+      ;;
     -h|--help)
       cat <<'EOF'
-用法: ./install.sh [--host IP] [--weights-dir DIR] [--stop-infer] [--skip-load] [--worker-2]
+用法: ./install.sh [--host IP] [--weights-dir DIR] [--stop-infer] [--skip-load]
 
   默认从 docker-images/*.tar 逐个 docker load，再启动 compose。
   现场无 docker 组权限时脚本会自动使用 sudo docker（或 export VISUAL_DPS_DOCKER_SUDO=1）。
   --skip-load  镜像已 load 时跳过（须 ./verify-images.sh 通过）
-  --worker-2   启 pick_state worker-2，不启 worker-1（勿双开）
 EOF
       exit 0
       ;;

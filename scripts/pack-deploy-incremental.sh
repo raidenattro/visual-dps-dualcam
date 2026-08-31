@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 增量离线包：app + weights + 指定业务镜像 tar（默认 UI + worker + worker-2，不含 infer/redis/mediamtx）
+# 增量离线包：app + weights + 指定业务镜像 tar（默认 UI + 3D event-worker，不含 infer/redis/mediamtx）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,9 +19,7 @@ usage() {
   输出 layout 同 visual-dps-0817-deploy（分拆 tar + app + weights），默认：
     - visual-dps-visual-dps-ui:<TAG>
     - visual-dps-event-worker:<TAG>
-    - visual-dps-event-worker-2:<TAG>
 
-  不含 DEPLOY-0629.md；含 OFFLINE-QUICKSTART.md、DEPLOY-EVENT-WORKER-2.md。
 EOF
 }
 
@@ -36,11 +34,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# 默认镜像列表（UI + worker-1 + worker-2）
+# 默认镜像列表（UI + 双路 3D event-worker）
 DEFAULT_IMAGES=(
   "visual-dps-visual-dps-ui:${TAG}"
   "visual-dps-event-worker:${TAG}"
-  "visual-dps-event-worker-2:${TAG}"
 )
 if [[ ${#IMAGES[@]} -eq 0 ]]; then
   IMAGES=("${DEFAULT_IMAGES[@]}")
@@ -123,13 +120,13 @@ git -C "${ROOT}" rev-parse --abbrev-ref HEAD >/dev/null 2>&1 && GIT_BRANCH="$(gi
   echo "GIT_BRANCH=${GIT_BRANCH}"
   echo "GIT_COMMIT=${GIT_HEAD}"
   echo "BUILD_TIME=$(date -Iseconds)"
-  echo "PACKAGE_KIND=incremental-ui-worker-worker2"
+  echo "PACKAGE_KIND=incremental-ui-event-worker"
   echo "INFER_RETAG_OLD=20260817-feature-eventworker2-0b26d8a"
   echo "INFER_RETAG_OLD_ALT=20260813-feature-eventworker2-5e4f4fe"
   echo "INFER_RETAG_OLD_ALT2=20260727-test-from-4841de6a-85288b7"
 } > "${OUT}/BUILD_TAG.txt"
 
-QUICKSTART_TMPL="${ROOT}/scripts/deploy-only/OFFLINE-QUICKSTART-incremental-ui-worker2.md"
+QUICKSTART_TMPL="${ROOT}/scripts/deploy-only/OFFLINE-QUICKSTART-incremental.md"
 if [[ ! -f "${QUICKSTART_TMPL}" ]]; then
   echo "缺少 ${QUICKSTART_TMPL}" >&2
   exit 1
@@ -160,7 +157,7 @@ sed \
   echo "  ./verify-package.sh && ./scripts/load-split-images.sh"
   echo "  ./scripts/retag-infer-images.sh --skip-lite-cpu   # 自动 0817/0813/0727"
   echo "  # 或: ./scripts/retag-infer-images.sh --skip-lite-cpu <旧infer-tag>"
-  echo "  ./install.sh --host <IP> --worker-2 --stop-infer"
+  echo "  ./install.sh --host <IP> --stop-infer"
 } > "${OUT}/PACKAGE_INFO.txt"
 
 rm -f "${OUT}/pack-deploy.sh"

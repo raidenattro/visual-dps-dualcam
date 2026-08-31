@@ -6,21 +6,22 @@ set -euo pipefail
 HOST_IP=""
 WEIGHTS_DIR=""
 STOP_INFER=0
-WORKER_2=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --host) HOST_IP="$2"; shift 2 ;;
     --weights-dir) WEIGHTS_DIR="$2"; shift 2 ;;
     --stop-infer) STOP_INFER=1; shift ;;
-    --worker-2) WORKER_2=1; shift ;;
+    --worker-2)
+      echo "警告: --worker-2 已废弃（本仓只跑双路 3D visual-dps-event-worker），已忽略。" >&2
+      shift
+      ;;
     -h|--help)
       cat <<'EOF'
-用法: ./install.sh [--host IP] [--weights-dir DIR] [--stop-infer] [--worker-2]
+用法: ./install.sh [--host IP] [--weights-dir DIR] [--stop-infer]
 
   纯部署包：不加载镜像，须先 ./verify-images.sh
   --weights-dir  默认 <包根>/weights
-  --worker-2     启 pick_state worker-2，不启 worker-1（勿双开）
 EOF
       exit 0
       ;;

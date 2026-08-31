@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 部署镜像校验（verify-images.sh / install.sh 共用）
 # 依赖: 已 source app/.env（VISUAL_DPS_IMAGE_TAG、INFERENCE_LITE_*）
-# 环境: VERIFY_SKIP_LITE_CPU=1 | VERIFY_SKIP_WORKER2=1
+# 环境: VERIFY_SKIP_LITE_CPU=1
 
 visual_dps_image_ref_from_env() {
   local env_val="${1:-}"
@@ -16,12 +16,14 @@ visual_dps_image_ref_from_env() {
 
 visual_dps_verify_deploy_images() {
   local skip_lite_cpu="${VERIFY_SKIP_LITE_CPU:-0}"
-  local skip_worker2="${VERIFY_SKIP_WORKER2:-0}"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --skip-lite-cpu) skip_lite_cpu=1; shift ;;
-      --skip-worker-2) skip_worker2=1; shift ;;
+      --skip-worker-2)
+        echo "警告: --skip-worker-2 已无意义（不再校验 event-worker-2），已忽略。" >&2
+        shift
+        ;;
       *) echo "未知参数: $1" >&2; return 1 ;;
     esac
   done
@@ -71,16 +73,9 @@ visual_dps_verify_deploy_images() {
     _vdpi_check "${lite}"
   fi
 
-  if [[ "${skip_worker2}" -eq 1 ]]; then
-    echo "SKIP: visual-dps-event-worker-2:${tag} (--skip-worker-2)"
-  else
-    _vdpi_check "visual-dps-event-worker-2:${tag}"
-  fi
-
   if [[ "${fail}" -ne 0 ]]; then
     echo "" >&2
     echo "提示: 推理镜像可从旧 tag retag，或 GPU 场景: ./verify-images.sh --skip-lite-cpu" >&2
-    echo "      worker-2: ./scripts/build-event-worker-2-image.sh" >&2
     return 1
   fi
   echo "==> 镜像校验通过"

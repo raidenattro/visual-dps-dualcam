@@ -7,9 +7,6 @@ CONFIG_FILE = "app_config.json"
 
 REQUIRED_CONFIG_KEYS = {
     "paths": [
-        "templates_dir",
-        "index_html",
-        "annotation_html",
         "base_localdata_dir",
         "upload_dir",
         "upload_480p_dir",

@@ -16,12 +16,6 @@ INFER_CPU_THREAD_ENV_DEFAULTS: dict[str, str] = {
     "INFERENCE_ORT_INTER_OP_THREADS": "1",
 }
 
-# worker-2 action_gate 小模型默认同上，可单独覆盖 ACTION_GATE_ORT_*
-ACTION_GATE_ORT_ENV_DEFAULTS: dict[str, str] = {
-    "ACTION_GATE_ORT_INTRA_OP_THREADS": "1",
-    "ACTION_GATE_ORT_INTER_OP_THREADS": "1",
-}
-
 
 def _int_env(name: str, default: int) -> int:
     raw = os.environ.get(name, "").strip()
@@ -67,15 +61,6 @@ def build_ort_session_options(
     opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
     opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     return opts
-
-
-def build_action_gate_session_options() -> Any:
-    return build_ort_session_options(
-        intra_env="ACTION_GATE_ORT_INTRA_OP_THREADS",
-        inter_env="ACTION_GATE_ORT_INTER_OP_THREADS",
-        intra_default=int(ACTION_GATE_ORT_ENV_DEFAULTS["ACTION_GATE_ORT_INTRA_OP_THREADS"]),
-        inter_default=int(ACTION_GATE_ORT_ENV_DEFAULTS["ACTION_GATE_ORT_INTER_OP_THREADS"]),
-    )
 
 
 def rtmlib_ort_providers(device: str) -> list:

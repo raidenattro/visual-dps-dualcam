@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # 宿主机 MP4 → 本机 MediaMTX 多路推流（153 等，不经 WSL 中继）
-# 用法: ./scripts/start-mp4-rtsp-all-publishers.sh [视频文件]
+# 用法: ./scripts/start-mp4-rtsp-all-publishers.sh <视频文件>
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VIDEO="${1:-${ROOT}/test/c7e2fb9b6551c2fc6a4c93ee65ac6c23_raw.mp4}"
+if [[ $# -lt 1 ]]; then
+  echo "用法: $0 <mp4文件>" >&2
+  exit 1
+fi
+VIDEO="$1"
 
 # 与 camera_ips / mediamtx publisher path 对齐（不含 cam13：由 MediaMTX 拉 149）
 # 全量: cam1 cam2 cam3 cam4 cam5 cam6 cam7 cam8 cam9 cam10 cam11 12 ces

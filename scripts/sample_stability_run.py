@@ -185,10 +185,10 @@ def stack_snapshot() -> dict:
         "infer_count": infer.get("count", 0),
         "image_tag": tag,
         "backend": "rtmpose_m",
-        "event_worker": "visual-dps-event-worker-2",
+        "event_worker": "visual-dps-event-worker",
         "notes": [
             "ORT 线程优化已启用（INFERENCE_ORT_* / OMP_NUM_THREADS 默认 1）",
-            "worker-2 action_gate 共享 ONNX Session",
+            "双路 3D DualcamRedisWorker / contact_slots",
         ],
     }
 
@@ -260,7 +260,7 @@ def main() -> int:
         t0 = time.time()
         redis = redis_metrics()
         infer = infer_stats()
-        w_cpu, w_mem = container_cpu_mem("visual-dps-event-worker-2")
+        w_cpu, w_mem = container_cpu_mem("visual-dps-event-worker")
         gpu = gpu_metrics()
         row = {
             "index": idx,
@@ -270,8 +270,8 @@ def main() -> int:
             "infer_count": infer["count"],
             "infer_cpu_sum": infer["cpu_sum"],
             "infer_mem_sum_mib": infer["mem_sum_mib"],
-            "worker2_cpu": w_cpu,
-            "worker2_mem_mib": round(w_mem, 1) if w_mem is not None else None,
+            "worker_cpu": w_cpu,
+            "worker_mem_mib": round(w_mem, 1) if w_mem is not None else None,
             "base_cpu_sum": base_stack_cpu(),
         }
         raw_samples.append(row)
@@ -291,7 +291,7 @@ def main() -> int:
     elapsed = max(1.0, raw_samples[-1]["elapsed_sec"] - raw_samples[0]["elapsed_sec"]) if raw_samples else 1.0
     consume_rate = round(delta_entries / elapsed, 2)
 
-    worker_cpus = [s["worker2_cpu"] for s in raw_samples if s.get("worker2_cpu") is not None]
+    worker_cpus = [s["worker_cpu"] for s in raw_samples if s.get("worker_cpu") is not None]
     infer_cpus = [s["infer_cpu_sum"] for s in raw_samples]
     infer_counts = [s["infer_count"] for s in raw_samples]
     gpu_utils = [s["gpu"]["gpu_util_pct"] for s in raw_samples if s.get("gpu")]
@@ -332,9 +332,9 @@ def main() -> int:
             "entries_read_delta": delta_entries,
             "entries_read_total": entries[-1] if entries else None,
         },
-        "worker2": {
+        "event_worker": {
             "cpu_pct": _stats([float(x) for x in worker_cpus]),
-            "mem_mib_last": raw_samples[-1].get("worker2_mem_mib") if raw_samples else None,
+            "mem_mib_last": raw_samples[-1].get("worker_mem_mib") if raw_samples else None,
         },
         "infer": {
             "count": _stats(infer_counts),
@@ -354,7 +354,7 @@ def main() -> int:
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"完成: lag_avg={lag_stats.get('avg')} worker_cpu_avg={payload['worker2']['cpu_pct'].get('avg')} rate={consume_rate} msg/s")
+    print(f"完成: lag_avg={lag_stats.get('avg')} worker_cpu_avg={payload['event_worker']['cpu_pct'].get('avg')} rate={consume_rate} msg/s")
     print(f"已写入 {out_path}")
     return 0
 

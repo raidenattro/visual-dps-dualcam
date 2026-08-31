@@ -14,7 +14,7 @@
 
 - 几何：`dualcam/solve.py`、`dualcam/geom.py`、`dualcam/lift.py`
 - 成组/标定：`services/aisle_store.py`、`services/aisle_routes.py`
-- Worker：`event_worker_2.py` → `DualcamRedisWorker`（compose 服务名 `visual-dps-event-worker`），分片键 `aisle_id`。**禁止**再启 2D worker-1 或 pick_state worker-2。
+- Worker：`event_worker.py` → `DualcamRedisWorker`（compose 服务名 `visual-dps-event-worker`），分片键 `aisle_id`。
 - 标注页：`/aisle`（`web/src/pages/AisleAnnotatePage.jsx`）
 
 ## 本地测试

@@ -30,7 +30,7 @@ def render(data: dict, json_name: str) -> str:
     obs = data["observation"]
     stack = data["stack"]
     redis = data["redis_pose_stream"]
-    worker = data["worker2"]
+    worker = data.get("event_worker") or data.get("worker2") or {}
     infer = data["infer"]
     gpu = data.get("gpu") or {}
     verdict = data["stability_verdict"]
@@ -63,7 +63,7 @@ def render(data: dict, json_name: str) -> str:
     compare_16 = (
         "| 维度 | 16 路 ORT 优化前 (0818 5min) | **16 路 ORT 优化后 (本报告)** |\n"
         "|------|------------------------------|-------------------------------|\n"
-        f"| worker-2 CPU 均值 | ~194% | **~{wcpu.get('avg', '?')}%** |\n"
+        f"| event-worker CPU 均值 | ~194% | **~{wcpu.get('avg', '?')}%** |\n"
         f"| pose 消费速率 | ~64 msg/s | **~{redis.get('consume_rate_msg_per_s', '?')} msg/s** |\n"
         f"| Redis lag | avg **2.5** / max **10** | avg **{lag.get('avg', '?')}** / max **{lag.get('max', '?')}** |\n"
         f"| 推理 CPU 合计 | ~1008% | **~{icpu.get('avg', '?')}%** |\n"
@@ -73,7 +73,7 @@ def render(data: dict, json_name: str) -> str:
 
     verdict_notes = verdict.get("notes") or []
     verdict_detail = (
-        "worker-2 消费与 pose 入流匹配良好，lag 处于低位。"
+        "event-worker 消费与 pose 入流匹配良好，lag 处于低位。"
         if verdict.get("stable")
         else "；".join(verdict_notes) or "lag 或路数异常，需进一步排查。"
     )
@@ -83,7 +83,7 @@ def render(data: dict, json_name: str) -> str:
 **观测窗口**：{obs['started_at'][:19].replace('T', ' ')} – {obs['ended_at'][:19].replace('T', ' ')} CST（**{dur} s**）  
 **采样间隔**：{obs['interval_sec']} s（共 **{obs['sample_count']}** 个样本）  
 **主机**：{host_line}  
-**场景**：{route_label} 推理 + 单 worker-2（`{stack.get('backend', 'rtmpose_m')}` · 镜像 `{stack.get('image_tag', '?')}`）
+**场景**：{route_label} 推理 + 单 event-worker（`{stack.get('backend', 'rtmpose_m')}` · 镜像 `{stack.get('image_tag', '?')}`）
 
 原始时序数据：[{json_name}](./{json_name})
 
@@ -121,7 +121,7 @@ def render(data: dict, json_name: str) -> str:
 
 ## 3. 资源占用
 
-### worker-2
+### event-worker
 
 | 指标 | {dur_label} |
 |------|-------------|
@@ -170,7 +170,7 @@ def render(data: dict, json_name: str) -> str:
 
 {notes_block}
 
-**解读**：若 worker-2 CPU 均值显著低于 ORT 优化前 ~194%，而 lag 仍 ≤10，说明 **action_gate 共享 Session + ORT 线程收敛** 降低了无效 CPU 争抢，消费速率应仍 ~60–70 msg/s 量级。
+**解读**：若 event-worker CPU 均值显著低于历史对照，而 lag 仍 ≤10，说明消费仍跟得上 pose 入流。
 
 ---
 

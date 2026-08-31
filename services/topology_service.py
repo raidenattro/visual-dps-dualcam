@@ -47,17 +47,14 @@ _TOPOLOGY_POSE_STALE_SEC = max(
 _COMPOSE_CONTAINERS = (
     ("visual-dps-mediamtx", "mediamtx", "mediamtx"),
     ("visual-dps-redis", "redis", "redis"),
-    ("visual-dps-event-worker-2", "event_worker", "event-worker-2"),
-    ("visual-dps-event-worker-2-b", "event_worker", "event-worker-2-b"),
     ("visual-dps-event-worker", "event_worker", "event-worker"),
+    ("visual-dps-event-worker-b", "event_worker", "event-worker-b"),
     ("visual-dps-ui", "ui", "ui"),
 )
 
-# 先 worker-2（含 dual），再 worker-1；拓扑按实际在跑的实例展示
 _EVENT_WORKER_SPECS = (
-    ("visual-dps-event-worker-2", "event-worker-2"),
-    ("visual-dps-event-worker-2-b", "event-worker-2-b"),
     ("visual-dps-event-worker", "event-worker"),
+    ("visual-dps-event-worker-b", "event-worker-b"),
 )
 
 
@@ -216,7 +213,7 @@ def _container_env_map(container) -> dict[str, str]:
 
 
 def _discover_event_workers() -> list[dict[str, Any]]:
-    """返回实际存在的 event-worker 容器；worker-2 在跑时忽略已退出的 worker-1。"""
+    """返回实际存在的 event-worker 容器（含可选 worker-b）。"""
     found: list[dict[str, Any]] = []
     for container_name, node_id in _EVENT_WORKER_SPECS:
         container = _get_compose_container(container_name)
@@ -241,16 +238,6 @@ def _discover_event_workers() -> list[dict[str, Any]]:
             }
         )
 
-    worker2_running = any(
-        w["running"] and w["container_name"].startswith("visual-dps-event-worker-2")
-        for w in found
-    )
-    if worker2_running:
-        found = [
-            w
-            for w in found
-            if w["container_name"] != "visual-dps-event-worker" or w["running"]
-        ]
     return found
 
 
@@ -496,7 +483,7 @@ def build_topology_overview(
             _issue(
                 "EVENT_WORKER_DOWN",
                 "error",
-                "未找到运行中的 event-worker（worker-2 / worker-1）",
+                "未找到运行中的 event-worker",
             )
         )
         if not event_workers:

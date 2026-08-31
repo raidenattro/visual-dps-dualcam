@@ -17,7 +17,6 @@ INCLUDE_MODELS=1
 ENV_FILE=""
 REBUILD_UI=0
 ALLOW_DOWNLOAD_WEIGHTS=0
-SKIP_WORKER2=0
 
 usage() {
   cat <<'EOF'
@@ -32,7 +31,6 @@ usage() {
   -o, --output DIR          输出目录（默认 dist/visual-dps-offline[-complete]-时间戳）
   --inference MODE          base | lite | gpu | gpu-onnx | all
   --rebuild-ui              打包前构建 UI + event-worker 镜像
-  --skip-worker-2           离线包不含 event-worker-2 镜像
   --no-models               不打包 weights/
   --allow-download-weights  源机缺权重时联网补全（默认直接失败）
   --archive FORMAT          none（默认）| tar | tar.gz
@@ -49,7 +47,10 @@ while [[ $# -gt 0 ]]; do
     -o|--output) OUTPUT="$2"; shift 2 ;;
     --inference) INFERENCE_MODE="$2"; shift 2 ;;
     --rebuild-ui) REBUILD_UI=1; shift ;;
-    --skip-worker-2) SKIP_WORKER2=1; shift ;;
+    --skip-worker-2)
+      echo "警告: --skip-worker-2 已无意义（本仓不再打包 event-worker-2），已忽略。" >&2
+      shift
+      ;;
     --no-models) INCLUDE_MODELS=0; shift ;;
     --allow-download-weights) ALLOW_DOWNLOAD_WEIGHTS=1; shift ;;
     --archive) ARCHIVE="$2"; shift 2 ;;
@@ -146,7 +147,6 @@ if [[ "${SKIP_PREFLIGHT:-0}" != "1" ]]; then
   echo "==> 打包预检..."
   PREFLIGHT_ARGS=(--inference "${INFERENCE_MODE}")
   [[ "${INCLUDE_MODELS}" -eq 0 ]] && PREFLIGHT_ARGS+=(--no-models)
-  [[ "${SKIP_WORKER2}" -eq 1 ]] && PREFLIGHT_ARGS+=(--skip-worker-2)
   "${ROOT}/scripts/preflight-offline-export.sh" "${PREFLIGHT_ARGS[@]}"
 fi
 
@@ -166,14 +166,6 @@ for img in "${BASE_IMAGES[@]}"; do
   IMAGES+=("${img}")
   echo "  + ${img}"
 done
-
-if [[ "${SKIP_WORKER2}" -eq 0 ]]; then
-  EXPORTED_EVENT2_IMAGE="$(resolve_repo_tag "visual-dps-event-worker-2" "visual-dps-event-worker-2:${VISUAL_DPS_IMAGE_TAG:-}")"
-  [[ -n "${EXPORTED_EVENT2_IMAGE}" ]] || { echo "错误: 缺少 visual-dps-event-worker-2 镜像（可先 ./scripts/build-event-worker-2-image.sh 或 --skip-worker-2）" >&2; exit 1; }
-  require_image "${EXPORTED_EVENT2_IMAGE}"
-  IMAGES+=("${EXPORTED_EVENT2_IMAGE}")
-  echo "  + ${EXPORTED_EVENT2_IMAGE}"
-fi
 
 case "${INFERENCE_MODE}" in
   base) ;;
