@@ -12,9 +12,8 @@
 |------|----------|------|
 | `visual-dps-visual-dps-ui` | `./scripts/build-ui-image.sh` | 含前端 `web/dist` + UI/API Python |
 | `visual-dps-event-worker` | `./scripts/build-ui-image.sh`（同上，一次构建两个） | 事件 / 碰撞 worker |
-| `visual-dps-inference-lite-gpu` | `./scripts/build-inference-lite-gpu-image.sh` | GPU 基础推理层 |
-| `visual-dps-inference-lite-gpu-onnx` | `./scripts/build-inference-lite-gpu-onnx-image.sh` | GPU-ONNX 推理（常用） |
-| `visual-dps-inference-lite` | `./scripts/build-inference-lite-image.sh` | CPU 推理（`INFERENCE_USE_GPU=0` 时） |
+| `visual-dps-inference-lite-gpu` | `./scripts/build-inference-lite-gpu-image.sh` | GPU 基础推理层（仅 onnx 构建基底，不部署） |
+| `visual-dps-inference-lite-gpu-onnx` | `./scripts/build-inference-lite-gpu-onnx-image.sh` | GPU-ONNX 推理（本仓唯一检测镜像） |
 
 `redis:7`、`bluenviron/mediamtx:1.11.3` 为外部基础镜像，无需本地 build。
 
@@ -178,12 +177,6 @@ cd /home/hqit/workspace/visual-dps
 ```bash
 export DOCKER_TAG_ALSO_LATEST=1
 ./scripts/build-ui-image.sh
-```
-
-CPU 推理（按需）：
-
-```bash
-./scripts/build-inference-lite-image.sh
 ```
 
 ---

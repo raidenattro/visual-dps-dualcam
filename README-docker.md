@@ -13,5 +13,5 @@ docker compose up -d
 - MediaMTX RTSP: `rtsp://127.0.0.1:8554/<path>`
 - 监控页支持 MJPEG / HLS / WebRTC（见 [docs/DEPLOY.md](./docs/DEPLOY.md) 播放与排障）
 
-推理容器由总览页启动，需先 `docker compose build visual-dps-inference-lite`（或 gpu 版）。  
+推理容器由总览页启动，需先 `./scripts/build-inference-lite-gpu-onnx-image.sh`。  
 变更记录：[docs/CHANGELOG.md](./docs/CHANGELOG.md)

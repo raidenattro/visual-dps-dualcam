@@ -50,7 +50,7 @@ docker compose up -d
 ## 构建推理镜像
 
 ```bash
-docker compose build visual-dps-inference-lite visual-dps-inference-lite-gpu
+./scripts/build-inference-lite-gpu-onnx-image.sh
 ```
 
 ## 演示推流（可选）
