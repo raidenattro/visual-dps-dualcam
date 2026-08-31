@@ -19,10 +19,12 @@ from scripts.solve_scene import solve_dual
 PAGE = ROOT / "scripts" / "dualcam_annot.html"
 PLAYER = ROOT / "scripts" / "dualcam_player.html"
 GEOM = ROOT / "scripts" / "dualcam_geom.js"
+VENDOR = ROOT / "scripts" / "vendor"
 VIDEO = ROOT / "output" / "dualcam" / "src.mp4"
 CALIB = ROOT / "output" / "calib" / "dual_1-3.json"
 SKEL = ROOT / "output" / "dualcam" / "skel3d.json"
 PORT = 8767
+_VENDOR_TYPES = {".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8"}
 
 
 def _lan_ip() -> str:
@@ -73,11 +75,28 @@ class Handler(BaseHTTPRequestHandler):
             raw = GEOM.read_bytes()
             self._bytes(raw, "text/javascript; charset=utf-8", head_only)
             return
+        if u.path.startswith("/vendor/"):
+            rel = Path(u.path[len("/vendor/") :])
+            if rel.is_absolute() or ".." in rel.parts:
+                self.send_error(404)
+                return
+            path = (VENDOR / rel).resolve()
+            try:
+                path.relative_to(VENDOR.resolve())
+            except ValueError:
+                self.send_error(404)
+                return
+            if not path.is_file():
+                self.send_error(404)
+                return
+            ctype = _VENDOR_TYPES.get(path.suffix, "application/octet-stream")
+            self._stream_file(path, ctype, head_only, cache="public, max-age=86400")
+            return
         if u.path == "/api/skel3d":
             if not SKEL.is_file():
                 self.send_error(404, "skel3d missing")
                 return
-            self._bytes(SKEL.read_bytes(), "application/json; charset=utf-8", head_only)
+            self._stream_file(SKEL, "application/json; charset=utf-8", head_only)
             return
         if u.path == "/api/calib":
             self._json(_load(), head_only)
@@ -131,6 +150,31 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if not head_only:
             self.wfile.write(raw)
+
+    def _stream_file(
+        self,
+        path: Path,
+        content_type: str,
+        head_only: bool = False,
+        cache: str = "no-store",
+    ) -> None:
+        size = path.stat().st_size
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", cache)
+        self.send_header("Content-Length", str(size))
+        self.end_headers()
+        if head_only:
+            return
+        try:
+            with path.open("rb") as f:
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def _file_range(self, path: Path, content_type: str, head_only: bool = False) -> None:
         size = path.stat().st_size
