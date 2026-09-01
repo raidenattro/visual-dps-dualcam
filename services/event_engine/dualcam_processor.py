@@ -160,10 +160,16 @@ class DualcamProcessor:
             if p is None:
                 continue
             xyz[ji] = [float(p[0]), float(p[1]), float(p[2])]
-            self._new_prev[(*prev_key, ji)] = p
-            if ji not in (LWRIST, RWRIST) or src not in CONTACT_SRC:
+        self._clamp_flying_wrists(xyz, srcs, wrist_tokens)
+        for ji in range(17):
+            if xyz[ji]:
+                self._new_prev[(*prev_key, ji)] = np.asarray(xyz[ji], float)
+        for ji in (LWRIST, RWRIST):
+            p = xyz[ji] if ji < len(xyz) else None
+            src = srcs[ji] if ji < len(srcs) else None
+            if not p or src not in CONTACT_SRC:
                 continue
-            hits = contact_slots(p, self.meshes, self.solved, self.contact_m)
+            hits = contact_slots(np.asarray(p[:3], float), self.meshes, self.solved, self.contact_m)
             toks: list[str] = []
             for hit in hits:
                 shelf = str(hit.get("shelf_code") or "").strip() or wall_shelf_code(
@@ -174,7 +180,6 @@ class DualcamProcessor:
                 if tok and ":" in tok:
                     toks.append(tok)
             wrist_tokens[ji] = toks
-        self._clamp_flying_wrists(xyz, srcs, wrist_tokens)
         return xyz, srcs, wrist_tokens
 
     def _clamp_flying_wrists(

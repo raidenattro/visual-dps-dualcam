@@ -11,10 +11,12 @@ from dualcam.skel3d_smooth import (
     _clamp_bones_causal,
     _gauss_smooth,
     _reject_speed,
+    _restore_raw_bone_lengths,
     adapt_sigma,
     assign_tracks,
     copy_pose_pack,
     live_adapt_sigma,
+    repair_arm_chains,
     smooth_frames,
     smooth_pose2d,
     torso_centroid,
@@ -91,6 +93,100 @@ def test_clamp_bones_caps_flying_to_range():
     _clamp_bones_causal(hip, knee, mp, md, 0.28, 0.55, min_samples=16)
     d = float(np.linalg.norm(knee[-1] - hip[-1]))
     assert abs(d - 0.55) < 1e-6
+
+
+def test_restore_raw_bone_lengths_undoes_uneven_lag():
+    """腕比肩多滤一截时，应收回本帧生骨长，而不是橡皮泥拉长。"""
+    n = 1
+    sho_sm = np.array([[0.0, 1.4, 0.0]], float)
+    wr_sm = np.array([[0.0, 1.4, 0.6]], float)
+    sho_raw = np.array([[0.0, 1.4, 0.0]], float)
+    wr_raw = np.array([[0.0, 1.4, 0.28]], float)
+    mk = np.ones(n, dtype=bool)
+    _restore_raw_bone_lengths(
+        {5: (sho_sm, mk), 7: (wr_sm, mk)},
+        {5: (sho_raw, mk), 7: (wr_raw, mk)},
+        bones=((5, 7),),
+    )
+    assert abs(float(np.linalg.norm(wr_sm[0] - sho_sm[0])) - 0.28) < 1e-6
+
+
+def _torso_xyz(wrist_z: float) -> list:
+    xyz = [None] * 17
+    xyz[5] = [0.0, 1.4, 0.5]
+    xyz[6] = [0.3, 1.4, 0.5]
+    xyz[7] = [0.0, 1.25, 0.5 + 0.5 * wrist_z]
+    xyz[9] = [0.0, 1.4, 0.5 + wrist_z]
+    xyz[11] = [0.0, 1.0, 0.5]
+    xyz[12] = [0.3, 1.0, 0.5]
+    return xyz
+
+
+def test_causal_sparse_keeps_raw_arm_shape():
+    """7.5Hz 因果：腕在两帧间伸缩时，不得把骨头插值成中间长度。"""
+    frames = []
+    zs = [0.28, 0.70, 0.28, 0.70, 0.28, 0.70]
+    for i, z in enumerate(zs):
+        frames.append({
+            "t": i * 0.133,
+            "persons": [{"xyz": _torso_xyz(z), "vis": [1] * 17}],
+        })
+    smooth_frames(frames, causal=True, drop_short=False)
+    last = frames[-1]["persons"][0]["xyz"]
+    d = float(np.linalg.norm(np.array(last[9], float) - np.array(last[5], float)))
+    assert abs(d - 0.70) < 0.03
+    e = np.array(last[7], float)
+    s = np.array(last[5], float)
+    # 肘相对肩的偏移应保持本帧生抬点，不能被两帧平均
+    assert abs((e[1] - s[1]) - (-0.15)) < 0.02
+    assert abs((e[2] - s[2]) - 0.35) < 0.02
+
+
+def _arm_xyz(sho, elb, wri):
+    xyz = [None] * 17
+    xyz[5], xyz[6] = [0.2, 1.4, 0.5], [0.5, 1.4, 0.5]
+    xyz[11], xyz[12] = [0.2, 1.0, 0.5], [0.5, 1.0, 0.5]
+    xyz[5] = list(sho)
+    xyz[7] = list(elb)
+    xyz[9] = list(wri)
+    return xyz
+
+
+def test_repair_arm_keeps_elbow_in_front():
+    """伸手向前时肘在胸前是合法的，不能按胸口先验翻到身后。"""
+    s = np.array([0.2, 1.4, 0.5])
+    w = np.array([0.2, 1.15, 0.85])
+    e_front = np.array([0.2, 1.28, 0.72])
+    xyz = _arm_xyz(s, e_front, w)
+    repair_arm_chains(xyz)
+    e = np.asarray(xyz[7])
+    assert e[2] > 0.55
+
+
+def test_repair_arm_only_pulls_extreme_wrist():
+    """只有肩腕明显撑破骨长才收腕；贴墙伸手不要沿肘收回。"""
+    s = np.array([0.2, 1.4, 0.5])
+    e = np.array([0.2, 1.25, 0.7])
+    w = np.array([0.2, 1.2, 2.5])
+    xyz = _arm_xyz(s, e, w)
+    srcs = [None] * 17
+    srcs[7], srcs[9] = "stereo", "Lmono"
+    repair_arm_chains(xyz, srcs)
+    w2 = np.asarray(xyz[9])
+    assert float(np.linalg.norm(w2 - s)) < 1.0
+    assert w2[2] > e[2]
+
+
+def test_repair_arm_keeps_natural_hang():
+    """自然下垂：不要拧。"""
+    s = np.array([0.2, 1.4, 0.5])
+    w = np.array([0.2, 1.05, 0.55])
+    e = np.array([0.2, 1.22, 0.38])
+    xyz = _arm_xyz(s, e, w)
+    before = np.asarray(e).copy()
+    repair_arm_chains(xyz)
+    after = np.asarray(xyz[7])
+    assert float(np.linalg.norm(after - before)) < 0.12
 
 
 def test_assign_tracks_keeps_two_people():
@@ -192,7 +288,7 @@ def test_adapt_sigma_scales_when_pose_is_sparse():
 
 
 def test_live_adapt_sigma_covers_previous_pose_at_7hz():
-    """7.5Hz 时 3D 窗必须看见上一帧；2D 的 2× 封顶不够用在 3D。"""
+    """7.5Hz 时质心窗必须看见上一帧；不再对各关节用这个加宽 σ。"""
     dt = 0.133
     sig = live_adapt_sigma(0.030, dt)
     assert sig >= 2.5 * dt / 3.0
@@ -202,7 +298,7 @@ def test_live_adapt_sigma_covers_previous_pose_at_7hz():
 
 
 def test_live_pose3d_cuts_joint_jitter_at_sparse_dt():
-    """直播约 7.5Hz：3D 因果滤波应压关节抖，不能几乎等于生三角化。"""
+    """直播约 7.5Hz：平滑质心应压整身抖，但不能把姿态插值烂掉。"""
     rng = np.random.default_rng(4)
     sm = LivePose3DSmoother()
     raw_z = []

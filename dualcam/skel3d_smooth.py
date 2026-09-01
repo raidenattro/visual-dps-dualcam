@@ -1,7 +1,8 @@
 """骨架时序平滑（对齐 visual-dps-pick-state/scripts/skel3d_smooth.py）。
 
 先滤左右路 2D（短窗），再三角化；3D 滤波 + 飞骨裁到合法区间。分数不平滑。
-离线/直播都用因果窗。直播 3D 窗按 pose 周期加宽；骨长不用成人先验，以免局部缩放。
+dump（密采样）仍对各关节轻滤波。直播 ~7.5Hz 不能对各关节加宽高斯：跨帧插值会把
+骨头拉成橡皮泥。因果 3D 只平滑躯干质心，本帧相对质心的形状原样贴回。
 """
 
 from __future__ import annotations
@@ -22,6 +23,9 @@ TORSO = (LSHO, RSHO, LHIP, RHIP)
 ARM_BONES = ((LSHO, LELB), (LELB, LWRIST), (RSHO, RELB), (RELB, RWRIST))
 LEG_BONES = ((LHIP, LKNE), (LKNE, LANK), (RHIP, RKNE), (RKNE, RANK))
 LIMB_BONES = ARM_BONES + LEG_BONES
+# 近端→远端，用生抬点骨长沿平滑方向放回，避免腕比肩滞后把骨头拉成橡皮泥
+TORSO_BONES = ((LSHO, RSHO), (LHIP, RHIP), (LSHO, LHIP), (RSHO, RHIP))
+RIGID_BONES = TORSO_BONES + LIMB_BONES
 BONE_LEN_RANGE = {
     (LSHO, LELB): (0.18, 0.42),
     (RSHO, RELB): (0.18, 0.42),
@@ -33,8 +37,7 @@ BONE_LEN_RANGE = {
     (RKNE, RANK): (0.28, 0.52),
 }
 
-# 秒。2D 先滤短窗；3D 在 dump 25fps 只收残差。直播 pose 更稀，3D 必须按周期放大窗，
-# 否则 σ=30ms 在 7.5Hz 下看不见上一帧，等于没平滑。
+# 秒。2D 先滤短窗；dump 25fps 的 3D 只收残差。直播质心窗按周期放大，关节形状不跨帧混。
 SIGMA_2D_BODY = 0.045
 SIGMA_2D_ELBOW = 0.055
 SIGMA_2D_WRIST = 0.070
@@ -109,6 +112,113 @@ def torso_centroid(xyz: list) -> np.ndarray | None:
     if not pts:
         return None
     return np.mean(pts, axis=0)
+
+
+# 肘几乎贴在肩-腕轴上时才用上一帧铰链侧，避免三角化把臂折成一根棍。
+_ELBOW_AXIS_M = 0.025
+_ARM_CHAINS = ((LSHO, LELB, LWRIST), (RSHO, RELB, RWRIST))
+_STRETCH_EPS = 0.08
+
+
+def _two_bone_place(
+    shoulder: np.ndarray,
+    wrist: np.ndarray,
+    lu: float,
+    ll: float,
+    elbow_hint: np.ndarray | None,
+    prefer: np.ndarray | None,
+) -> np.ndarray:
+    """肩、腕固定，肘落到两球面交线；prefer / hint 只用来选铰链哪一侧，不按胸口强翻。"""
+    sw = wrist - shoulder
+    d = float(np.linalg.norm(sw))
+    lo = abs(lu - ll) + 1e-3
+    hi = lu + ll - 1e-3
+    if hi <= lo:
+        return shoulder + 0.5 * sw
+    if d < 1e-6:
+        return shoulder + (prefer if prefer is not None else np.array([0.0, 1.0, 0.0])) * lu
+    if d < lo or d > hi:
+        d2 = float(np.clip(d, lo, hi))
+        wrist = shoulder + sw * (d2 / d)
+        sw = wrist - shoulder
+        d = d2
+    a = (lu * lu - ll * ll + d * d) / (2.0 * d)
+    h2 = lu * lu - a * a
+    axis = sw / d
+    mid = shoulder + a * axis
+    if h2 <= 1e-8:
+        return mid
+    h = float(np.sqrt(max(0.0, h2)))
+
+    def _in_plane(v: np.ndarray) -> np.ndarray:
+        return v - axis * float(np.dot(v, axis))
+
+    side = None
+    if elbow_hint is not None:
+        side = _in_plane(elbow_hint - mid)
+    if (side is None or float(np.linalg.norm(side)) < 1e-6) and prefer is not None:
+        side = _in_plane(prefer)
+    sn = float(np.linalg.norm(side)) if side is not None else 0.0
+    if sn < 1e-6:
+        side = np.cross(axis, np.array([0.0, 1.0, 0.0]))
+        sn = float(np.linalg.norm(side))
+        if sn < 1e-6:
+            side = np.cross(axis, np.array([1.0, 0.0, 0.0]))
+            sn = float(np.linalg.norm(side))
+    return mid + side * (h / (sn + 1e-12))
+
+
+def repair_arm_chains(
+    xyz: list,
+    srcs: list | None = None,
+    prev_xyz: list | None = None,
+) -> None:
+    """臂链铰链投影。不要接到直播抬点上：用教科书骨长把肘钉到圆上，会把立体尺度拉成哈哈镜。
+
+    仅保留给单测/离线实验。直播只靠三角化 + 飞腕上限 + 出界骨长裁切。
+    """
+    if not xyz or len(xyz) < 17:
+        return
+    for sho_i, elb_i, wri_i in _ARM_CHAINS:
+        s = _as3(xyz[sho_i])
+        e = _as3(xyz[elb_i])
+        w = _as3(xyz[wri_i])
+        if s is None or w is None:
+            continue
+        prev_e = _as3(prev_xyz[elb_i]) if prev_xyz and elb_i < len(prev_xyz) else None
+        lu_lo, lu_hi = BONE_LEN_RANGE[(sho_i, elb_i)]
+        ll_lo, ll_hi = BONE_LEN_RANGE[(elb_i, wri_i)]
+        lu = float(np.clip(np.linalg.norm(e - s), lu_lo, lu_hi)) if e is not None else 0.5 * (lu_lo + lu_hi)
+        ll = (
+            float(np.clip(np.linalg.norm(w - e), ll_lo, ll_hi))
+            if e is not None
+            else 0.5 * (ll_lo + ll_hi)
+        )
+        dsw = float(np.linalg.norm(w - s))
+        max_r = lu + ll
+        if dsw > max_r + _STRETCH_EPS and dsw > 1e-6:
+            w = s + (w - s) * (max_r / dsw)
+            xyz[wri_i] = w.tolist()
+
+        sw = w - s
+        d = float(np.linalg.norm(sw))
+        if d < 1e-6:
+            continue
+        axis = sw / d
+        a = (lu * lu - ll * ll + d * d) / (2.0 * d)
+        mid = s + a * axis
+        hint = e
+        if e is not None:
+            perp = (e - mid) - axis * float(np.dot(e - mid, axis))
+            if float(np.linalg.norm(perp)) < _ELBOW_AXIS_M and prev_e is not None:
+                hint = prev_e
+        prefer = None
+        if prev_e is not None and (e is None or float(np.linalg.norm(
+            (e - mid) - axis * float(np.dot(e - mid, axis))
+        )) < _ELBOW_AXIS_M):
+            prefer = prev_e - mid
+        e2 = _two_bone_place(s, w, lu, ll, hint, prefer)
+        xyz[elb_i] = e2.tolist()
 
 
 def joint_sigma(j: int) -> float:
@@ -390,8 +500,10 @@ def _clamp_bones_causal(
     hi: float,
     *,
     min_samples: int | None = None,
+    use_median: bool = True,
 ) -> None:
-    """飞骨收到 [lo, hi]；样本够了才按此人自己的中位微调。不用成人先验，避免局部缩放。"""
+    """飞骨收到 [lo, hi]。dump 样本够了才按此人中位微调；直播 7.5Hz 不要用中位，
+    否则几帧不同姿势会被收成同一根骨头（橡皮泥）。"""
     need = BONE_MIN_SAMPLES if min_samples is None else int(min_samples)
     hist: list[float] = []
     L_run: float | None = None
@@ -404,7 +516,7 @@ def _clamp_bones_causal(
             continue
         if lo <= d <= hi:
             hist.append(d)
-            if len(hist) >= need:
+            if use_median and len(hist) >= need:
                 L_run = float(np.median(hist))
         if d > hi:
             dist[i] = prox[i] + v * (hi / d)
@@ -412,11 +524,98 @@ def _clamp_bones_causal(
         if d < lo:
             dist[i] = prox[i] + v * (lo / d)
             continue
-        if L_run is None or L_run <= 1e-6:
+        if not use_median or L_run is None or L_run <= 1e-6:
             continue
         if abs(d - L_run) / L_run <= BONE_TOL:
             continue
         dist[i] = prox[i] + v * (L_run / d)
+
+
+def _centroid_from_raw(raw: dict[int, tuple[np.ndarray, np.ndarray]], i: int) -> np.ndarray | None:
+    """第 i 帧躯干质心；躯干不够则用所有可见关节。"""
+    pts = []
+    for j in TORSO:
+        if j not in raw:
+            continue
+        vals, mask = raw[j]
+        if i < len(mask) and mask[i]:
+            pts.append(vals[i])
+    if len(pts) < 2:
+        pts = []
+        for vals, mask in raw.values():
+            if i < len(mask) and mask[i]:
+                pts.append(vals[i])
+    if not pts:
+        return None
+    return np.mean(pts, axis=0)
+
+
+def _apply_rigid_com_smooth(
+    series: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]],
+    raw: dict[int, tuple[np.ndarray, np.ndarray]],
+    times: np.ndarray,
+    sigma_s: float,
+    *,
+    causal: bool,
+) -> None:
+    """只平滑质心，再把本帧相对质心的偏移贴回去。各关节不再独立插值。"""
+    n = int(len(times))
+    if n == 0 or sigma_s <= 0:
+        return
+    cents = np.zeros((n, 3), dtype=np.float64)
+    cm = np.zeros(n, dtype=bool)
+    for i in range(n):
+        c = _centroid_from_raw(raw, i)
+        if c is None:
+            continue
+        cents[i] = c
+        cm[i] = True
+    _reject_speed(cents, cm, times, VMAX_BODY)
+    sm, sm_mask = _gauss_smooth(cents, cm, times, sigma_s, causal=causal)
+    for i in range(n):
+        if not (cm[i] and sm_mask[i]):
+            continue
+        delta = sm[i] - cents[i]
+        for j, (sv, smk, _) in series.items():
+            if j not in raw:
+                continue
+            rv, rm = raw[j]
+            if not rm[i]:
+                continue
+            sv[i] = rv[i] + delta
+            smk[i] = True
+
+
+def _restore_raw_bone_lengths(
+    smoothed: dict[int, tuple[np.ndarray, np.ndarray]],
+    raw: dict[int, tuple[np.ndarray, np.ndarray]],
+    bones: tuple[tuple[int, int], ...] = RIGID_BONES,
+) -> None:
+    """近端已平滑后，远端沿平滑方向收到本帧生抬点的骨长。"""
+    n = 0
+    for sm, mk in smoothed.values():
+        n = len(sm)
+        break
+    if n == 0:
+        return
+    for i in range(n):
+        for a, b in bones:
+            if a not in smoothed or b not in smoothed or a not in raw or b not in raw:
+                continue
+            sa, ma = smoothed[a]
+            sb, mb = smoothed[b]
+            ra, rma = raw[a]
+            rb, rmb = raw[b]
+            if not (ma[i] and mb[i] and rma[i] and rmb[i]):
+                continue
+            L = float(np.linalg.norm(rb[i] - ra[i]))
+            if L < 1e-4:
+                continue
+            v = sb[i] - sa[i]
+            d = float(np.linalg.norm(v))
+            if d < 1e-6:
+                continue
+            sb[i] = sa[i] + v * (L / d)
 
 
 def _clamp_bone(prox: np.ndarray, dist: np.ndarray, mp: np.ndarray, md: np.ndarray, L: float) -> None:
@@ -512,22 +711,37 @@ def smooth_frames(
         if len(members) < 2:
             continue
         series: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+        raw: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+        times_ref: np.ndarray | None = None
         for j in range(N_JOINTS):
             times, vals, mask = _series_from_track(frames, members, j)
+            times_ref = times
             if j in (LWRIST, RWRIST):
                 n_wrist_in += int(mask.sum())
             _reject_speed(vals, mask, times, joint_vmax(j))
-            sm, sm_mask = _gauss_smooth(
-                vals, mask, times,
-                live_adapt_sigma(joint_sigma(j), dt) if causal else joint_sigma(j),
-                causal=causal,
-            )
+            raw[j] = (vals.copy(), mask.copy())
+            if causal:
+                series[j] = (vals.copy(), mask.copy(), times)
+                continue
+            sm, sm_mask = _gauss_smooth(vals, mask, times, joint_sigma(j), causal=False)
             series[j] = (sm, sm_mask, times)
+        if causal and times_ref is not None:
+            # 7.5Hz：只滑质心。对各关节加宽高斯会在两帧姿势间插值，骨头变成橡皮泥。
+            _apply_rigid_com_smooth(
+                series, raw, times_ref, live_adapt_sigma(SIGMA_BODY, dt), causal=True,
+            )
+        else:
+            _restore_raw_bone_lengths(
+                {j: (series[j][0], series[j][1]) for j in series},
+                raw,
+            )
         for a, b in LIMB_BONES:
             sa, ma, _ = series[a]
             sb, mb, _ = series[b]
             lo, hi = BONE_LEN_RANGE[(a, b)]
-            _clamp_bones_causal(sa, sb, ma, mb, lo, hi, min_samples=bone_min)
+            _clamp_bones_causal(
+                sa, sb, ma, mb, lo, hi, min_samples=bone_min, use_median=not causal,
+            )
         for j in range(N_JOINTS):
             sm, sm_mask, _ = series[j]
             if j in (LWRIST, RWRIST):
