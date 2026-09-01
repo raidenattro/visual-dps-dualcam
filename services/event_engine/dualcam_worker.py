@@ -143,8 +143,9 @@ class DualcamRedisWorker(EventRedisWorker):
         if "L" not in bucket or "R" not in bucket:
             missing = "R" if "L" in bucket else "L"
             other_last = seen.get(missing)
-            # 对侧从未到过，或刚还在出帧：等配对，不要立刻推单路
-            if other_last is None or (now_mono - other_last) <= max(window * 4, 0.6):
+            wait_s = max(window * 2.0, 0.25)
+            # 对侧刚还在出帧：等配对。立刻 process_single 会用 hold 把立体骨架冻住。
+            if other_last is not None and (now_mono - other_last) <= wait_s:
                 return
             self._note(
                 f"wait:{aisle_id}:{missing}",
@@ -152,7 +153,7 @@ class DualcamRedisWorker(EventRedisWorker):
                 aisle_id,
                 role,
                 missing,
-                now_mono - other_last,
+                now_mono - (other_last or now_mono),
                 window,
             )
             if proc is not None and proc.ready():
@@ -172,6 +173,11 @@ class DualcamRedisWorker(EventRedisWorker):
             if proc is not None and proc.ready():
                 preview = await asyncio.to_thread(proc.process_single, role, pose)
                 await _publish(preview)
+            # 丢掉更旧的一路，避免桶里永远对不齐、一直单路冻帧
+            if t_l <= t_r:
+                bucket.pop("L", None)
+            else:
+                bucket.pop("R", None)
             return
 
         bucket.pop("L", None)

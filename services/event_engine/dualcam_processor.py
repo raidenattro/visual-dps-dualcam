@@ -11,9 +11,12 @@ from dualcam.geom import DEFAULT_CONTACT_M, contact_slots
 from dualcam.lift import (
     CONTACT_SRC,
     LWRIST,
+    PREFER_PX,
     RWRIST,
+    _torso_xy,
     keypoints_to_ks,
     lift_point,
+    nms_indices,
     pick_pairs,
     wall_plane_from_solved,
 )
@@ -38,6 +41,9 @@ FACE_JOINTS = frozenset({0, 1, 2, 3, 4})
 HOLD_FRAMES = 8
 HOLD_MATCH_M = 0.55
 TORSO_JOINTS = (5, 6, 11, 12)
+LSHO, RSHO = 5, 6
+# 超过则腕点几何不可信，不报贴墙（dump_skel3d.SHOULDER_WRIST_MAX）
+SHOULDER_WRIST_MAX = 0.85
 
 
 def _scale_pose(pose: dict, calib_w: int, calib_h: int) -> tuple[dict, dict]:
@@ -51,6 +57,30 @@ def _scale_pose(pose: dict, calib_w: int, calib_h: int) -> tuple[dict, dict]:
     out = dict(pose)
     out["persons"] = scaled
     return out, meta
+
+
+def _subset_persons(pose: dict | None, indices: list[int]) -> list[dict[str, Any]]:
+    people = list((pose or {}).get("persons") or [])
+    out: list[dict[str, Any]] = []
+    for i in indices:
+        if 0 <= i < len(people) and isinstance(people[i], dict):
+            out.append(people[i])
+    return out
+
+
+def _prefer_xy(k: np.ndarray, s: np.ndarray) -> np.ndarray:
+    """与 pick_pairs / _match_torso_idx 同一套躯干中心，避免肩点对不上髋点。"""
+    t = _torso_xy(k, s)
+    if t is not None:
+        return t
+    return np.asarray(k[[5, 6]].mean(axis=0), float)
+
+
+def _nms_idx(pose: dict | None) -> list[int]:
+    if not pose:
+        return []
+    pack = keypoints_to_ks(pose.get("persons") or [])
+    return nms_indices(pack["k"], pack["s"])
 
 
 def _torso_centroid(xyz: list) -> np.ndarray | None:
@@ -84,6 +114,8 @@ class DualcamProcessor:
         self._new_prev: dict[tuple, np.ndarray] = {}
         self._prefer: list[tuple[np.ndarray, np.ndarray]] = []
         self._holds: list[tuple[dict, int, np.ndarray]] = []
+        self._last_skel_l: list[dict[str, Any]] = []
+        self._last_skel_r: list[dict[str, Any]] = []
         self._sm2d = {"L": LivePose2DSmoother(), "R": LivePose2DSmoother()}
         self._sm3d = LivePose3DSmoother()
         cams = aisle.get("cameras") or {}
@@ -102,6 +134,7 @@ class DualcamProcessor:
         kr: np.ndarray | None,
         sr: np.ndarray | None,
         prev_key: tuple,
+        prev_xyz: list | None = None,
     ) -> tuple[list, list, dict[int, list[str]]]:
         """抬 17 关节。对侧缺失时走单路（只显示，不报贴墙）。"""
         xyz: list[list[float] | None] = [None] * 17
@@ -117,7 +150,11 @@ class DualcamProcessor:
             # 单路（对侧分数为 0）不抬五官，避免贴墙射线拉成「射向货架」的长骨线
             if ji in FACE_JOINTS and (not has_r or sc_l <= 0.0 or sc_r <= 0.0):
                 continue
-            prev = self._prev_xyz.get((*prev_key, ji))
+            prev = None
+            if prev_xyz is not None and ji < len(prev_xyz) and prev_xyz[ji]:
+                prev = np.asarray(prev_xyz[ji][:3], float)
+            if prev is None:
+                prev = self._prev_xyz.get((*prev_key, ji))
             p, _g, src = lift_point(uv_l, sc_l, uv_r, sc_r, self.cams, self.plane, prev)
             srcs[ji] = src
             if p is None:
@@ -137,12 +174,163 @@ class DualcamProcessor:
                 if tok and ":" in tok:
                     toks.append(tok)
             wrist_tokens[ji] = toks
+        self._clamp_flying_wrists(xyz, srcs, wrist_tokens)
         return xyz, srcs, wrist_tokens
+
+    def _clamp_flying_wrists(
+        self,
+        xyz: list,
+        srcs: list,
+        wrist_tokens: dict[int, list[str]],
+    ) -> None:
+        """肩-腕过长则收到上限上，不删点（删了会闪断、骨线抽搐）。"""
+        for wi, shi in ((LWRIST, LSHO), (RWRIST, RSHO)):
+            w, sh = xyz[wi] if wi < len(xyz) else None, xyz[shi] if shi < len(xyz) else None
+            if not w or not sh:
+                continue
+            wv = np.asarray(w[:3], float)
+            sv = np.asarray(sh[:3], float)
+            d = float(np.linalg.norm(wv - sv))
+            if d <= SHOULDER_WRIST_MAX or d < 1e-6:
+                continue
+            xyz[wi] = (sv + (wv - sv) * (SHOULDER_WRIST_MAX / d)).tolist()
+            wrist_tokens[wi] = []
+
+    def _match_torso_idx(self, pack: dict, xy, used: set[int]) -> int | None:
+        if xy is None:
+            return None
+        best, best_d = None, float(PREFER_PX)
+        ks, ss = pack.get("k"), pack.get("s")
+        n = 0 if ks is None else len(ks)
+        if n == 0 or ss is None:
+            return None
+        for i in range(n):
+            if i in used:
+                continue
+            p = _torso_xy(ks[i], ss[i])
+            if p is None:
+                continue
+            d = float(np.linalg.norm(p - xy))
+            if d < best_d:
+                best, best_d = i, d
+        return best
+
+    def _overlay_follow(
+        self,
+        pose_l: dict | None,
+        pose_r: dict | None,
+        idx_l: list[int],
+        idx_r: list[int],
+        *,
+        have_l: bool,
+        have_r: bool,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        # 配上了用配对下标；配不上用当前 NMS 人。空 idx 不再清成 []，否则画面冻在上一帧或空白。
+        if have_l and pose_l is not None:
+            idx = list(idx_l) if idx_l else _nms_idx(pose_l)
+            self._last_skel_l = _subset_persons(pose_l, idx)
+        if have_r and pose_r is not None:
+            idx = list(idx_r) if idx_r else _nms_idx(pose_r)
+            self._last_skel_r = _subset_persons(pose_r, idx)
+        return list(self._last_skel_l), list(self._last_skel_r)
+
+    def _hold_xyz_near(self, idx: int) -> list | None:
+        if 0 <= idx < len(self._holds):
+            return (self._holds[idx][0] or {}).get("xyz")
+        if self._holds:
+            return (self._holds[0][0] or {}).get("xyz")
+        return None
+
+    def _lift_follow(self, fl: dict, fr: dict) -> tuple[list[dict[str, Any]], list[int], list[int]]:
+        """配不上立体时：当前 2D + 上一帧深度沿射线跟上。"""
+        prefer = list(self._prefer)
+        if not prefer and self._holds:
+            # 无续帧标定点时，用当前 NMS 人沿 hold 深度跟上，不要把 3D 冻死
+            k_l, k_r = fl.get("k"), fr.get("k")
+            li = nms_indices(fl["k"], fl["s"]) if k_l is not None and len(k_l) else []
+            ri = nms_indices(fr["k"], fr["s"]) if k_r is not None and len(k_r) else []
+            i = li[0] if li else None
+            j = ri[0] if ri else None
+            if i is None and j is None:
+                return [], [], []
+            people: list[dict[str, Any]] = []
+            idx_l: list[int] = []
+            idx_r: list[int] = []
+            self._new_prev = dict(self._prev_xyz)
+            prev_xyz = self._hold_xyz_near(0)
+            if i is not None and j is not None:
+                xyz, srcs, _tok = self._lift_joints(
+                    fl["k"][i], fl["s"][i], fr["k"][j], fr["s"][j], ("F", 0), prev_xyz=prev_xyz,
+                )
+                idx_l.append(i)
+                idx_r.append(j)
+            elif i is not None:
+                xyz, srcs, _tok = self._lift_joints(
+                    fl["k"][i], fl["s"][i], None, None, ("F", 0), prev_xyz=prev_xyz,
+                )
+                idx_l.append(i)
+            else:
+                z = np.zeros_like(fr["k"][j])
+                zs = np.zeros_like(fr["s"][j])
+                xyz, srcs, _tok = self._lift_joints(
+                    z, zs, fr["k"][j], fr["s"][j], ("F", 0), prev_xyz=prev_xyz,
+                )
+                idx_r.append(j)
+            people.append({
+                "xyz": xyz,
+                "src": srcs,
+                "preview": True,
+                "wrist_alarm": {9: False, 10: False},
+            })
+            return people, idx_l, idx_r
+        if not prefer:
+            return [], [], []
+        people: list[dict[str, Any]] = []
+        idx_l: list[int] = []
+        idx_r: list[int] = []
+        used_l: set[int] = set()
+        used_r: set[int] = set()
+        self._new_prev = dict(self._prev_xyz)
+        for pi, (pl, pr) in enumerate(prefer):
+            i = self._match_torso_idx(fl, pl, used_l)
+            j = self._match_torso_idx(fr, pr, used_r)
+            if i is not None:
+                used_l.add(i)
+                idx_l.append(i)
+            if j is not None:
+                used_r.add(j)
+                idx_r.append(j)
+            if i is None and j is None:
+                continue
+            prev_xyz = self._hold_xyz_near(pi)
+            if i is not None and j is not None:
+                xyz, srcs, _tok = self._lift_joints(
+                    fl["k"][i], fl["s"][i], fr["k"][j], fr["s"][j], ("F", pi), prev_xyz=prev_xyz,
+                )
+            elif i is not None:
+                xyz, srcs, _tok = self._lift_joints(
+                    fl["k"][i], fl["s"][i], None, None, ("F", pi), prev_xyz=prev_xyz,
+                )
+            else:
+                z = np.zeros_like(fr["k"][j])
+                zs = np.zeros_like(fr["s"][j])
+                xyz, srcs, _tok = self._lift_joints(
+                    z, zs, fr["k"][j], fr["s"][j], ("F", pi), prev_xyz=prev_xyz,
+                )
+            people.append({
+                "xyz": xyz,
+                "src": srcs,
+                "preview": True,
+                "wrist_alarm": {9: False, 10: False},
+            })
+        return people, idx_l, idx_r
 
     def _clear_hold(self) -> None:
         self._holds = []
         self._prev_xyz = {}
         self._prefer = []
+        self._last_skel_l = []
+        self._last_skel_r = []
         self._sm2d["L"].reset()
         self._sm2d["R"].reset()
         self._sm3d.reset()
@@ -164,6 +352,15 @@ class DualcamProcessor:
             if best is not None:
                 used.add(best)
                 new_holds.append((out[best], 0, cents[best]))
+            elif (
+                len(out) == 1
+                and len(cents) == 1
+                and 0 not in used
+                and cents[0] is not None
+            ):
+                # 单人深度跟上后躯干可能跳过 HOLD_MATCH_M，仍视为同一人，避免冻帧+复制
+                used.add(0)
+                new_holds.append((out[0], 0, cents[0]))
             elif miss + 1 <= HOLD_FRAMES:
                 held = copy.deepcopy(prev)
                 held["held"] = True
@@ -200,32 +397,45 @@ class DualcamProcessor:
         smooth_2d: bool = True,
         smooth_3d: bool = True,
     ) -> dict[str, Any]:
-        """对侧未到时：对齐 dump_skel3d，不单路贴墙抬点，只 hold 上一帧立体人。"""
+        """对侧未到时：2D 跟着当前检测走；3D 用上一帧深度沿射线跟上，不冻帧。"""
         role = str(role or "").strip().upper() or "L"
         if smooth_2d:
             pose = self._smooth_pose(role, pose)
         calib = self.calib_l if role == "L" else self.calib_r
         scaled, meta = _scale_pose(pose, *calib)
         frame_idx = int(pose.get("frame_idx") or 0)
-        out = {
+        empty = {"k": [], "s": []}
+        pack = keypoints_to_ks(scaled.get("persons") or [])
+        fl, fr = (pack, empty) if role == "L" else (empty, pack)
+        people: list[dict[str, Any]] = []
+        idx_l: list[int] = []
+        idx_r: list[int] = []
+        if self.solved.get("ok") and role in self.cams:
+            people, idx_l, idx_r = self._lift_follow(fl, fr)
+            if apply_hold:
+                people = self._apply_hold(people)
+            if smooth_3d:
+                people = self._sm3d.update(pose_time(pose, frame_idx), people, self.plane)
+            self._prev_xyz = self._new_prev
+        sk_l, sk_r = self._overlay_follow(
+            pose if role == "L" else None,
+            pose if role == "R" else None,
+            idx_l,
+            idx_r,
+            have_l=(role == "L"),
+            have_r=(role == "R"),
+        )
+        return {
             "frame_idx": frame_idx,
             "collisions": [],
             "alarm_collisions": [],
-            "skeletons_l": pose.get("persons") or [] if role == "L" else [],
-            "skeletons_r": pose.get("persons") or [] if role == "R" else [],
-            "persons_3d": [],
+            "skeletons_l": sk_l,
+            "skeletons_r": sk_r,
+            "persons_3d": people,
             "preview": True,
             "scale_l": meta if role == "L" else {},
             "scale_r": meta if role == "R" else {},
         }
-        if not self.solved.get("ok") or role not in self.cams:
-            return out
-        # 对齐 dump_skel3d：不成对不抬 3D，只 hold 上一帧立体人。禁止左右路各贴墙抬一套。
-        people = self._apply_hold([]) if apply_hold else []
-        if smooth_3d:
-            people = self._sm3d.update(pose_time(pose, frame_idx), people, self.plane)
-        out["persons_3d"] = people
-        return out
 
     def ready(self) -> bool:
         return not bool(self.not_ready_reason())
@@ -267,38 +477,48 @@ class DualcamProcessor:
         pose_r = self._smooth_pose("R", pose_r)
         pose_ls, meta_l = _scale_pose(pose_l, *self.calib_l)
         pose_rs, meta_r = _scale_pose(pose_r, *self.calib_r)
-        empty = {
-            "frame_idx": frame_idx,
-            "collisions": [],
-            "alarm_collisions": [],
-            "skeletons_l": pose_l.get("persons") or [],
-            "skeletons_r": pose_r.get("persons") or [],
-            "persons_3d": [],
-            "scale_l": meta_l,
-            "scale_r": meta_r,
-        }
         if not self.ready():
             self._clear_hold()
-            return empty
+            return {
+                "frame_idx": frame_idx,
+                "collisions": [],
+                "alarm_collisions": [],
+                "skeletons_l": [],
+                "skeletons_r": [],
+                "persons_3d": [],
+                "scale_l": meta_l,
+                "scale_r": meta_r,
+            }
 
         fl = keypoints_to_ks(pose_ls.get("persons") or [])
         fr = keypoints_to_ks(pose_rs.get("persons") or [])
         pairs = pick_pairs(fl, fr, self.cams, prefer=self._prefer, aabb=self.aabb)
         if not pairs:
-            # dump_skel3d：本帧无配对则 persons=[]，最多续上一帧，绝不 Lmono+Rmono 两人
-            held = self._sm3d.update(t, self._apply_hold([]), self.plane)
-            empty["persons_3d"] = held
-            empty["preview"] = True
-            return empty
+            followed, idx_l, idx_r = self._lift_follow(fl, fr)
+            held = self._apply_hold(followed)
+            held = self._sm3d.update(t, held, self.plane)
+            self._prev_xyz = self._new_prev
+            sk_l, sk_r = self._overlay_follow(
+                pose_l, pose_r, idx_l, idx_r, have_l=True, have_r=True,
+            )
+            return {
+                "frame_idx": frame_idx,
+                "collisions": [],
+                "alarm_collisions": [],
+                "skeletons_l": sk_l,
+                "skeletons_r": sk_r,
+                "persons_3d": held,
+                "preview": True,
+                "scale_l": meta_l,
+                "scale_r": meta_r,
+            }
         tokens: list[str] = []
         new_prefer: list[tuple[np.ndarray, np.ndarray]] = []
         persons_3d: list[dict[str, Any]] = []
         self._new_prev = {}
 
         for i, j, _gap in pairs:
-            tl = fl["k"][i][[5, 6]].mean(axis=0)
-            tr = fr["k"][j][[5, 6]].mean(axis=0)
-            new_prefer.append((tl, tr))
+            new_prefer.append((_prefer_xy(fl["k"][i], fl["s"][i]), _prefer_xy(fr["k"][j], fr["s"][j])))
             xyz, srcs, wrist_tok = self._lift_joints(
                 fl["k"][i], fl["s"][i], fr["k"][j], fr["s"][j], ("P", i, j)
             )
@@ -317,12 +537,16 @@ class DualcamProcessor:
         self._prefer = new_prefer
         self._prev_xyz = self._new_prev
         persons_3d = self._sm3d.update(t, self._apply_hold(persons_3d), self.plane)
+        sk_l, sk_r = self._overlay_follow(
+            pose_l, pose_r, [i for i, _, _ in pairs], [j for _, j, _ in pairs],
+            have_l=True, have_r=True,
+        )
         return {
             "frame_idx": frame_idx,
             "collisions": list(tokens),
             "alarm_collisions": list(tokens),
-            "skeletons_l": pose_l.get("persons") or [],
-            "skeletons_r": pose_r.get("persons") or [],
+            "skeletons_l": sk_l,
+            "skeletons_r": sk_r,
             "persons_3d": persons_3d,
             "preview": False,
             "scale_l": meta_l,

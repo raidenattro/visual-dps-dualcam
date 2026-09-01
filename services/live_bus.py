@@ -45,8 +45,8 @@ def merge_live_frame(pose: dict[str, Any] | None, event: dict[str, Any] | None) 
     ts = max(pose_ts, event_ts) or time.time()
     pose_skeletons = list(pose.get("persons") or pose.get("skeletons") or [])
     event_skeletons = list(event.get("skeletons") or [])
-    # worker 已做实验仓 2D 短窗；未过期时用 event，避免 pose 生骨架把平滑结果盖掉
-    if event_skeletons and (not pose_skeletons or (event_ts + EVENT_SKELETON_STALE_S) >= pose_ts):
+    # worker 非空 overlay 优先（配对后的平滑 2D）；空列表则回退 pose，避免画面冻死。
+    if event_skeletons:
         skeletons = event_skeletons
     else:
         skeletons = pose_skeletons or event_skeletons

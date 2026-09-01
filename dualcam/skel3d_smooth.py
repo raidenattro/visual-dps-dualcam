@@ -1,7 +1,7 @@
 """骨架时序平滑（对齐 visual-dps-pick-state/scripts/skel3d_smooth.py）。
 
-先滤左右路 2D（短窗），再三角化；3D 只做轻滤波 + 骨长。分数不平滑。
-离线用零相位高斯；直播用因果窗（只看过去+当前），sigma 按 pose 周期相对 25fps 放大。
+先滤左右路 2D（短窗），再三角化；3D 滤波 + 飞骨裁到合法区间。分数不平滑。
+离线/直播都用因果窗。直播 3D 窗按 pose 周期加宽；骨长不用成人先验，以免局部缩放。
 """
 
 from __future__ import annotations
@@ -15,19 +15,26 @@ from dualcam.lift import KPT_MIN, LWRIST, RWRIST, _torso_xy
 
 # COCO-17
 LSHO, RSHO, LELB, RELB = 5, 6, 7, 8
-LHIP, RHIP = 11, 12
+LHIP, RHIP, LKNE, RKNE, LANK, RANK = 11, 12, 13, 14, 15, 16
 N_JOINTS = 17
 TORSO = (LSHO, RSHO, LHIP, RHIP)
-# 近端 → 远端，平滑之后把远端收到骨长中位上，避免腕点飞离肘
+# 近端 → 远端，平滑之后把远端收到骨长中位上，避免腕/踝飞离
 ARM_BONES = ((LSHO, LELB), (LELB, LWRIST), (RSHO, RELB), (RELB, RWRIST))
+LEG_BONES = ((LHIP, LKNE), (LKNE, LANK), (RHIP, RKNE), (RKNE, RANK))
+LIMB_BONES = ARM_BONES + LEG_BONES
 BONE_LEN_RANGE = {
     (LSHO, LELB): (0.18, 0.42),
     (RSHO, RELB): (0.18, 0.42),
     (LELB, LWRIST): (0.15, 0.38),
     (RELB, RWRIST): (0.15, 0.38),
+    (LHIP, LKNE): (0.28, 0.55),
+    (RHIP, RKNE): (0.28, 0.55),
+    (LKNE, LANK): (0.28, 0.52),
+    (RKNE, RANK): (0.28, 0.52),
 }
 
-# 秒。2D 先滤短窗；3D 只收残差，避免同一动作滤两遍。
+# 秒。2D 先滤短窗；3D 在 dump 25fps 只收残差。直播 pose 更稀，3D 必须按周期放大窗，
+# 否则 σ=30ms 在 7.5Hz 下看不见上一帧，等于没平滑。
 SIGMA_2D_BODY = 0.045
 SIGMA_2D_ELBOW = 0.055
 SIGMA_2D_WRIST = 0.070
@@ -42,9 +49,11 @@ TRACK_MAX_M = 0.60
 TRACK_MAX_GAP_S = 0.48
 BONE_TOL = 0.12  # 相对中位，超出才拉回
 BONE_MIN_SAMPLES = 16
-# pick-state 按 25fps 调 sigma；直播 pose 更稀时按 dt 放大，保住大约同样的帧数窗
+BONE_MIN_SAMPLES_LIVE = 4
+# dump 设计周期 40ms。2D 放大封顶 2×；3D 因果窗至少盖住约 2.5 个 pose 周期。
 DESIGN_DT = 0.04
 LIVE_KEEP_S = 2.4
+LIVE_3D_SPAN_FRAMES = 2.5
 EVENT_SKELETON_STALE_S = 0.40
 
 
@@ -64,10 +73,22 @@ def median_dt(times) -> float:
     return float(np.median(d))
 
 
-def adapt_sigma(sigma_s: float, dt: float | None) -> float:
+def adapt_sigma(sigma_s: float, dt: float | None, cap: float | None = 2.0) -> float:
     if not dt or dt <= 0:
         return float(sigma_s)
-    return float(sigma_s) * max(1.0, float(dt) / DESIGN_DT)
+    scale = max(1.0, float(dt) / DESIGN_DT)
+    if cap is not None:
+        scale = min(float(cap), scale)
+    return float(sigma_s) * scale
+
+
+def live_adapt_sigma(sigma_s: float, dt: float | None) -> float:
+    """3D 直播：按 pose 周期放大，且 3σ 半径至少盖住 LIVE_3D_SPAN_FRAMES 帧。"""
+    base = adapt_sigma(sigma_s, dt, cap=None)
+    if not dt or dt <= 0:
+        return base
+    need = LIVE_3D_SPAN_FRAMES * float(dt) / 3.0
+    return float(max(base, need))
 
 
 def _as3(p) -> np.ndarray | None:
@@ -177,7 +198,7 @@ def smooth_pose2d(pack: list[dict], views: tuple[str, ...] = ("L", "R"), *, caus
     """就地平滑 pack[*][view].k 的像素坐标，分数不动。"""
     n_tracks = 0
     n_in = n_out = 0
-    dt = median_dt([float(fr.get("t") or 0.0) for fr in pack])
+    dt = median_dt([float(fr.get("t") or 0.0) for fr in pack]) if causal else DESIGN_DT
     for view in views:
         tracks = assign_tracks_2d(pack, view)
         n_tracks += len(tracks)
@@ -202,7 +223,9 @@ def smooth_pose2d(pack: list[dict], views: tuple[str, ...] = ("L", "R"), *, caus
                     n_in += int(mask.sum())
                 _reject_speed(vals, mask, times, VMAX_2D_PX)
                 sm, sm_mask = _gauss_smooth(
-                    vals, mask, times, adapt_sigma(joint_sigma_2d(j), dt), causal=causal,
+                    vals, mask, times,
+                    adapt_sigma(joint_sigma_2d(j), dt) if causal else joint_sigma_2d(j),
+                    causal=causal,
                 )
                 if j in (LWRIST, RWRIST):
                     n_out += int(sm_mask.sum())
@@ -332,6 +355,10 @@ def _gauss_smooth(
             acc += w * values[j]
         # 中心权约为 1；邻域太稀则不算有效
         if wsum < 0.45:
+            # 邻域太稀时保留当前观测，避免关节被写成空再闪回来
+            if mask[i]:
+                out[i] = values[i]
+                out_mask[i] = True
             continue
         out[i] = acc / wsum
         out_mask[i] = True
@@ -352,6 +379,44 @@ def _median_len(
     if len(lens) < (BONE_MIN_SAMPLES if min_samples is None else min_samples):
         return None
     return float(np.median(lens))
+
+
+def _clamp_bones_causal(
+    prox: np.ndarray,
+    dist: np.ndarray,
+    mp: np.ndarray,
+    md: np.ndarray,
+    lo: float,
+    hi: float,
+    *,
+    min_samples: int | None = None,
+) -> None:
+    """飞骨收到 [lo, hi]；样本够了才按此人自己的中位微调。不用成人先验，避免局部缩放。"""
+    need = BONE_MIN_SAMPLES if min_samples is None else int(min_samples)
+    hist: list[float] = []
+    L_run: float | None = None
+    for i in range(len(mp)):
+        if not (mp[i] and md[i]):
+            continue
+        v = dist[i] - prox[i]
+        d = float(np.linalg.norm(v))
+        if d < 1e-6:
+            continue
+        if lo <= d <= hi:
+            hist.append(d)
+            if len(hist) >= need:
+                L_run = float(np.median(hist))
+        if d > hi:
+            dist[i] = prox[i] + v * (hi / d)
+            continue
+        if d < lo:
+            dist[i] = prox[i] + v * (lo / d)
+            continue
+        if L_run is None or L_run <= 1e-6:
+            continue
+        if abs(d - L_run) / L_run <= BONE_TOL:
+            continue
+        dist[i] = prox[i] + v * (L_run / d)
 
 
 def _clamp_bone(prox: np.ndarray, dist: np.ndarray, mp: np.ndarray, md: np.ndarray, L: float) -> None:
@@ -441,8 +506,8 @@ def smooth_frames(
     n_tracks = len(_tracks_from_ids(frames))
     tracks = _tracks_from_ids(frames)
     n_wrist_in = n_wrist_out = 0
-    dt = median_dt([float(fr.get("t") or 0.0) for fr in frames])
-    bone_min = 4 if causal else BONE_MIN_SAMPLES
+    dt = median_dt([float(fr.get("t") or 0.0) for fr in frames]) if causal else DESIGN_DT
+    bone_min = BONE_MIN_SAMPLES_LIVE if causal else BONE_MIN_SAMPLES
     for tid, members in tracks.items():
         if len(members) < 2:
             continue
@@ -453,18 +518,16 @@ def smooth_frames(
                 n_wrist_in += int(mask.sum())
             _reject_speed(vals, mask, times, joint_vmax(j))
             sm, sm_mask = _gauss_smooth(
-                vals, mask, times, adapt_sigma(joint_sigma(j), dt), causal=causal,
+                vals, mask, times,
+                live_adapt_sigma(joint_sigma(j), dt) if causal else joint_sigma(j),
+                causal=causal,
             )
             series[j] = (sm, sm_mask, times)
-        # 骨长：先上臂再前臂，腕跟着已经稳住的肘走
-        for a, b in ARM_BONES:
+        for a, b in LIMB_BONES:
             sa, ma, _ = series[a]
             sb, mb, _ = series[b]
             lo, hi = BONE_LEN_RANGE[(a, b)]
-            L = _median_len(sa, sb, ma, mb, lo, hi, min_samples=bone_min)
-            if L is None:
-                continue
-            _clamp_bone(sa, sb, ma, mb, L)
+            _clamp_bones_causal(sa, sb, ma, mb, lo, hi, min_samples=bone_min)
         for j in range(N_JOINTS):
             sm, sm_mask, _ = series[j]
             if j in (LWRIST, RWRIST):
@@ -615,7 +678,7 @@ class LivePose2DSmoother:
 
 
 class LivePose3DSmoother:
-    """3D 因果轻滤波 + 骨长。输入/输出 persons_3d。"""
+    """3D 因果滤波 + 骨长。直播按 pose 周期加宽窗，避免 7.5Hz 时只看见当前点。"""
 
     def __init__(self, keep_s: float = LIVE_KEEP_S):
         self.keep_s = float(keep_s)
@@ -632,6 +695,7 @@ class LivePose3DSmoother:
         if len(self._frames) < 2:
             return src
         work = copy.deepcopy(self._frames)
+        # 直播不能 drop_short：hold 的人在窗里只有几帧时会被整段抹掉。
         smooth_frames(work, plane, causal=True, drop_short=False)
         return list(work[-1].get("persons") or [])
 

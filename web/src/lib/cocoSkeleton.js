@@ -10,9 +10,6 @@ export const AISLE_3D_EDGES = [
   [5, 11], [6, 12], [11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [0, 5], [0, 6],
 ];
 
-/** 人体骨段上限（米）。单路贴墙预览超出此长度的边不画，避免「射向货架」的长线 */
-export const MAX_BONE_M = 0.85;
-
 export const SKELETON_CONF = 0.2;
 
 export function scaleInferPoint(x, y, inferW, inferH, frameW, frameH) {

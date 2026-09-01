@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { meshCells, makeLayerMesh, DEFAULT_LAYER_PITCH } from '../lib/dualcamGeom.js';
-import { AISLE_3D_EDGES, MAX_BONE_M } from '../lib/cocoSkeleton.js';
+import { AISLE_3D_EDGES } from '../lib/cocoSkeleton.js';
 
 /** 与 pick-state dualcam_player 一致：墙1 绿、墙2 蓝（不是标注页的橙/青） */
 const WALL_FILL = { 1: 0x3d8a5a, 2: 0x2f6f9f };
@@ -60,10 +60,6 @@ function alarmOn(alarm, idx) {
   return Boolean(alarm[idx] || alarm[String(idx)]);
 }
 
-function isPreviewPerson(person) {
-  return person?.preview === true;
-}
-
 function makeSkelRig(scene) {
   const group = new THREE.Group();
   scene.add(group);
@@ -95,17 +91,6 @@ function makeSkelRig(scene) {
   return { people, wristNear, wristFar };
 }
 
-function dist3(a, b) {
-  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-}
-
-function torsoCenter(xyz) {
-  const pts = [5, 6, 11, 12].map((i) => xyz?.[i]).filter((p) => p && p.length >= 3);
-  if (!pts.length) return null;
-  const s = pts.reduce((acc, p) => [acc[0] + p[0], acc[1] + p[1], acc[2] + p[2]], [0, 0, 0]);
-  return [s[0] / pts.length, s[1] / pts.length, s[2] / pts.length];
-}
-
 function updateSkelRig(rig, people) {
   for (let p = 0; p < MAX_PERSONS; p += 1) {
     const slot = rig.people[p];
@@ -116,19 +101,13 @@ function updateSkelRig(rig, people) {
       slot.geo.setDrawRange(0, 0);
       continue;
     }
-    const preview = isPreviewPerson(person);
-    const mid = preview ? torsoCenter(xyz) : null;
     slot.g.visible = true;
     const alarm = person?.wrist_alarm || {};
-    const srcs = person?.src || [];
     let n = 0;
     for (let i = 0; i < 17; i += 1) {
       const m = slot.joints[i];
       const pt = xyz[i];
-      const src = srcs[i];
-      const glued = preview && (src === 'Lmono' || src === 'Rmono' || src === 'Lhold' || src === 'Rhold');
-      const far = preview && mid && pt && pt.length >= 3 && dist3(pt, mid) > 1.35;
-      if (!pt || pt.length < 3 || far || (glued && i <= 4)) {
+      if (!pt || pt.length < 3) {
         m.visible = false;
         continue;
       }
@@ -144,9 +123,6 @@ function updateSkelRig(rig, people) {
       const pa = xyz[a];
       const pb = xyz[b];
       if (!pa || !pb || pa.length < 3 || pb.length < 3) return;
-      // 只过滤单路贴墙预览的超长骨，立体骨架按实验仓播放器原样画
-      if (preview && dist3(pa, pb) > MAX_BONE_M) return;
-      if (preview && mid && (dist3(pa, mid) > 1.35 || dist3(pb, mid) > 1.35)) return;
       slot.pos[n] = pa[0]; slot.pos[n + 1] = pa[1]; slot.pos[n + 2] = pa[2];
       slot.pos[n + 3] = pb[0]; slot.pos[n + 4] = pb[1]; slot.pos[n + 5] = pb[2];
       n += 6;

@@ -124,7 +124,59 @@ def test_process_single_cold_start_does_not_lift_mono(calib):
         "infer_height": 720,
     }
     for role in ("L", "R"):
-        assert proc.process_single(role, pose).get("persons_3d") == []
+        out = proc.process_single(role, pose)
+        assert out.get("persons_3d") == []
+        sk_key = "skeletons_l" if role == "L" else "skeletons_r"
+        assert len(out.get(sk_key) or []) == 1
+
+
+def test_process_single_follows_2d_with_hold_depth(calib):
+    """有 hold 时单路应跟上当前检测，不要冻 3D、也不要清空 2D。"""
+    proc = DualcamProcessor(_ready_aisle(calib))
+    xyz = [[0.2, 1.1, 0.8] for _ in range(17)]
+    proc._apply_hold([{
+        "xyz": xyz,
+        "src": ["stereo"] * 17,
+        "preview": False,
+        "wrist_alarm": {9: False, 10: False},
+    }])
+    kpts = [[640.0, 360.0, 0.95] for _ in range(17)]
+    pose = {
+        "frame_idx": 4,
+        "ts": 4.0,
+        "persons": [{"keypoints": kpts}, {"keypoints": [[700.0, 400.0, 0.9] for _ in range(17)]}],
+        "infer_width": 1280,
+        "infer_height": 720,
+    }
+    out = proc.process_single("L", pose)
+    people = out.get("persons_3d") or []
+    assert len(people) == 1
+    assert not people[0].get("held")
+    assert people[0].get("preview") is True
+    assert len(out.get("skeletons_l") or []) >= 1
+
+
+def test_process_single_with_prefer_does_not_crash_on_numpy_pack(calib):
+    """prefer 续帧时 pack['k'] 是 ndarray，不能用 `or []`。"""
+    proc = DualcamProcessor(_ready_aisle(calib))
+    kpts = [[640.0, 360.0, 0.95] for _ in range(17)]
+    pose = {
+        "frame_idx": 5,
+        "ts": 5.0,
+        "persons": [{"keypoints": kpts}],
+        "infer_width": 1280,
+        "infer_height": 720,
+    }
+    proc._prefer = [(np.array([640.0, 360.0]), np.array([640.0, 360.0]))]
+    proc._apply_hold([{
+        "xyz": [[0.2, 1.1, 0.8] for _ in range(17)],
+        "src": ["stereo"] * 17,
+        "preview": False,
+        "wrist_alarm": {9: False, 10: False},
+    }])
+    out = proc.process_single("L", pose)
+    assert len(out.get("skeletons_l") or []) >= 1
+    assert len(out.get("persons_3d") or []) >= 1
 
 
 def _weak_pose(frame_idx: int) -> dict:
@@ -153,25 +205,28 @@ def test_unpaired_holds_one_person_not_l_and_r_mono(calib):
     assert len(out["persons_3d"]) == 1
     assert out["persons_3d"][0].get("held") is True
     assert out["preview"] is True
+    assert out["skeletons_l"] == []
+    assert out["skeletons_r"] == []
 
 
-def test_process_single_does_not_add_mono_when_hold_exists(calib):
+def test_unpaired_does_not_overlay_all_detections(calib):
+    """配不上时 2D 不要把两路全部检测画上去。"""
     proc = DualcamProcessor(_ready_aisle(calib))
-    xyz = [[0.2, 1.1, 0.8] for _ in range(17)]
-    proc._apply_hold([{
-        "xyz": xyz,
-        "src": ["stereo"] * 17,
-        "preview": False,
-        "wrist_alarm": {9: False, 10: False},
-    }])
-    kpts = [[640.0, 360.0, 0.95] for _ in range(17)]
-    pose = {
-        "frame_idx": 4,
-        "ts": 4.0,
-        "persons": [{"keypoints": kpts}, {"keypoints": [[700.0, 400.0, 0.9] for _ in range(17)]}],
-        "infer_width": 1280,
-        "infer_height": 720,
-    }
-    people = proc.process_single("L", pose).get("persons_3d") or []
-    assert len(people) == 1
-    assert people[0].get("held") is True
+    out = proc.process_pair(_weak_pose(1), _weak_pose(1))
+    assert out["skeletons_l"] == []
+    assert out["skeletons_r"] == []
+
+
+def test_flying_wrist_clamped_when_far_from_shoulder():
+    proc = DualcamProcessor({"aisle_id": "x", "solved": {"ok": False}, "cameras": {}})
+    xyz = [None] * 17
+    xyz[5] = [0.0, 1.4, 0.5]
+    xyz[9] = [1.2, 1.4, 0.5]
+    srcs = [None] * 17
+    srcs[9] = "stereo"
+    toks = {9: ["S:1"], 10: []}
+    proc._clamp_flying_wrists(xyz, srcs, toks)
+    w = np.asarray(xyz[9], float)
+    sh = np.asarray(xyz[5], float)
+    assert abs(float(np.linalg.norm(w - sh)) - 0.85) < 1e-6
+    assert toks[9] == []
