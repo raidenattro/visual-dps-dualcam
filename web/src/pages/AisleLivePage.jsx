@@ -11,6 +11,7 @@ import {
   stopAisleInference,
 } from '../lib/aisleInference.js';
 import { COCO_LINES, SKELETON_CONF, scaleInferPoint } from '../lib/cocoSkeleton.js';
+import { resolveCameraModelLabel } from '../lib/cameraSettings.js';
 import { formatInferenceMessage, formatStreamError, formatUserError } from '../lib/userFacingText.js';
 import './AisleLivePage.css';
 
@@ -349,17 +350,53 @@ export default function AisleLivePage() {
     : inferOn
       ? '停止本巷道检测'
       : '启动本巷道检测';
+  const modelL = resolveCameraModelLabel(camL);
+  const modelR = resolveCameraModelLabel(camR);
+  const modelHint = camL || camR
+    ? (modelL === modelR ? `使用模型 ${modelL}` : `左 ${modelL} · 右 ${modelR}`)
+    : '';
+  const inferHint = formatInferenceMessage(camL?.inference?.message)
+    || formatInferenceMessage(camR?.inference?.message);
 
   return (
     <div className="aisle-live-page">
       <div className="aisle-live-app">
-        <CamPane
-          cam={camL}
-          label={`左路 · ${camL?.name || idL || '未绑定'}`}
-          overlay={overlayL}
-          status={inferStatus}
-          playback={idL ? playbackById[idL] : null}
-        />
+        <div className="aisle-live-bar">
+          <strong>{aisle?.aisle_id || aisleId}</strong>
+          <span className={`aisle-live-status ${inferStatus}`}>{inferLabelUi}</span>
+          <button
+            type="button"
+            className="pri"
+            disabled={busy || !idL || !idR || (inferStatus === 'starting' && !hasLiveSkel)}
+            onClick={() => toggleInfer(!inferOn)}
+          >
+            {btnText}
+          </button>
+          {modelHint ? <span className="aisle-live-model">{modelHint}</span> : null}
+          {inferHint ? <span className="aisle-live-hint">{inferHint}</span> : null}
+          <Link to="/aisle">去标注</Link>
+          <Link to="/">返回总览</Link>
+          <span className="aisle-live-hint">
+            左右路同一 worker。一次启动两台，不要分开开检测。
+          </span>
+          {msg ? <span className="aisle-live-msg">{msg}</span> : null}
+        </div>
+        <div className="aisle-live-cams">
+          <CamPane
+            cam={camL}
+            label={`左路 · ${camL?.name || idL || '未绑定'}`}
+            overlay={overlayL}
+            status={inferStatus}
+            playback={idL ? playbackById[idL] : null}
+          />
+          <CamPane
+            cam={camR}
+            label={`右路 · ${camR?.name || idR || '未绑定'}`}
+            overlay={overlayR}
+            status={inferStatus}
+            playback={idR ? playbackById[idR] : null}
+          />
+        </div>
         <div className="aisle-live-3d">
           <span className="aisle-live-tag">巷道 3D · 拖拽旋转</span>
           {hudText ? (
@@ -380,34 +417,6 @@ export default function AisleLivePage() {
           ) : (
             <div className="aisle-live-empty">尚未反解。请先到标注页完成四角与反解。</div>
           )}
-        </div>
-        <CamPane
-          cam={camR}
-          label={`右路 · ${camR?.name || idR || '未绑定'}`}
-          overlay={overlayR}
-          status={inferStatus}
-          playback={idR ? playbackById[idR] : null}
-        />
-        <div className="aisle-live-bar">
-          <strong>{aisle?.aisle_id || aisleId}</strong>
-          <span className={`aisle-live-status ${inferStatus}`}>{inferLabelUi}</span>
-          <button
-            type="button"
-            className="pri"
-            disabled={busy || !idL || !idR || (inferStatus === 'starting' && !hasLiveSkel)}
-            onClick={() => toggleInfer(!inferOn)}
-          >
-            {btnText}
-          </button>
-          <Link to="/aisle">去标注</Link>
-          <Link to="/">返回总览</Link>
-          <span className="aisle-live-hint">
-            左右路同一 worker。一次启动两台，不要分开开检测。
-          </span>
-          {msg ? <span className="aisle-live-msg">{msg}</span> : null}
-          {camL?.inference?.message ? (
-            <span className="aisle-live-hint">{formatInferenceMessage(camL.inference.message)}</span>
-          ) : null}
         </div>
       </div>
     </div>
