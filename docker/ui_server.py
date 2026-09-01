@@ -69,7 +69,12 @@ register_camera_routes(
     last_frame_file=LAST_FRAME,
     capture_height=CAPTURE_HEIGHT,
 )
-register_aisle_routes(api_router, json_dir=JSON_DIR)
+register_aisle_routes(
+    api_router,
+    json_dir=JSON_DIR,
+    camera_ips_file=CAMERA_IPS_FILE,
+    mediamtx_config_path=MEDIAMTX_CONFIG_PATH,
+)
 
 
 @api_router.get("/last_frame")

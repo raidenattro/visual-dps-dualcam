@@ -113,7 +113,12 @@ def create_app():
         last_frame_file=paths["last_frame_file"],
         capture_height=int(video_cfg["capture_height"]),
     )
-    register_aisle_routes(api_router, json_dir=paths["json_dir"])
+    register_aisle_routes(
+        api_router,
+        json_dir=paths["json_dir"],
+        camera_ips_file=paths["camera_ips_file"],
+        mediamtx_config_path=mediamtx_config_path,
+    )
 
     @api_router.get("/last_frame")
     async def last_frame():

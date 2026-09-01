@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from dualcam.geom import make_layer_mesh, wall_by_id
 from dualcam.solve import solve_dual
 from services.aisle_store import (
     bind_group,
     camera_group,
+    create_aisle_with_cameras,
+    delete_aisle_with_cameras,
     list_aisles,
     load_aisle,
     save_aisle,
@@ -19,13 +21,58 @@ from services.dualcam_overlay import overlay_for_role
 from services.event_engine.sharding import logical_shard_id
 
 
-def register_aisle_routes(router: APIRouter, *, json_dir: str = "localdata/json"):
+def register_aisle_routes(
+    router: APIRouter,
+    *,
+    json_dir: str = "localdata/json",
+    camera_ips_file: str = "localdata/camera_ips.json",
+    mediamtx_config_path: str = "localdata/mediamtx.yml",
+):
     @router.get("/aisles")
     async def api_list_aisles():
         items = list_aisles(json_dir)
         for it in items:
             it["logical_shard"] = logical_shard_id(it["aisle_id"])
         return {"status": "success", "items": items}
+
+    @router.post("/aisles")
+    async def api_create_aisle(payload: dict, request: Request):
+        from services.annotation_service import materialize_camera_annotation
+        from services.audit_service import audit_from_result
+
+        aid = str((payload or {}).get("aisle_id") or "").strip()
+        result = create_aisle_with_cameras(
+            aid,
+            (payload or {}).get("camera_l") or (payload or {}).get("L") or {},
+            (payload or {}).get("camera_r") or (payload or {}).get("R") or {},
+            camera_file=camera_ips_file,
+            mediamtx_config_path=mediamtx_config_path,
+            json_dir=json_dir,
+        )
+        if result.get("status") == "success":
+            for cam in (result.get("camera_l"), result.get("camera_r")):
+                if cam:
+                    materialize_camera_annotation(
+                        cam.get("id") or cam.get("path"), json_dir, camera=cam
+                    )
+            aisle = dict(result["aisle"])
+            aisle["logical_shard"] = logical_shard_id(aid)
+            result["aisle"] = aisle
+        audit_from_result(request, "aisle.create", "aisle", aid, result)
+        return result
+
+    @router.delete("/aisles/{aisle_id}")
+    async def api_delete_aisle(aisle_id: str, request: Request):
+        from services.audit_service import audit_from_result
+
+        result = delete_aisle_with_cameras(
+            aisle_id,
+            camera_file=camera_ips_file,
+            mediamtx_config_path=mediamtx_config_path,
+            json_dir=json_dir,
+        )
+        audit_from_result(request, "aisle.delete", "aisle", aisle_id, result)
+        return result
 
     @router.get("/aisles/by-camera/{camera_id}")
     async def api_aisle_by_camera(camera_id: str):

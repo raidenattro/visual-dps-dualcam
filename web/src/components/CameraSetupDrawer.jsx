@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import CameraStreamFields from './CameraStreamFields.jsx';
 import InferenceToggle from './InferenceToggle';
 import { InferenceModelOverrideCard } from './InferenceModelFields';
 import {
@@ -9,13 +10,9 @@ import {
   settingsFieldTooltip,
 } from '../lib/cameraSettings';
 import FieldHint from './FieldHint';
-import {
-  CAMERA_SOURCE_TYPES,
-  DEFAULT_SOURCE_TYPE,
-  defaultPlaybackUrl,
-  sourceTypeLabel,
-} from '../lib/cameraStreamForm';
+import { sourceTypeLabel } from '../lib/cameraStreamForm';
 import { apiGet, apiPut, formatDuration, thumbnailUrl } from '../api/client';
+import { formatStreamError } from '../lib/userFacingText';
 import './CameraSetupDrawer.css';
 
 function DetailRow({ label, value, mono, title }) {
@@ -119,13 +116,27 @@ export default function CameraSetupDrawer({
                   {camera.has_thumbnail ? (
                     <img src={thumbnailUrl(camera.id, camera.last_frame_at)} alt="" />
                   ) : (
-                    <div className="drawer-preview-empty">暂无预览</div>
+                    <div className="drawer-preview-empty">
+                      {formatStreamError(!camera.online ? camera.stream_error : '') || '暂无预览'}
+                    </div>
                   )}
+                  {!camera.online && camera.has_thumbnail && formatStreamError(camera.stream_error) ? (
+                    <div className="drawer-stream-hint" title={camera.stream_error}>
+                      {formatStreamError(camera.stream_error)}
+                    </div>
+                  ) : null}
                 </div>
                 <DetailRow
                   label="在线"
                   value={camera.online ? '在线' : '离线'}
                 />
+                {!camera.online && formatStreamError(camera.stream_error) ? (
+                  <DetailRow
+                    label="接流"
+                    value={formatStreamError(camera.stream_error)}
+                    title={camera.stream_error}
+                  />
+                ) : null}
                 <DetailRow
                   label="本次在线"
                   value={formatDuration(camera._displayActivity ?? camera.activity_seconds)}
@@ -167,109 +178,14 @@ export default function CameraSetupDrawer({
                 onSave();
               }}
             >
-              <label>
-                通道编号
-                <input
-                  value={form.path}
-                  onChange={(e) => onChange('path', e.target.value)}
-                  placeholder="如 cam、warehouse_1"
-                  disabled={!isCreate}
-                  required
-                />
-              </label>
-              <label>
-                显示名称
-                <input
-                  value={form.name}
-                  onChange={(e) => onChange('name', e.target.value)}
-                  required
-                />
-              </label>
-              <label>
-                流类型
-                <select
-                  value={form.source_type || DEFAULT_SOURCE_TYPE}
-                  onChange={(e) => {
-                    const next = e.target.value;
-                    onChange('source_type', next);
-                    if (next === 'publisher') {
-                      const play = defaultPlaybackUrl(form.path);
-                      if (play && !form.url) onChange('url', play);
-                    }
-                    if (next === 'external') {
-                      onChange('pull_url', '');
-                    }
-                  }}
-                >
-                  {CAMERA_SOURCE_TYPES.map((t) => (
-                    <option key={t.value} value={t.value}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <p className="drawer-field-hint">
-                {CAMERA_SOURCE_TYPES.find((t) => t.value === (form.source_type || DEFAULT_SOURCE_TYPE))?.hint}
-              </p>
-              {form.source_type === 'rtsp_pull' ? (
-                <>
-                  <label>
-                    上游拉流地址
-                    <input
-                      value={form.pull_url || ''}
-                      onChange={(e) => onChange('pull_url', e.target.value)}
-                      placeholder="rtsp://192.168.1.100:554/stream1"
-                      required
-                    />
-                  </label>
-                  <label>
-                    本机播放地址
-                    <input
-                      value={form.url || ''}
-                      onChange={(e) => onChange('url', e.target.value)}
-                      placeholder={defaultPlaybackUrl(form.path) || 'rtsp://127.0.0.1:8554/cam1'}
-                    />
-                  </label>
-                  <p className="drawer-field-hint">
-                    推理/监控使用「本机播放地址」（通常为本机 MediaMTX）。留空则按通道编号自动生成。
-                  </p>
-                </>
-              ) : null}
-              {form.source_type === 'publisher' ? (
-                <label>
-                  本机播放地址
-                  <input
-                    value={form.url || defaultPlaybackUrl(form.path)}
-                    onChange={(e) => onChange('url', e.target.value)}
-                    placeholder={defaultPlaybackUrl(form.path) || 'rtsp://127.0.0.1:8554/cam1'}
-                  />
-                </label>
-              ) : null}
-              {form.source_type === 'external' ? (
-                <label>
-                  视频流地址 (RTSP)
-                  <input
-                    value={form.url || ''}
-                    onChange={(e) => onChange('url', e.target.value)}
-                    placeholder="rtsp://192.168.1.10:554/live"
-                    required
-                  />
-                </label>
-              ) : null}
+              <CameraStreamFields
+                form={form}
+                onChange={onChange}
+                pathLocked={!isCreate}
+                showEnabled={isCreate}
+              />
               {!isCreate && form.source_type ? (
                 <DetailRow label="当前流类型" value={sourceTypeLabel(form.source_type)} />
-              ) : null}
-              {isCreate ? (
-                <div className="detail-row detail-row--switch drawer-form-enabled-row">
-                  <span className="detail-label">启用该路摄像头</span>
-                  <div className="detail-row-control">
-                    <InferenceToggle
-                      on={form.enabled}
-                      title={form.enabled ? '关闭该路摄像头' : '启用该路摄像头'}
-                      onToggle={(turnOn) => onChange('enabled', turnOn)}
-                    />
-                  </div>
-                </div>
               ) : null}
             </form>
           </section>
@@ -441,7 +357,7 @@ function DualcamGeomSection({ cameraId }) {
         <div className="drawer-section-head">
           <h3>双路 3D 几何</h3>
           <p className="drawer-section-desc">
-            该路尚未编入巷道。请先到 <Link to="/aisle">巷道标注</Link> 绑定左右路，否则禁止开推理。
+            尚未编入巷道，请到总览添加。
           </p>
         </div>
       </section>

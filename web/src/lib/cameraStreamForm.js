@@ -6,17 +6,17 @@ export const CAMERA_SOURCE_TYPES = [
   {
     value: 'rtsp_pull',
     label: '拉取外部流',
-    hint: '本机 MediaMTX 从外部 RTSP 地址拉流；请填写「上游地址」与「本机播放地址」。',
+    hint: '从外部 RTSP 拉流。上游地址必填，本机播放地址可留空自动生成。',
   },
   {
     value: 'publisher',
     label: '外部推流',
-    hint: '外部设备或脚本向本机 MediaMTX 的通道推流；下方为本机播放地址（可自动生成）。',
+    hint: '向本机通道推流。本机播放地址可留空自动生成。',
   },
   {
     value: 'external',
     label: '直连 RTSP',
-    hint: '填写完整 RTSP/RTSPS 地址，不经 MediaMTX 配置拉流或推流；推理与预览直接使用该地址。',
+    hint: '直接填写 RTSP 地址，不经 MediaMTX。',
   },
 ];
 
@@ -140,4 +140,27 @@ export function sourceTypeLabel(value) {
     || value
     || '—'
   );
+}
+
+export function emptyAisleCreateForm() {
+  return {
+    aisle_id: '',
+    left: emptyCameraForm(),
+    right: emptyCameraForm(),
+  };
+}
+
+/** 改巷道编号时，未手改过的通道号/名称跟着变成 {id}-L / {id}-R */
+export function applyAisleIdToCreateForm(form, aisleId) {
+  const prev = String(form.aisle_id || '').trim();
+  const id = String(aisleId || '').trim();
+  const autoPath = (role) => (prev ? `${prev}-${role}` : '');
+  const autoName = (side) => (prev ? `${prev} ${side}` : '');
+  const left = { ...form.left };
+  const right = { ...form.right };
+  if (!left.path || left.path === autoPath('L')) left.path = id ? `${id}-L` : '';
+  if (!right.path || right.path === autoPath('R')) right.path = id ? `${id}-R` : '';
+  if (!left.name || left.name === autoName('左路')) left.name = id ? `${id} 左路` : '';
+  if (!right.name || right.name === autoName('右路')) right.name = id ? `${id} 右路` : '';
+  return { ...form, aisle_id: id, left, right };
 }

@@ -116,12 +116,14 @@ def register_camera_routes(
         url = str(cam.get("url") or "").strip()
         cid = stable_camera_id(cam)
         if url:
-            st = get_camera_status(url, force_probe=probe, camera_id=cid)
+            st = get_camera_status(url, force_probe=probe, camera_id=cid, camera=cam)
             cam["online"] = st["online"]
             cam["activity_seconds"] = st.get("activity_seconds", 0)
+            cam["stream_error"] = st.get("stream_error") or ""
         else:
             cam["online"] = False
             cam["activity_seconds"] = 0
+            cam["stream_error"] = "未填写视频流地址"
         thumb_path = get_camera_thumbnail_path(frames_dir, cid)
         cam["last_frame_at"] = os.path.getmtime(thumb_path) if thumb_path else None
         if not cam["online"]:

@@ -6,3 +6,11 @@ export function confirmDeleteCamera(name) {
   return true;
 }
 
+/** 删除巷道及其左右路摄像头 */
+export function confirmDeleteAisle(aisleId) {
+  const label = aisleId ? `「${aisleId}」` : '该巷道';
+  if (!window.confirm(`确定删除巷道${label}及其左右路摄像头？`)) return false;
+  if (!window.confirm('删除后无法恢复，请再次确认是否继续。')) return false;
+  return true;
+}
+

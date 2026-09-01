@@ -1,18 +1,34 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import CameraSetupDrawer from '../components/CameraSetupDrawer';
+import AisleCreateDrawer from '../components/AisleCreateDrawer';
 import InferenceToggle from '../components/InferenceToggle';
-import { confirmDeleteCamera } from '../lib/confirmDelete';
+import { confirmDeleteAisle, confirmDeleteCamera } from '../lib/confirmDelete';
 import { apiDelete, apiGet, apiPost, apiPut, formatDuration, thumbnailUrl } from '../api/client';
 import {
   STREAM_CONFIG_SAVED_HINT,
+  formatStreamError,
   formatUserError,
 } from '../lib/userFacingText';
 import { aisleInferOn, aisleInferStatus, AISLE_INFER_LABEL, startAisleInference, stopAisleInference } from '../lib/aisleInference';
-import { cameraToForm, emptyCameraForm, formToCameraPayload } from '../lib/cameraStreamForm';
+import { cameraToForm, emptyAisleCreateForm, emptyCameraForm, formToCameraPayload } from '../lib/cameraStreamForm';
 import './DashboardPage.css';
 
 const POLL_MS = 30000;
+
+function streamHintOf(cam) {
+  if (!cam || cam.online) return '';
+  return formatStreamError(cam.stream_error);
+}
+
+function aisleStreamHint(left, right) {
+  const parts = [];
+  const le = streamHintOf(left);
+  const re = streamHintOf(right);
+  if (le) parts.push(`左路 ${le}`);
+  if (re) parts.push(`右路 ${re}`);
+  return parts.join(' · ');
+}
 
 export default function DashboardPage() {
   const navigate = useNavigate();
@@ -28,7 +44,9 @@ export default function DashboardPage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState('edit');
   const [setupCamera, setSetupCamera] = useState(null);
+  const [setupAisle, setSetupAisle] = useState(null);
   const [form, setForm] = useState(emptyCameraForm());
+  const [aisleForm, setAisleForm] = useState(emptyAisleCreateForm());
   const [saving, setSaving] = useState(false);
   const [configHint, setConfigHint] = useState('');
   const [globalSettings, setGlobalSettings] = useState({});
@@ -144,7 +162,8 @@ export default function DashboardPage() {
   const openCreate = () => {
     setDrawerMode('create');
     setSetupCamera(null);
-    setForm(emptyCameraForm());
+    setSetupAisle(null);
+    setAisleForm(emptyAisleCreateForm());
     setDrawerOpen(true);
     loadGlobalSettings();
   };
@@ -157,6 +176,21 @@ export default function DashboardPage() {
       /* ignore */
     }
   }, []);
+
+  const openAisleSetup = (aisle) => {
+    const left = cameras.find((c) => c.id === aisle.camera_l);
+    const right = cameras.find((c) => c.id === aisle.camera_r);
+    setDrawerMode('aisle');
+    setSetupAisle(aisle);
+    setSetupCamera(null);
+    setAisleForm({
+      aisle_id: aisle.aisle_id,
+      left: cameraToForm(left),
+      right: cameraToForm(right),
+    });
+    setDrawerOpen(true);
+    loadGlobalSettings();
+  };
 
   const openSetup = async (cam) => {
     setDrawerMode('edit');
@@ -188,6 +222,7 @@ export default function DashboardPage() {
   const closeDrawer = () => {
     setDrawerOpen(false);
     setSetupCamera(null);
+    setSetupAisle(null);
   };
 
   useEffect(() => {
@@ -208,13 +243,70 @@ export default function DashboardPage() {
   };
 
   const saveFromDrawer = async () => {
+    if (drawerMode === 'create') {
+      const aid = String(aisleForm.aisle_id || '').trim();
+      if (!aid) {
+        alert('请填写巷道编号');
+        return;
+      }
+      setSaving(true);
+      try {
+        const data = await apiPost('/api/aisles', {
+          aisle_id: aid,
+          camera_l: formToCameraPayload(aisleForm.left),
+          camera_r: formToCameraPayload(aisleForm.right),
+        });
+        if (data.error) {
+          alert(formatUserError(data.error));
+          return;
+        }
+        applyConfigHint(data);
+        closeDrawer();
+        await refreshCamerasAfterMutation(data);
+      } catch (err) {
+        alert(formatUserError(err.message) || '创建巷道失败');
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+    if (drawerMode === 'aisle') {
+      if (!setupAisle?.camera_l || !setupAisle?.camera_r) {
+        alert('巷道未绑定左右路');
+        return;
+      }
+      setSaving(true);
+      try {
+        const leftData = await apiPut(
+          `/api/cameras/${encodeURIComponent(setupAisle.camera_l)}`,
+          formToCameraPayload(aisleForm.left),
+        );
+        if (leftData.error) {
+          alert(formatUserError(leftData.error) || '左路保存失败');
+          return;
+        }
+        const rightData = await apiPut(
+          `/api/cameras/${encodeURIComponent(setupAisle.camera_r)}`,
+          formToCameraPayload(aisleForm.right),
+        );
+        if (rightData.error) {
+          alert(formatUserError(rightData.error) || '右路保存失败');
+          return;
+        }
+        applyConfigHint(rightData);
+        closeDrawer();
+        await refreshCamerasAfterMutation(rightData);
+      } catch (err) {
+        alert(formatUserError(err.message) || '保存失败');
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
     const payload = formToCameraPayload(form);
     setSaving(true);
     try {
-      const data =
-        drawerMode === 'create'
-          ? await apiPost('/api/cameras', payload)
-          : await apiPut(`/api/cameras/${encodeURIComponent(setupCamera.id)}`, payload);
+      const data = await apiPut(`/api/cameras/${encodeURIComponent(setupCamera.id)}`, payload);
       if (data.error) {
         alert(formatUserError(data.error));
         return;
@@ -230,6 +322,25 @@ export default function DashboardPage() {
   };
 
   const deleteFromDrawer = async () => {
+    if (drawerMode === 'aisle') {
+      if (!setupAisle || !confirmDeleteAisle(setupAisle.aisle_id)) return;
+      setSaving(true);
+      try {
+        const data = await apiDelete(`/api/aisles/${encodeURIComponent(setupAisle.aisle_id)}`);
+        if (data.error) {
+          alert(formatUserError(data.error));
+          return;
+        }
+        applyConfigHint(data);
+        closeDrawer();
+        await refreshCamerasAfterMutation(data);
+      } catch (err) {
+        alert(formatUserError(err.message) || '删除巷道失败');
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
     if (!setupCamera) return;
     if (!confirmDeleteCamera(setupCamera.name)) return;
     setSaving(true);
@@ -392,7 +503,7 @@ export default function DashboardPage() {
     try {
       const data = await apiPost(`/api/cameras/${encodeURIComponent(cam.id)}/capture`, {});
       if (data?.error || data?.status !== 'success') {
-        alert(formatUserError(data?.error) || '抓帧失败');
+        alert(formatStreamError(data?.error) || formatUserError(data?.error) || '抓帧失败');
         return;
       }
       const patch = {
@@ -416,6 +527,8 @@ export default function DashboardPage() {
   const drawerCamera = setupCamera
     ? cameras.find((c) => c.id === setupCamera.id) || setupCamera
     : null;
+  const aisleSetupLeft = cameras.find((c) => c.id === setupAisle?.camera_l) || null;
+  const aisleSetupRight = cameras.find((c) => c.id === setupAisle?.camera_r) || null;
 
   return (
     <div className="page dashboard-page">
@@ -448,8 +561,8 @@ export default function DashboardPage() {
             <button
               type="button"
               className="btn-icon btn-icon-primary"
-              title="添加摄像头"
-              aria-label="添加摄像头"
+              title="添加巷道"
+              aria-label="添加巷道"
               onClick={openCreate}
             >
               +
@@ -473,7 +586,7 @@ export default function DashboardPage() {
           {listLoading ? (
             <div className="empty grid-status">加载中…</div>
           ) : !cameras.length ? (
-            <div className="empty">暂无摄像头，点击「添加摄像头」开始配置。</div>
+            <div className="empty">暂无巷道，点击「添加巷道」同时配置左右路摄像头。</div>
           ) : (
             <>
               {aisleCards.map((aisle) => {
@@ -487,6 +600,7 @@ export default function DashboardPage() {
                   : (AISLE_INFER_LABEL[inferSt] || AISLE_INFER_LABEL.stopped);
                 const online = Boolean(left?.online || right?.online);
                 const activity = Math.max(Number(left?._displayActivity) || 0, Number(right?._displayActivity) || 0);
+                const streamHint = aisleStreamHint(left, right);
                 return (
                   <article
                     className={`card${on || inferSt === 'starting' ? ' is-inferring' : ''}`}
@@ -511,7 +625,7 @@ export default function DashboardPage() {
                           alt={aisle.aisle_id}
                         />
                       ) : (
-                        <div className="card-preview-empty">暂无画面</div>
+                        <div className="card-preview-empty">{streamHint || '暂无画面'}</div>
                       )}
                       <div className="card-actions" onClick={(e) => e.stopPropagation()}>
                         <InferenceToggle
@@ -534,7 +648,7 @@ export default function DashboardPage() {
                           type="button"
                           className="btn-icon"
                           title="设置"
-                          onClick={() => left && openSetup(left)}
+                          onClick={() => openAisleSetup(aisle)}
                         >
                           ⚙
                         </button>
@@ -550,16 +664,18 @@ export default function DashboardPage() {
                           <span className="card-status-sep">·</span>
                           <span className={`card-infer ${inferSt}`}>{inferText}</span>
                         </div>
-                        <div className="card-url">
-                          {left?.name || aisle.camera_l}
-                          {right ? ` · ${right.name || aisle.camera_r}` : ''}
+                        <div className={`card-url${streamHint ? ' is-stream-err' : ''}`} title={streamHint || undefined}>
+                          {streamHint
+                            || `${left?.name || aisle.camera_l}${right ? ` · ${right.name || aisle.camera_r}` : ''}`}
                         </div>
                       </div>
                     </div>
                   </article>
                 );
               })}
-              {ungrouped.map((cam) => (
+              {ungrouped.map((cam) => {
+                const camHint = streamHintOf(cam);
+                return (
                 <article className="card" key={cam.id}>
                   <div
                     className="card-preview card-preview-link"
@@ -580,7 +696,7 @@ export default function DashboardPage() {
                         alt={cam.name}
                       />
                     ) : (
-                      <div className="card-preview-empty">暂无画面</div>
+                      <div className="card-preview-empty">{camHint || '暂无画面'}</div>
                     )}
                     <div className="card-actions" onClick={(e) => e.stopPropagation()}>
                       <button
@@ -612,19 +728,42 @@ export default function DashboardPage() {
                         <span className="card-status-sep">·</span>
                         <span className="card-infer stopped">未编入巷道</span>
                       </div>
-                      <div className="card-url" title={cam.url}>
-                        请到巷道标注绑定左右路后，才能开 3D 检测
+                      <div className={`card-url${camHint ? ' is-stream-err' : ''}`} title={camHint || cam.url}>
+                        {camHint || '未编入巷道'}
                       </div>
                     </div>
                   </div>
                 </article>
-              ))}
+                );
+              })}
             </>
           )}
         </div>
 
+      <AisleCreateDrawer
+        open={drawerOpen && (drawerMode === 'create' || drawerMode === 'aisle')}
+        mode={drawerMode === 'aisle' ? 'aisle' : 'create'}
+        form={aisleForm}
+        onChange={setAisleForm}
+        onClose={closeDrawer}
+        onSave={saveFromDrawer}
+        onDelete={deleteFromDrawer}
+        saving={saving}
+        camL={aisleSetupLeft}
+        camR={aisleSetupRight}
+        inferOn={aisleInferOn(aisleSetupLeft, aisleSetupRight)}
+        inferLoading={inferLoadingId === setupAisle?.aisle_id}
+        onToggleInference={
+          setupAisle ? (turnOn) => toggleAisleInference(setupAisle, turnOn) : undefined
+        }
+        onCapture={(side) => {
+          const cam = side === 'L' ? aisleSetupLeft : aisleSetupRight;
+          if (cam) captureFrame(cam);
+        }}
+        capturingId={refreshingId}
+      />
       <CameraSetupDrawer
-        open={drawerOpen}
+        open={drawerOpen && drawerMode === 'edit'}
         mode={drawerMode}
         camera={drawerCamera}
         form={form}

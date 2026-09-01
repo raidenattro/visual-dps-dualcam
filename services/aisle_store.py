@@ -353,3 +353,100 @@ def shard_key_for_camera(camera_id: str, json_dir: str | None = None) -> str:
     if g:
         return g["aisle_id"]
     return str(camera_id or "").strip()
+
+
+def create_aisle_with_cameras(
+    aisle_id: str,
+    camera_l: dict,
+    camera_r: dict,
+    *,
+    camera_file: str,
+    mediamtx_config_path: str,
+    json_dir: str | None = None,
+) -> dict:
+    """一次创建巷道并写入左右路摄像头（上游地址即 IP/RTSP 入口）。"""
+    from services.camera_store import create_camera, delete_camera
+
+    aid = str(aisle_id or "").strip()
+    if not _AISLE_RE.match(aid):
+        return {"error": "巷道编号仅支持字母、数字、下划线、中划线（1–64）"}
+    existing = load_aisle(aid, json_dir)
+    if existing:
+        cams = existing.get("cameras") or {}
+        has_l = str((cams.get("L") or {}).get("camera_id") or "").strip()
+        has_r = str((cams.get("R") or {}).get("camera_id") or "").strip()
+        if has_l or has_r:
+            return {"error": f"巷道 {aid} 已存在"}
+
+    left = dict(camera_l or {})
+    right = dict(camera_r or {})
+    left.setdefault("path", f"{aid}-L")
+    right.setdefault("path", f"{aid}-R")
+    if not str(left.get("name") or "").strip():
+        left["name"] = f"{aid} 左路"
+    if not str(right.get("name") or "").strip():
+        right["name"] = f"{aid} 右路"
+
+    created: list[str] = []
+    r1 = create_camera(camera_file, mediamtx_config_path, left)
+    if r1.get("error"):
+        return {"error": f"左路：{r1['error']}"}
+    created.append(str((r1.get("camera") or {}).get("id") or ""))
+    r2 = create_camera(camera_file, mediamtx_config_path, right)
+    if r2.get("error"):
+        for cid in created:
+            if cid:
+                delete_camera(camera_file, mediamtx_config_path, cid)
+        return {"error": f"右路：{r2['error']}"}
+    created.append(str((r2.get("camera") or {}).get("id") or ""))
+    try:
+        aisle = bind_group(aid, created[0], created[1], json_dir)
+    except ValueError as exc:
+        for cid in created:
+            if cid:
+                delete_camera(camera_file, mediamtx_config_path, cid)
+        return {"error": str(exc)}
+    return {
+        "status": "success",
+        "aisle": aisle,
+        "camera_l": r1.get("camera"),
+        "camera_r": r2.get("camera"),
+        "items": r2.get("items"),
+        "mediamtx": r2.get("mediamtx"),
+    }
+
+
+def delete_aisle_with_cameras(
+    aisle_id: str,
+    *,
+    camera_file: str,
+    mediamtx_config_path: str,
+    json_dir: str | None = None,
+) -> dict:
+    """删除巷道绑定的左右路摄像头，并解开成组（标定 JSON 保留）。"""
+    from services.camera_store import delete_camera, load_cameras
+
+    aid = str(aisle_id or "").strip()
+    data = load_aisle(aid, json_dir)
+    if not data:
+        return {"error": "巷道不存在"}
+    cams = data.get("cameras") or {}
+    ids = []
+    for role in ROLES:
+        cid = str((cams.get(role) or {}).get("camera_id") or "").strip()
+        if cid:
+            ids.append(cid)
+    last = {"items": load_cameras(camera_file), "mediamtx": None}
+    for cid in ids:
+        r = delete_camera(camera_file, mediamtx_config_path, cid)
+        if r.get("error") and r["error"] != "未找到该摄像头":
+            return {"error": f"{cid}：{r['error']}"}
+        if r.get("status") == "success":
+            last = r
+    unbind_group(aid, json_dir)
+    return {
+        "status": "success",
+        "aisle_id": aid,
+        "items": last.get("items"),
+        "mediamtx": last.get("mediamtx"),
+    }

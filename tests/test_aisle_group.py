@@ -10,7 +10,9 @@ import pytest
 from services.aisle_store import (
     bind_group,
     camera_group,
+    create_aisle_with_cameras,
     empty_aisle,
+    load_aisle,
     require_grouped,
     save_aisle,
     unbind_group,
@@ -83,3 +85,87 @@ def test_each_wall_keeps_own_grid(json_dir: str):
     w2 = saved["views"]["L"]["walls"][1]
     assert (w1["n_layers"], w1["n_cols"]) == (5, 3)
     assert (w2["n_layers"], w2["n_cols"]) == (2, 6)
+
+
+def test_create_aisle_with_cameras_binds_pair(tmp_path: Path, json_dir: str):
+    cam_file = str(tmp_path / "cameras.json")
+    mtx = str(tmp_path / "mediamtx.yml")
+    Path(cam_file).write_text("[]", encoding="utf-8")
+    out = create_aisle_with_cameras(
+        "aisle-9",
+        {
+            "path": "aisle-9-L",
+            "name": "左",
+            "source_type": "rtsp_pull",
+            "pull_url": "rtsp://10.0.0.1:554/s1",
+        },
+        {
+            "path": "aisle-9-R",
+            "name": "右",
+            "source_type": "rtsp_pull",
+            "pull_url": "rtsp://10.0.0.2:554/s1",
+        },
+        camera_file=cam_file,
+        mediamtx_config_path=mtx,
+        json_dir=json_dir,
+    )
+    assert out.get("status") == "success", out
+    aisle = load_aisle("aisle-9", json_dir)
+    assert aisle["cameras"]["L"]["camera_id"] == "aisle-9-L"
+    assert aisle["cameras"]["R"]["camera_id"] == "aisle-9-R"
+    assert camera_group("aisle-9-L", json_dir)["role"] == "L"
+    dup = create_aisle_with_cameras(
+        "aisle-9",
+        {"path": "x-L", "name": "x", "source_type": "rtsp_pull", "pull_url": "rtsp://10.0.0.3:554/s"},
+        {"path": "x-R", "name": "y", "source_type": "rtsp_pull", "pull_url": "rtsp://10.0.0.4:554/s"},
+        camera_file=cam_file,
+        mediamtx_config_path=mtx,
+        json_dir=json_dir,
+    )
+    assert "已存在" in (dup.get("error") or "")
+
+
+def test_delete_aisle_with_cameras_unbinds(tmp_path: Path, json_dir: str, monkeypatch: pytest.MonkeyPatch):
+    from services.aisle_store import delete_aisle_with_cameras
+    from services.camera_store import load_cameras
+    import services.inference_container_service as infer_svc
+
+    monkeypatch.setattr(infer_svc, "stop_inference_container", lambda *_a, **_k: None)
+
+    cam_file = str(tmp_path / "cameras.json")
+    mtx = str(tmp_path / "mediamtx.yml")
+    Path(cam_file).write_text("[]", encoding="utf-8")
+    created = create_aisle_with_cameras(
+        "aisle-del",
+        {
+            "path": "aisle-del-L",
+            "name": "左",
+            "source_type": "rtsp_pull",
+            "pull_url": "rtsp://10.0.0.1:554/s1",
+        },
+        {
+            "path": "aisle-del-R",
+            "name": "右",
+            "source_type": "rtsp_pull",
+            "pull_url": "rtsp://10.0.0.2:554/s1",
+        },
+        camera_file=cam_file,
+        mediamtx_config_path=mtx,
+        json_dir=json_dir,
+    )
+    assert created.get("status") == "success", created
+    out = delete_aisle_with_cameras(
+        "aisle-del",
+        camera_file=cam_file,
+        mediamtx_config_path=mtx,
+        json_dir=json_dir,
+    )
+    assert out.get("status") == "success", out
+    ids = {c["id"] for c in load_cameras(cam_file)}
+    assert "aisle-del-L" not in ids
+    assert "aisle-del-R" not in ids
+    assert camera_group("aisle-del-L", json_dir) is None
+    leftover = load_aisle("aisle-del", json_dir)
+    assert leftover
+    assert not leftover["cameras"]["L"]["camera_id"]
+    assert not leftover["cameras"]["R"]["camera_id"]

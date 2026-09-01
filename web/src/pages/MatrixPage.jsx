@@ -128,8 +128,11 @@ function CameraBlock({ cam }) {
           <code className="matrix-camera-id">{cam.id}</code>
         </div>
         <div className="matrix-camera-badges">
-          <span className={`matrix-badge st-${cam.online ? 'online' : 'offline'}`}>
-            {cam.online ? '在线' : '离线'}
+          <span
+            className={`matrix-badge st-${cam.online ? 'online' : 'offline'}`}
+            title={cam.online ? '' : (cam.stream_error || '')}
+          >
+            {cam.online ? '在线' : (cam.stream_error || '离线')}
           </span>
           <span className={`matrix-badge infer-${infer}`}>{INFER_LABEL[infer] || infer}</span>
           {cam.box_count > 0 ? (

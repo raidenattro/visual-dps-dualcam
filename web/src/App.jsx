@@ -30,10 +30,10 @@ export default function App() {
           <Route path="/matrix" element={<MatrixPage />} />
           <Route path="/topology" element={<TopologyPage />} />
           <Route path="/monitor" element={<MonitorPage />} />
-        <Route path="/annotate" element={<Navigate to="/aisle" replace />} />
-        <Route path="/aisle" element={<AisleAnnotatePage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-      </Route>
+          <Route path="/annotate" element={<Navigate to="/aisle" replace />} />
+          <Route path="/aisle" element={<AisleAnnotatePage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+        </Route>
       </Routes>
     </AuthProvider>
   );

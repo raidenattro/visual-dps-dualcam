@@ -88,7 +88,7 @@ def probe_camera_online(url: str, max_reads: int | None = None) -> bool:
     return frame is not None
 
 
-def _update_runtime_status(camera_id: str, online: bool) -> dict:
+def _update_runtime_status(camera_id: str, online: bool, stream_error: str = "") -> dict:
     now = time.time()
     state = _camera_runtime.setdefault(camera_id, {})
     was_online = bool(state.get("online"))
@@ -97,14 +97,22 @@ def _update_runtime_status(camera_id: str, online: bool) -> dict:
         if not was_online or state.get("online_since") is None:
             state["online_since"] = now
         state["online"] = True
+        state["stream_error"] = ""
         activity_seconds = int(now - state["online_since"])
     else:
         state["online"] = False
         state["online_since"] = None
+        if stream_error:
+            state["stream_error"] = stream_error
         activity_seconds = 0
 
     state["last_check"] = now
-    return {"online": online, "activity_seconds": activity_seconds, "last_check": now}
+    return {
+        "online": online,
+        "activity_seconds": activity_seconds,
+        "last_check": now,
+        "stream_error": "" if online else str(state.get("stream_error") or ""),
+    }
 
 
 def _cached_camera_status(cid: str) -> dict | None:
@@ -123,38 +131,65 @@ def _cached_camera_status(cid: str) -> dict | None:
         "online": online,
         "activity_seconds": activity_seconds,
         "last_check": state["last_check"],
+        "stream_error": "" if online else str(state.get("stream_error") or ""),
     }
 
 
-def get_camera_status(url: str, *, force_probe: bool = False, camera_id: str | None = None) -> dict:
+def get_camera_status(
+    url: str,
+    *,
+    force_probe: bool = False,
+    camera_id: str | None = None,
+    camera: dict | None = None,
+) -> dict:
     cid = str(camera_id or "").strip() or camera_id_from_url(url.strip())
+    rec = dict(camera or {})
+    rec.setdefault("id", cid)
+    rec.setdefault("path", rec.get("path") or cid)
+    rec.setdefault("url", url)
+    from services.mediamtx_service import describe_stream_error, fetch_path_snapshot
+
+    snap = fetch_path_snapshot()
     if not force_probe:
         cached = _cached_camera_status(cid)
         if cached:
+            if not cached.get("online"):
+                cached["stream_error"] = describe_stream_error(
+                    rec, snap, online=False, probed=True
+                )
             return cached
 
     online = probe_camera_online(url)
-    status = _update_runtime_status(cid, online)
+    err = describe_stream_error(rec, snap, online=online, probed=True)
+    status = _update_runtime_status(cid, online, err)
     status["id"] = cid
     return status
 
 
-def _probe_cameras_parallel(pending: list[tuple[int, str, str]]) -> dict[int, dict]:
+def _probe_cameras_parallel(
+    pending: list[tuple[int, str, str, dict]],
+    snap: dict | None = None,
+) -> dict[int, dict]:
     if not pending:
         return {}
+    from services.mediamtx_service import describe_stream_error, fetch_path_snapshot
+
+    snap = snap if snap is not None else fetch_path_snapshot()
     statuses: dict[int, dict] = {}
     workers = min(PROBE_MAX_WORKERS, len(pending))
     with ThreadPoolExecutor(max_workers=workers) as pool:
         future_map = {
-            pool.submit(probe_camera_online, url): (index, cid, url) for index, url, cid in pending
+            pool.submit(probe_camera_online, url): (index, cid, url, cam)
+            for index, url, cid, cam in pending
         }
         for future in as_completed(future_map):
-            index, cid, url = future_map[future]
+            index, cid, url, cam = future_map[future]
             try:
                 online = future.result()
             except Exception:
                 online = False
-            status = _update_runtime_status(cid, online)
+            err = describe_stream_error(cam, snap, online=online, probed=True)
+            status = _update_runtime_status(cid, online, err)
             status["id"] = cid
             statuses[index] = status
     return statuses
@@ -167,27 +202,35 @@ def enrich_camera_items(
     probe_online: bool = True,
     with_inference: bool = True,
 ) -> List[dict]:
-    pending: list[tuple[int, str, str]] = []
+    from services.mediamtx_service import describe_stream_error, fetch_path_snapshot
+
+    pending: list[tuple[int, str, str, dict]] = []
     status_by_index: dict[int, dict] = {}
+    # 即使不 probe RTSP，也拉 MediaMTX 快照，才能给出 no one is publishing / 编码 原因
+    snap = fetch_path_snapshot()
 
     for index, item in enumerate(items):
         url = item.get("url") or ""
         cid = stable_camera_id(item)
         cached = _cached_camera_status(cid)
         if cached:
+            cached["probed"] = True
             status_by_index[index] = cached
         elif probe_online and url:
-            pending.append((index, url, cid))
+            pending.append((index, url, cid, item))
         else:
+            err = describe_stream_error(item, snap, online=False, probed=False)
             status_by_index[index] = {
                 "id": cid,
                 "online": False,
                 "activity_seconds": 0,
                 "last_check": time.time(),
+                "stream_error": err,
+                "probed": False,
             }
 
     if probe_online:
-        status_by_index.update(_probe_cameras_parallel(pending))
+        status_by_index.update(_probe_cameras_parallel(pending, snap))
 
     result = []
     for index, item in enumerate(items):
@@ -195,18 +238,27 @@ def enrich_camera_items(
         status = status_by_index.get(index) or {
             "online": False,
             "activity_seconds": 0,
+            "stream_error": "",
         }
         thumb_path = camera_thumbnail_path(frames_dir, cid)
         last_frame_at = os.path.getmtime(thumb_path) if os.path.exists(thumb_path) else None
+        online = bool(status["online"])
+        probed = bool(status.get("probed", True))
+        stream_error = (
+            ""
+            if online
+            else describe_stream_error(item, snap, online=False, probed=probed)
+        )
         result.append(
             {
                 **item,
                 "id": cid,
-                "online": status["online"],
+                "online": online,
                 "activity_seconds": status["activity_seconds"],
                 "last_frame_at": last_frame_at,
                 "has_thumbnail": os.path.exists(thumb_path),
                 "mediamtx_managed": item.get("source_type") in ("rtsp_pull", "publisher"),
+                "stream_error": stream_error,
             }
         )
     if with_inference:
@@ -273,8 +325,19 @@ def capture_camera_frame(
         if attempt < 2:
             time.sleep(0.35)
     if frame is None:
-        _update_runtime_status(camera_id, False)
-        return {"error": "failed to read frame from camera"}
+        from services.mediamtx_service import describe_stream_error, fetch_path_snapshot
+
+        cam_rec = {"id": camera_id, "path": camera_id, "url": raw_url}
+        if camera_ips_file:
+            from services.camera_store import load_cameras
+
+            for rec in load_cameras(camera_ips_file):
+                if stable_camera_id(rec) == camera_id:
+                    cam_rec = rec
+                    break
+        err = describe_stream_error(cam_rec, fetch_path_snapshot(), online=False, probed=True)
+        _update_runtime_status(camera_id, False, err)
+        return {"error": err or "failed to read frame from camera"}
 
     frame = resize_frame_to_height(frame, capture_height)
     thumb_path = camera_thumbnail_path(frames_dir, camera_id)

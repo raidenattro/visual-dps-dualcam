@@ -7,7 +7,7 @@ import { overlayToAnnotation } from '../lib/annotation';
 import { getPerspectiveTransform, perspectiveTransform } from '../lib/geometry';
 import { apiGet, apiPost, cameraPlaybackUrl, openCameraLiveStream } from '../api/client';
 import { resolveCameraModelLabel } from '../lib/cameraSettings';
-import { formatInferenceMessage, formatUserError } from '../lib/userFacingText';
+import { formatInferenceMessage, formatStreamError, formatUserError } from '../lib/userFacingText';
 import './MonitorPage.css';
 
 const EMPTY_ANNOTATION = {
@@ -696,8 +696,17 @@ export default function MonitorPage() {
           <h1 className="page-title">{monitorCamera.name}</h1>
           <div className="monitor-page-header-extra">
             <div className="monitor-chips">
-              <span className={monitorCamera.online ? 'chip chip-ok' : 'chip chip-muted'}>
-                {monitorCamera.online ? '在线' : '离线'}
+              <span
+                className={monitorCamera.online ? 'chip chip-ok' : 'chip chip-muted'}
+                title={
+                  monitorCamera.online
+                    ? ''
+                    : formatStreamError(monitorCamera.stream_error) || ''
+                }
+              >
+                {monitorCamera.online
+                  ? '在线'
+                  : (formatStreamError(monitorCamera.stream_error) || '离线')}
               </span>
               <InferenceToggle
                 on={inferRunning}

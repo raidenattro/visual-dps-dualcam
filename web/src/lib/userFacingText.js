@@ -52,3 +52,9 @@ export function formatInferenceMessage(message) {
 }
 
 export const STREAM_CONFIG_SAVED_HINT = '配置已保存，视频流设置已自动生效。';
+
+/** 摄像头离线原因（保留 no one is publishing / 编码 等现场提示） */
+export function formatStreamError(message) {
+  if (!message) return '';
+  return String(message).trim();
+}

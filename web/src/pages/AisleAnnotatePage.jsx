@@ -144,7 +144,7 @@ function annotateSteps(aisle, { grouped, frameAt, camL, camR, dirty }) {
   const meshesOk = req.every((id) => meshForWall(aisle, id));
   const shelfOk = req.every((id) => shelfCodeOf(aisle, id));
   const items = [
-    { key: 'bind', label: '绑定左右路', done: grouped },
+    { key: 'bind', label: '左右路已绑定', done: grouped },
     { key: 'grab', label: '抽帧', done: Boolean(camL && camR && frameAt[camL] && frameAt[camR]) },
     { key: 'quad', label: '左右路都标满四角', done: quadsOk },
     { key: 'solve', label: '反解并对齐', done: Boolean(aisle.solved?.ok) },
@@ -186,7 +186,8 @@ function requiredWallIds(state) {
 
 export default function AisleAnnotatePage() {
   const [cameras, setCameras] = useState([]);
-  const [aisleId, setAisleId] = useState('aisle-1');
+  const [aisleId, setAisleId] = useState('');
+  const [aisleList, setAisleList] = useState([]);
   const [camL, setCamL] = useState('');
   const [camR, setCamR] = useState('');
   const [state, setState] = useState(() => emptyAisle('aisle-1'));
@@ -251,17 +252,21 @@ export default function AisleAnnotatePage() {
     setShard(aisle.logical_shard);
     const L = aisle.cameras?.L?.camera_id || '';
     const R = aisle.cameras?.R?.camera_id || '';
-    if (L) setCamL(L);
-    if (R) setCamR(R);
+    setCamL(L);
+    setCamR(R);
   };
 
   useEffect(() => {
     apiGet('/api/cameras?probe=0').then((d) => setCameras(d.items || [])).catch(() => {});
-    const id = String(aisleId || '').trim() || 'aisle-1';
-    apiGet(`/api/aisles/${encodeURIComponent(id)}`)
-      .then((d) => {
-        if (d.status !== 'success' || !d.aisle) return;
-        applyAisle(d.aisle);
+    apiGet('/api/aisles')
+      .then(async (d) => {
+        const items = d.items || [];
+        setAisleList(items);
+        const first = items.find((a) => a.camera_l && a.camera_r) || items[0];
+        if (!first?.aisle_id) return;
+        setAisleId(first.aisle_id);
+        const one = await apiGet(`/api/aisles/${encodeURIComponent(first.aisle_id)}`);
+        if (one.status === 'success' && one.aisle) applyAisle(one.aisle);
       })
       .catch(() => {});
   }, []);
@@ -342,22 +347,9 @@ export default function AisleAnnotatePage() {
     }
   };
 
-  const bind = async () => {
-    if (!grouped) {
-      setMsg('请先选好左路和右路两台不同的摄像头');
-      return;
-    }
-    const d = await apiPut(`/api/aisles/${encodeURIComponent(aisleId)}/group`, {
-      camera_l: camL,
-      camera_r: camR,
-    });
-    if (d.status !== 'success') {
-      setMsg(d.error || '成组失败');
-      return;
-    }
-    setState(d.aisle);
-    setShard(d.aisle.logical_shard);
-    setMsg(`已绑定左右路到本巷道`);
+  const camNameOf = (id) => {
+    const cam = cameras.find((c) => c.id === id);
+    return cam?.name || id || '未绑定';
   };
 
   const persistAisle = async (next = stateRef.current) => {
@@ -829,17 +821,11 @@ export default function AisleAnnotatePage() {
     save(next);
   };
 
-  const camOptions = cameras.map((c) => (
-    <option key={c.id} value={c.id}>
-      {c.name || c.id}
-    </option>
-  ));
-
   return (
     <div className="aisle-page">
       <aside className="aisle-panel">
         <h1>巷道双路标注</h1>
-        <p className="muted">选左右路并绑定，再抽帧、点四角。墙面尺寸和几何在右侧画面下方。</p>
+        <p className="muted">选巷道后抽帧、点四角。墙面尺寸在右侧画面下方。</p>
         <ol className="aisle-steps">
           {steps.items.map((s) => (
             <li key={s.key} className={s.done ? 'done' : steps.next?.key === s.key ? 'next' : ''}>
@@ -854,48 +840,39 @@ export default function AisleAnnotatePage() {
             {steps.next.key === 'layer' && '按住画面里的层线上下拖，对齐货架层板'}
             {steps.next.key === 'commit' && '层线已改，点底部绿色按钮保存，画面上方会提示「已保存」'}
             {steps.next.key === 'shelf' && '填写货架号，再点底部「保存墙标定」'}
-            {steps.next.key === 'bind' && '选好左路、右路后点「绑定左右路」'}
+            {steps.next.key === 'bind' && '请到总览「添加巷道」同时配置左右路摄像头'}
             {steps.next.key === 'grab' && '点「抽帧」取左右路静止画面'}
             {steps.next.key === 'quad' && `在${activeView === 'L' ? '左路' : '右路'}按 1顶远→2顶近→3底近→4底远 点四角`}
           </p>
         )}
         <div className="aisle-field">
-          <span className="aisle-field-label">巷道编号</span>
-          <input
-            value={aisleId}
-            onChange={(e) => setAisleId(e.target.value)}
-            onBlur={() => {
-              const id = aisleId.trim();
-              if (id && id !== loadedIdRef.current) loadAisle(id, { quiet: true });
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.currentTarget.blur();
-              }
-            }}
-          />
-        </div>
-        <div className="aisle-field-pair">
-          <div className="aisle-field">
-            <span className="aisle-field-label">左路</span>
-            <select value={camL} onChange={(e) => setCamL(e.target.value)}>
-              <option value="">选择摄像头</option>
-              {camOptions}
+          <span className="aisle-field-label">巷道</span>
+          {aisleList.length ? (
+            <select
+              value={aisleList.some((a) => a.aisle_id === aisleId) ? aisleId : aisleList[0].aisle_id}
+              onChange={(e) => {
+                const id = e.target.value;
+                setAisleId(id);
+                if (id) loadAisle(id);
+              }}
+            >
+              {aisleList.map((a) => (
+                <option key={a.aisle_id} value={a.aisle_id}>
+                  {a.aisle_id}
+                </option>
+              ))}
             </select>
-          </div>
-          <div className="aisle-field">
-            <span className="aisle-field-label">右路</span>
-            <select value={camR} onChange={(e) => setCamR(e.target.value)}>
-              <option value="">选择摄像头</option>
-              {camOptions}
-            </select>
-          </div>
+          ) : (
+            <p className="muted">暂无巷道，请先到总览添加。</p>
+          )}
         </div>
+        <p className="aisle-cam-line">
+          左路 {camNameOf(camL)}
+          {' · '}
+          右路 {camNameOf(camR)}
+        </p>
         <div className="btns">
-          <button type="button" className="pri" onClick={bind} disabled={!grouped || grabbing}>
-            绑定左右路
-          </button>
-          <button type="button" onClick={() => grabStills()} disabled={grabbing || (!camL && !camR)}>
+          <button type="button" className="pri" onClick={() => grabStills()} disabled={grabbing || !grouped}>
             {grabbing ? '抽帧中…' : '抽帧'}
           </button>
         </div>

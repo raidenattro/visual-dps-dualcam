@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import AisleScene3D from '../components/AisleScene3D.jsx';
-import { apiGet, cameraStreamUrl, openCameraLiveStream, thumbnailUrl } from '../api/client.js';
+import { apiGet, cameraPlaybackUrl, cameraStreamUrl, openCameraLiveStream, thumbnailUrl } from '../api/client.js';
+import { usePreviewStream } from '../hooks/usePreviewStream.js';
 import {
   AISLE_INFER_LABEL,
   aisleInferOn,
@@ -10,7 +11,7 @@ import {
   stopAisleInference,
 } from '../lib/aisleInference.js';
 import { COCO_LINES, SKELETON_CONF, scaleInferPoint } from '../lib/cocoSkeleton.js';
-import { formatInferenceMessage, formatUserError } from '../lib/userFacingText.js';
+import { formatInferenceMessage, formatStreamError, formatUserError } from '../lib/userFacingText.js';
 import './AisleLivePage.css';
 
 function inferStatusOf(cam) {
@@ -50,31 +51,80 @@ function SkeletonOverlay({ skeletons, inferW, inferH }) {
   );
 }
 
-function CamPane({ cam, label, overlay, status }) {
-  const live = Boolean(cam?.id && (cam.online || inferStatusOf(cam) === 'running' || inferStatusOf(cam) === 'starting'));
+function CamPane({ cam, label, overlay, status, playback }) {
+  const videoRef = useRef(null);
+  const imgRef = useRef(null);
+  const [hasMedia, setHasMedia] = useState(false);
+  useEffect(() => {
+    setHasMedia(false);
+  }, [cam?.id]);
+
+  const waitingPb = Boolean(cam?.id && playback === undefined);
+  const rtcOk = Boolean(cam?.id && playback?.formats?.webrtc?.available);
+  const inferLive = inferStatusOf(cam) === 'running' || inferStatusOf(cam) === 'starting';
+  const useMjpeg = Boolean(cam?.id && !waitingPb && !rtcOk && (cam.online || inferLive));
+  const format = rtcOk ? 'webrtc' : 'mjpeg';
+  const enabled = Boolean(cam?.id && !waitingPb && (rtcOk || useMjpeg));
+  const mjpegSrc = useMjpeg ? cameraStreamUrl(cam.id, 480) : '';
+  const { streamError } = usePreviewStream({
+    format,
+    playback,
+    mjpegSrc,
+    videoRef,
+    imgRef,
+    enabled,
+  });
+
+  const streamHint = formatStreamError(streamError)
+    || (!hasMedia ? formatStreamError(cam?.stream_error) : '');
   const hasSkel = Array.isArray(overlay?.skeletons) && overlay.skeletons.length > 0;
   const starting = status === 'starting' && !hasSkel;
-  const waitingPose = live && !hasSkel && !starting && status === 'running';
+  const waitingPose = (hasMedia || inferLive) && !hasSkel && !starting && status === 'running';
+  const emptyText = !cam?.id ? '未绑定' : (streamHint || '暂无画面');
+  const showThumb = Boolean(cam?.id && cam.has_thumbnail && !hasMedia);
+  const showEmpty = Boolean(
+    cam?.id && !hasMedia && !cam.has_thumbnail && !waitingPb && !enabled,
+  );
+
   return (
     <div className="aisle-live-pane">
       <span className="aisle-live-tag">{label}</span>
       {starting ? <div className="aisle-live-banner">骨架推理启动中</div> : null}
       {waitingPose ? <div className="aisle-live-banner dim">等待姿态数据…</div> : null}
+      {streamHint && !starting && !hasMedia ? (
+        <div className="aisle-live-banner stream-err" title={streamHint}>{streamHint}</div>
+      ) : null}
       <div className="aisle-live-stage">
-        {cam?.id && live ? (
+        {showThumb ? (
+          <img alt="" src={thumbnailUrl(cam.id, cam.last_frame_at)} className="aisle-live-frame aisle-live-thumb" />
+        ) : null}
+        {cam?.id ? (
           <>
-            <img alt="" src={cameraStreamUrl(cam.id, 480)} className="aisle-live-frame" />
+            <video
+              ref={videoRef}
+              className={`aisle-live-frame${rtcOk ? '' : ' is-hidden'}`}
+              autoPlay
+              muted
+              playsInline
+              onPlaying={() => setHasMedia(true)}
+            />
+            <img
+              ref={imgRef}
+              alt=""
+              className={`aisle-live-frame${useMjpeg ? '' : ' is-hidden'}`}
+              onLoad={() => setHasMedia(true)}
+              onError={() => setHasMedia(false)}
+            />
             <SkeletonOverlay
               skeletons={overlay?.skeletons || []}
               inferW={overlay?.inferW || 0}
               inferH={overlay?.inferH || 0}
             />
           </>
-        ) : cam?.id && cam.has_thumbnail ? (
-          <img alt="" src={thumbnailUrl(cam.id, cam.last_frame_at)} className="aisle-live-frame" />
         ) : (
-          <div className="aisle-live-empty">{cam?.id ? '暂无画面' : '未绑定'}</div>
+          <div className="aisle-live-empty">未绑定</div>
         )}
+        {showEmpty ? <div className="aisle-live-empty">{emptyText}</div> : null}
       </div>
     </div>
   );
@@ -144,12 +194,13 @@ export default function AisleLivePage() {
   const [busy, setBusy] = useState(false);
   const [overlayL, setOverlayL] = useState(emptyOverlay);
   const [overlayR, setOverlayR] = useState(emptyOverlay);
+  const [playbackById, setPlaybackById] = useState({});
 
   const load = useCallback(async () => {
     try {
       const [a, c] = await Promise.all([
         apiGet(`/api/aisles/${encodeURIComponent(aisleId)}`),
-        apiGet('/api/cameras?probe=0'),
+        apiGet('/api/cameras?probe=1'),
       ]);
       if (a.status !== 'success' || !a.aisle) {
         setMsg(a.error || '巷道不存在');
@@ -175,6 +226,29 @@ export default function AisleLivePage() {
   const inferOn = aisleInferOn(camL, camR);
   const inferStatusRaw = aisleInferStatus(camL, camR);
   const inferLabel = AISLE_INFER_LABEL[inferStatusRaw] || AISLE_INFER_LABEL.stopped;
+
+  useEffect(() => {
+    let cancelled = false;
+    const ids = [idL, idR].filter(Boolean);
+    ids.forEach((cid) => {
+      apiGet(cameraPlaybackUrl(cid))
+        .then((pb) => {
+          if (cancelled) return;
+          setPlaybackById((prev) => ({
+            ...prev,
+            [cid]: pb?.status === 'success' ? pb : null,
+          }));
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setPlaybackById((prev) => ({ ...prev, [cid]: null }));
+          }
+        });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [idL, idR]);
 
   useEffect(() => {
     if (inferStatusRaw !== 'starting') return undefined;
@@ -263,6 +337,7 @@ export default function AisleLivePage() {
           label={`左路 · ${camL?.name || idL || '未绑定'}`}
           overlay={overlayL}
           status={inferStatus}
+          playback={idL ? playbackById[idL] : null}
         />
         <div className="aisle-live-3d">
           <span className="aisle-live-tag">巷道 3D · 拖拽旋转</span>
@@ -290,6 +365,7 @@ export default function AisleLivePage() {
           label={`右路 · ${camR?.name || idR || '未绑定'}`}
           overlay={overlayR}
           status={inferStatus}
+          playback={idR ? playbackById[idR] : null}
         />
         <div className="aisle-live-bar">
           <strong>{aisle?.aisle_id || aisleId}</strong>
