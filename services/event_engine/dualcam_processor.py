@@ -26,6 +26,7 @@ from services.dualcam_config import (
     get_dualcam_section,
     scale_keypoints_to_calib,
 )
+from dualcam.skel3d_smooth import LivePose2DSmoother, LivePose3DSmoother, pose_time
 
 
 def _kpt_uv_score(k: np.ndarray, s: np.ndarray, idx: int) -> tuple[np.ndarray, float]:
@@ -84,6 +85,8 @@ class DualcamProcessor:
         self._new_prev: dict[tuple, np.ndarray] = {}
         self._prefer: list[tuple[np.ndarray, np.ndarray]] = []
         self._holds: list[tuple[dict, int, np.ndarray]] = []
+        self._sm2d = {"L": LivePose2DSmoother(), "R": LivePose2DSmoother()}
+        self._sm3d = LivePose3DSmoother()
         cams = aisle.get("cameras") or {}
         self.cam_l = str((cams.get("L") or {}).get("camera_id") or "")
         self.cam_r = str((cams.get("R") or {}).get("camera_id") or "")
@@ -141,6 +144,9 @@ class DualcamProcessor:
         self._holds = []
         self._prev_xyz = {}
         self._prefer = []
+        self._sm2d["L"].reset()
+        self._sm2d["R"].reset()
+        self._sm3d.reset()
 
     def _apply_hold(self, people: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """续帧匹配：对不上时沿用上一帧 3D，最多 HOLD_FRAMES 帧（与 dump_skel3d 相同）。"""
@@ -179,9 +185,26 @@ class DualcamProcessor:
             self._prefer = []
         return out
 
-    def process_single(self, role: str, pose: dict, *, apply_hold: bool = True) -> dict[str, Any]:
+    def _smooth_pose(self, role: str, pose: dict) -> dict:
+        """推理像素上做因果 2D 短窗，分数不动。"""
+        t = pose_time(pose, int(pose.get("frame_idx") or 0))
+        out = dict(pose)
+        out["persons"] = self._sm2d[role].update(t, pose.get("persons") or [])
+        return out
+
+    def process_single(
+        self,
+        role: str,
+        pose: dict,
+        *,
+        apply_hold: bool = True,
+        smooth_2d: bool = True,
+        smooth_3d: bool = True,
+    ) -> dict[str, Any]:
         """对侧未到时的 3D 预览：单路抬到墙平面，不报警。"""
         role = str(role or "").strip().upper() or "L"
+        if smooth_2d:
+            pose = self._smooth_pose(role, pose)
         calib = self.calib_l if role == "L" else self.calib_r
         scaled, meta = _scale_pose(pose, *calib)
         frame_idx = int(pose.get("frame_idx") or 0)
@@ -211,7 +234,11 @@ class DualcamProcessor:
                 )
             people.append({"xyz": xyz, "src": srcs, "preview": True, "wrist_alarm": {9: False, 10: False}})
         self._prev_xyz = {**self._prev_xyz, **self._new_prev}
-        out["persons_3d"] = self._apply_hold(people) if apply_hold else people
+        if apply_hold:
+            people = self._apply_hold(people)
+        if smooth_3d:
+            people = self._sm3d.update(pose_time(pose, frame_idx), people, self.plane)
+        out["persons_3d"] = people
         return out
 
     def ready(self) -> bool:
@@ -249,6 +276,9 @@ class DualcamProcessor:
     def process_pair(self, pose_l: dict, pose_r: dict) -> dict[str, Any]:
         """两路 PoseFrame → 贴墙 token。无立体则空报警。"""
         frame_idx = int(pose_l.get("frame_idx") or pose_r.get("frame_idx") or 0)
+        t = pose_time(pose_l, frame_idx) or pose_time(pose_r, frame_idx)
+        pose_l = self._smooth_pose("L", pose_l)
+        pose_r = self._smooth_pose("R", pose_r)
         pose_ls, meta_l = _scale_pose(pose_l, *self.calib_l)
         pose_rs, meta_r = _scale_pose(pose_r, *self.calib_r)
         empty = {
@@ -270,9 +300,13 @@ class DualcamProcessor:
         pairs = pick_pairs(fl, fr, self.cams, prefer=self._prefer, aabb=self.aabb)
         if not pairs:
             people = []
-            people.extend(self.process_single("L", pose_l, apply_hold=False).get("persons_3d") or [])
-            people.extend(self.process_single("R", pose_r, apply_hold=False).get("persons_3d") or [])
-            empty["persons_3d"] = self._apply_hold(people)
+            people.extend(
+                self.process_single("L", pose_l, apply_hold=False, smooth_2d=False, smooth_3d=False).get("persons_3d") or []
+            )
+            people.extend(
+                self.process_single("R", pose_r, apply_hold=False, smooth_2d=False, smooth_3d=False).get("persons_3d") or []
+            )
+            empty["persons_3d"] = self._sm3d.update(t, self._apply_hold(people), self.plane)
             empty["preview"] = True
             return empty
         tokens: list[str] = []
@@ -301,7 +335,7 @@ class DualcamProcessor:
 
         self._prefer = new_prefer
         self._prev_xyz = self._new_prev
-        persons_3d = self._apply_hold(persons_3d)
+        persons_3d = self._sm3d.update(t, self._apply_hold(persons_3d), self.plane)
         return {
             "frame_idx": frame_idx,
             "collisions": list(tokens),

@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 
 LIVE_SCHEMA_VERSION = 2
 SSE_QUEUE_MAX = max(8, int(os.environ.get("LIVE_SSE_QUEUE_MAX", "32")))
+# worker 平滑骨架相对 pose 允许的滞后（秒）。与 dualcam.skel3d_smooth.EVENT_SKELETON_STALE_S 一致
+EVENT_SKELETON_STALE_S = 0.40
 
 
 def redis_url() -> str:
@@ -43,11 +45,11 @@ def merge_live_frame(pose: dict[str, Any] | None, event: dict[str, Any] | None) 
     ts = max(pose_ts, event_ts) or time.time()
     pose_skeletons = list(pose.get("persons") or pose.get("skeletons") or [])
     event_skeletons = list(event.get("skeletons") or [])
-    # 骨架坐标以推理姿态为准（最新帧）；event 可能滞后仍保留旧关键点导致「人不跟画」
-    if pose_skeletons and (pose_ts >= event_ts or not event_skeletons):
-        skeletons = pose_skeletons
+    # worker 已做实验仓 2D 短窗；未过期时用 event，避免 pose 生骨架把平滑结果盖掉
+    if event_skeletons and (not pose_skeletons or (event_ts + EVENT_SKELETON_STALE_S) >= pose_ts):
+        skeletons = event_skeletons
     else:
-        skeletons = event_skeletons or pose_skeletons
+        skeletons = pose_skeletons or event_skeletons
     return {
         "schema": LIVE_SCHEMA_VERSION,
         "ts": ts,

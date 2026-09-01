@@ -18,6 +18,19 @@ def test_merge_live_frame_keeps_stereo_persons_3d():
     assert merged["persons_3d"][0]["xyz"][0] == [0, 1, 2]
 
 
+def test_merge_prefers_recent_worker_skeletons():
+    pose = {"ts": 2.0, "persons": [{"id": "raw"}], "infer_width": 640, "infer_height": 360}
+    event = {
+        "ts": 1.75,
+        "skeletons": [{"id": "smooth"}],
+        "persons_3d": [],
+        "collisions": [],
+        "alarm_collisions": [],
+    }
+    merged = merge_live_frame(pose, event)
+    assert merged["skeletons"][0]["id"] == "smooth"
+
+
 def test_merge_live_frame_empty_event_has_persons_3d_key():
     merged = merge_live_frame({"ts": 1, "persons": []}, None)
     assert merged["persons_3d"] == []
