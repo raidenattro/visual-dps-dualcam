@@ -14,7 +14,6 @@ from dualcam.lift import (
     RWRIST,
     keypoints_to_ks,
     lift_point,
-    nms_indices,
     pick_pairs,
     wall_plane_from_solved,
 )
@@ -201,7 +200,7 @@ class DualcamProcessor:
         smooth_2d: bool = True,
         smooth_3d: bool = True,
     ) -> dict[str, Any]:
-        """对侧未到时的 3D 预览：单路抬到墙平面，不报警。"""
+        """对侧未到时：对齐 dump_skel3d，不单路贴墙抬点，只 hold 上一帧立体人。"""
         role = str(role or "").strip().upper() or "L"
         if smooth_2d:
             pose = self._smooth_pose(role, pose)
@@ -221,21 +220,8 @@ class DualcamProcessor:
         }
         if not self.solved.get("ok") or role not in self.cams:
             return out
-        ks = keypoints_to_ks(scaled.get("persons") or [])
-        self._new_prev = {}
-        people = []
-        for i in nms_indices(ks["k"], ks["s"]):
-            if role == "L":
-                xyz, srcs, _hits = self._lift_joints(ks["k"][i], ks["s"][i], None, None, ("L", i))
-            else:
-                # 对侧分数为 0，走 R 单路
-                xyz, srcs, _hits = self._lift_joints(
-                    ks["k"][i], np.zeros(17, np.float32), ks["k"][i], ks["s"][i], ("R", i)
-                )
-            people.append({"xyz": xyz, "src": srcs, "preview": True, "wrist_alarm": {9: False, 10: False}})
-        self._prev_xyz = {**self._prev_xyz, **self._new_prev}
-        if apply_hold:
-            people = self._apply_hold(people)
+        # 对齐 dump_skel3d：不成对不抬 3D，只 hold 上一帧立体人。禁止左右路各贴墙抬一套。
+        people = self._apply_hold([]) if apply_hold else []
         if smooth_3d:
             people = self._sm3d.update(pose_time(pose, frame_idx), people, self.plane)
         out["persons_3d"] = people
@@ -299,14 +285,9 @@ class DualcamProcessor:
         fr = keypoints_to_ks(pose_rs.get("persons") or [])
         pairs = pick_pairs(fl, fr, self.cams, prefer=self._prefer, aabb=self.aabb)
         if not pairs:
-            people = []
-            people.extend(
-                self.process_single("L", pose_l, apply_hold=False, smooth_2d=False, smooth_3d=False).get("persons_3d") or []
-            )
-            people.extend(
-                self.process_single("R", pose_r, apply_hold=False, smooth_2d=False, smooth_3d=False).get("persons_3d") or []
-            )
-            empty["persons_3d"] = self._sm3d.update(t, self._apply_hold(people), self.plane)
+            # dump_skel3d：本帧无配对则 persons=[]，最多续上一帧，绝不 Lmono+Rmono 两人
+            held = self._sm3d.update(t, self._apply_hold([]), self.plane)
+            empty["persons_3d"] = held
             empty["preview"] = True
             return empty
         tokens: list[str] = []

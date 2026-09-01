@@ -63,15 +63,27 @@ def test_processor_empty_without_solve():
     assert preview["alarm_collisions"] == []
 
 
-def test_process_pair_empty_without_prior_hold(calib):
-    aisle = {
+def _ready_aisle(calib):
+    meshes = []
+    for m in calib.get("slot_meshes") or []:
+        if not isinstance(m, dict):
+            continue
+        mesh = dict(m)
+        wid = int(mesh.get("wall_id") or 0)
+        mesh["shelf_code"] = str(mesh.get("shelf_code") or "").strip() or f"wall{wid}"
+        meshes.append(mesh)
+    return {
         "aisle_id": "t",
         "solved": calib["solved"],
         "cameras": {"L": {"camera_id": "cam1"}, "R": {"camera_id": "cam2"}},
-        "slot_meshes": calib.get("slot_meshes") or [],
+        "slot_meshes": meshes,
         "views": calib.get("views") or {},
+        "required_wall_ids": [int(m["wall_id"]) for m in meshes if m.get("wall_id")],
     }
-    proc = DualcamProcessor(aisle)
+
+
+def test_process_pair_empty_without_prior_hold(calib):
+    proc = DualcamProcessor(_ready_aisle(calib))
     out = proc.process_pair({"frame_idx": 2, "persons": []}, {"frame_idx": 2, "persons": []})
     assert out["persons_3d"] == []
     assert proc._holds == []
@@ -101,16 +113,9 @@ def test_contact_src_excludes_mono():
     assert "stereo" in CONTACT_SRC
 
 
-def test_process_single_skips_face_joints(calib):
-    """单路预览不得抬鼻子/眼睛，否则 3D 会出现射向墙面的长线。"""
-    aisle = {
-        "aisle_id": "t",
-        "solved": calib["solved"],
-        "cameras": {"L": {"camera_id": "cam1"}, "R": {"camera_id": "cam2"}},
-        "slot_meshes": calib.get("slot_meshes") or [],
-        "views": calib.get("views") or {},
-    }
-    proc = DualcamProcessor(aisle)
+def test_process_single_cold_start_does_not_lift_mono(calib):
+    """对齐 dump_skel3d：没有上一帧立体人时，单路也不贴墙抬骨架。"""
+    proc = DualcamProcessor(_ready_aisle(calib))
     kpts = [[640.0, 360.0, 0.95] for _ in range(17)]
     pose = {
         "frame_idx": 1,
@@ -119,9 +124,54 @@ def test_process_single_skips_face_joints(calib):
         "infer_height": 720,
     }
     for role in ("L", "R"):
-        people = proc.process_single(role, pose).get("persons_3d") or []
-        if not people:
-            continue
-        xyz = people[0].get("xyz") or []
-        for ji in range(5):
-            assert xyz[ji] is None, f"{role} 单路不应抬五官关节 {ji}"
+        assert proc.process_single(role, pose).get("persons_3d") == []
+
+
+def _weak_pose(frame_idx: int) -> dict:
+    """分数低于 KPT_MIN，NMS 为空，左右路配不上对。"""
+    kpts = [[100.0, 100.0, 0.05] for _ in range(17)]
+    return {
+        "frame_idx": frame_idx,
+        "ts": float(frame_idx),
+        "persons": [{"keypoints": kpts}, {"keypoints": [[200.0, 120.0, 0.05] for _ in range(17)]}],
+        "infer_width": 1280,
+        "infer_height": 720,
+    }
+
+
+def test_unpaired_holds_one_person_not_l_and_r_mono(calib):
+    """对齐 dump_skel3d：配不上时只续上一帧，不要把左右路各抬成两套乱骨架。"""
+    proc = DualcamProcessor(_ready_aisle(calib))
+    xyz = [[0.0, 1.0, 1.0] for _ in range(17)]
+    proc._apply_hold([{
+        "xyz": xyz,
+        "src": ["stereo"] * 17,
+        "preview": False,
+        "wrist_alarm": {9: False, 10: False},
+    }])
+    out = proc.process_pair(_weak_pose(3), _weak_pose(3))
+    assert len(out["persons_3d"]) == 1
+    assert out["persons_3d"][0].get("held") is True
+    assert out["preview"] is True
+
+
+def test_process_single_does_not_add_mono_when_hold_exists(calib):
+    proc = DualcamProcessor(_ready_aisle(calib))
+    xyz = [[0.2, 1.1, 0.8] for _ in range(17)]
+    proc._apply_hold([{
+        "xyz": xyz,
+        "src": ["stereo"] * 17,
+        "preview": False,
+        "wrist_alarm": {9: False, 10: False},
+    }])
+    kpts = [[640.0, 360.0, 0.95] for _ in range(17)]
+    pose = {
+        "frame_idx": 4,
+        "ts": 4.0,
+        "persons": [{"keypoints": kpts}, {"keypoints": [[700.0, 400.0, 0.9] for _ in range(17)]}],
+        "infer_width": 1280,
+        "infer_height": 720,
+    }
+    people = proc.process_single("L", pose).get("persons_3d") or []
+    assert len(people) == 1
+    assert people[0].get("held") is True
