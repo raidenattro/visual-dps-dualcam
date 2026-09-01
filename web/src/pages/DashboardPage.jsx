@@ -6,25 +6,18 @@ import { confirmDeleteCamera } from '../lib/confirmDelete';
 import { apiDelete, apiGet, apiPost, apiPut, formatDuration, thumbnailUrl } from '../api/client';
 import {
   STREAM_CONFIG_SAVED_HINT,
-  formatInferenceMessage,
   formatUserError,
 } from '../lib/userFacingText';
+import { aisleInferOn, aisleInferStatus, AISLE_INFER_LABEL, startAisleInference, stopAisleInference } from '../lib/aisleInference';
 import { cameraToForm, emptyCameraForm, formToCameraPayload } from '../lib/cameraStreamForm';
 import './DashboardPage.css';
 
 const POLL_MS = 30000;
 
-const INFER_LABEL = {
-  stopped: '检测未启动',
-  running: '检测运行中',
-  starting: '检测启动中',
-  error: '检测异常',
-  paused: '检测已暂停',
-};
-
 export default function DashboardPage() {
   const navigate = useNavigate();
   const [cameras, setCameras] = useState([]);
+  const [aisles, setAisles] = useState([]);
   const [listLoading, setListLoading] = useState(true);
   const [probing, setProbing] = useState(false);
   const [msg, setMsg] = useState('');
@@ -75,6 +68,12 @@ export default function DashboardPage() {
         return false;
       }
       applyCameraItems(data.items);
+      try {
+        const ad = await apiGet('/api/aisles');
+        if (ad.status === 'success' && Array.isArray(ad.items)) setAisles(ad.items);
+      } catch {
+        /* 巷道列表失败时仍展示单路卡片 */
+      }
       return true;
     } catch (e) {
       setMsg(formatUserError(e.message) || '无法连接服务器');
@@ -251,6 +250,11 @@ export default function DashboardPage() {
   };
 
   const startInference = async (cam) => {
+    const group = aisles.find((a) => a.camera_l === cam.id || a.camera_r === cam.id);
+    if (group?.camera_l && group?.camera_r) {
+      await toggleAisleInference(group, true);
+      return;
+    }
     setInferLoadingId(cam.id);
     try {
       const data = await apiPost(`/api/cameras/${encodeURIComponent(cam.id)}/inference/start`, {});
@@ -272,6 +276,11 @@ export default function DashboardPage() {
   };
 
   const stopInference = async (cam) => {
+    const group = aisles.find((a) => a.camera_l === cam.id || a.camera_r === cam.id);
+    if (group?.camera_l && group?.camera_r) {
+      await toggleAisleInference(group, false);
+      return;
+    }
     setInferLoadingId(cam.id);
     try {
       const data = await apiPost(`/api/cameras/${encodeURIComponent(cam.id)}/inference/stop`, {});
@@ -282,6 +291,28 @@ export default function DashboardPage() {
       await loadCameras();
     } catch (e) {
       alert(formatUserError(e.message) || '停止检测失败');
+    } finally {
+      setInferLoadingId(null);
+    }
+  };
+
+  const toggleAisleInference = async (aisle, turnOn) => {
+    setInferLoadingId(aisle.aisle_id);
+    if (turnOn) {
+      setMsg('骨架推理启动中');
+      setMsgErr(false);
+    }
+    try {
+      const r = turnOn
+        ? await startAisleInference(aisle.camera_l, aisle.camera_r)
+        : await stopAisleInference(aisle.camera_l, aisle.camera_r);
+      if (!r.ok) {
+        alert(formatUserError(r.error) || (turnOn ? '启动失败' : '停止失败'));
+        return;
+      }
+      await loadCameras({ probe: false });
+    } catch (e) {
+      alert(formatUserError(e.message) || (turnOn ? '启动失败' : '停止失败'));
     } finally {
       setInferLoadingId(null);
     }
@@ -342,8 +373,19 @@ export default function DashboardPage() {
   const batchInferBusy = Boolean(batchInferAction);
 
   const openMonitor = (cam) => {
+    const group = aisles.find((a) => a.camera_l === cam.id || a.camera_r === cam.id);
+    if (group?.aisle_id) {
+      navigate(`/live/${encodeURIComponent(group.aisle_id)}`);
+      return;
+    }
     navigate(`/monitor?camera=${encodeURIComponent(cam.id)}`);
   };
+
+  const groupedIds = new Set(
+    aisles.flatMap((a) => [a.camera_l, a.camera_r].filter(Boolean)),
+  );
+  const ungrouped = cameras.filter((c) => !groupedIds.has(c.id));
+  const aisleCards = aisles.filter((a) => a.camera_l && a.camera_r);
 
   const captureFrame = async (cam) => {
     setRefreshingId(cam.id);
@@ -378,6 +420,7 @@ export default function DashboardPage() {
   return (
     <div className="page dashboard-page">
         <h1 className="page-title">摄像头总览</h1>
+        <p className="dash-lead">成组巷道点进即是「左路 · 3D · 右路」。未编组的仍单路预览。</p>
 
         <div className="toolbar">
           <span className={`msg ${msgErr ? 'err' : ''}`}>
@@ -433,85 +476,154 @@ export default function DashboardPage() {
           ) : !cameras.length ? (
             <div className="empty">暂无摄像头，点击「添加摄像头」开始配置。</div>
           ) : (
-            cameras.map((cam) => (
-              <article className="card" key={cam.id}>
-                <div
-                  className="card-preview card-preview-link"
-                  role="button"
-                  tabIndex={0}
-                  title="进入检测监控"
-                  onClick={() => openMonitor(cam)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      openMonitor(cam);
-                    }
-                  }}
-                >
-                  {cam.has_thumbnail ? (
-                    <img
-                      src={thumbnailUrl(cam.id, cam.last_frame_at, cam._thumbNonce)}
-                      alt={cam.name}
-                    />
-                  ) : (
-                    <div className="card-preview-empty">暂无画面</div>
-                  )}
-                  <div className="card-actions" onClick={(e) => e.stopPropagation()}>
-                    <InferenceToggle
-                      on={
-                        cam.inference?.status === 'running' ||
-                        cam.inference?.status === 'starting'
-                      }
-                      loading={inferLoadingId === cam.id}
-                      disabled={inferToggleDisabled}
-                      title={
-                        cam.inference?.status === 'running' || cam.inference?.status === 'starting'
-                          ? '关闭智能检测'
-                          : '开启智能检测'
-                      }
-                      onToggle={(turnOn) => toggleInference(cam, turnOn)}
-                    />
-                    <button
-                      type="button"
-                      className="btn-icon"
-                      title="抓帧"
-                      disabled={refreshingId === cam.id}
-                      onClick={() => captureFrame(cam)}
+            <>
+              {aisleCards.map((aisle) => {
+                const left = cameras.find((c) => c.id === aisle.camera_l);
+                const right = cameras.find((c) => c.id === aisle.camera_r);
+                const on = aisleInferOn(left, right);
+                const inferSt = aisleInferStatus(left, right);
+                const inferText = inferLoadingId === aisle.aisle_id && !on
+                  ? AISLE_INFER_LABEL.starting
+                  : (AISLE_INFER_LABEL[inferSt] || AISLE_INFER_LABEL.stopped);
+                return (
+                  <article className="card aisle-card" key={aisle.aisle_id}>
+                    <div
+                      className="card-preview card-preview-link"
+                      role="button"
+                      tabIndex={0}
+                      title="进入巷道检测（左路 + 3D + 右路）"
+                      onClick={() => navigate(`/live/${encodeURIComponent(aisle.aisle_id)}`)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          navigate(`/live/${encodeURIComponent(aisle.aisle_id)}`);
+                        }
+                      }}
                     >
-                      ↻
-                    </button>
-                    <button
-                      type="button"
-                      className="btn-icon"
-                      title="设置"
-                      onClick={() => openSetup(cam)}
-                    >
-                      ⚙
-                    </button>
-                  </div>
-                  <div className="card-body">
-                    <h2 className="card-title">{cam.name}</h2>
-                    <div className="card-status">
-                      <span className={cam.online ? 'st-online' : 'st-offline'}>
-                        {cam.online ? '在线' : '离线'}
-                      </span>
-                      <span className="card-status-sep">·</span>
-                      <span className="card-activity">{formatDuration(cam._displayActivity)}</span>
-                      <span className="card-status-sep">·</span>
-                      <span
-                        className={`card-infer ${cam.inference?.status || 'stopped'}`}
-                        title={formatInferenceMessage(cam.inference?.message) || ''}
+                      <div className="aisle-thumbs">
+                        <figure>
+                          <span>左路</span>
+                          {left?.has_thumbnail ? (
+                            <img
+                              src={thumbnailUrl(left.id, left.last_frame_at, left._thumbNonce)}
+                              alt={left.name}
+                            />
+                          ) : (
+                            <div className="card-preview-empty">暂无画面</div>
+                          )}
+                        </figure>
+                        <div className="aisle-thumb-mid" aria-hidden="true">
+                          <span>3D</span>
+                        </div>
+                        <figure>
+                          <span>右路</span>
+                          {right?.has_thumbnail ? (
+                            <img
+                              src={thumbnailUrl(right.id, right.last_frame_at, right._thumbNonce)}
+                              alt={right.name}
+                            />
+                          ) : (
+                            <div className="card-preview-empty">暂无画面</div>
+                          )}
+                        </figure>
+                      </div>
+                      <div className="card-actions" onClick={(e) => e.stopPropagation()}>
+                        <InferenceToggle
+                          on={on}
+                          loading={inferLoadingId === aisle.aisle_id}
+                          disabled={inferToggleDisabled}
+                          title={on ? '停止本巷道两路检测' : '同时启动本巷道两路检测'}
+                          onToggle={(turnOn) => toggleAisleInference(aisle, turnOn)}
+                        />
+                        <button
+                          type="button"
+                          className="btn-icon"
+                          title="设置左路"
+                          onClick={() => left && openSetup(left)}
+                        >
+                          ⚙
+                        </button>
+                      </div>
+                      <div className="card-body">
+                        <h2 className="card-title">巷道 {aisle.aisle_id}</h2>
+                        <div className="card-status">
+                          <span className={left?.online || right?.online ? 'st-online' : 'st-offline'}>
+                            {left?.name || aisle.camera_l} / {right?.name || aisle.camera_r}
+                          </span>
+                          <span className="card-status-sep">·</span>
+                          <span className={`card-infer ${inferSt}`}>
+                            {inferText}
+                          </span>
+                        </div>
+                        <div className="card-url">
+                          {aisle.solved ? '已反解 · 点开查看 3D 骨架' : '未反解 · 请先巷道标注'}
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+              {ungrouped.map((cam) => (
+                <article className="card" key={cam.id}>
+                  <div
+                    className="card-preview card-preview-link"
+                    role="button"
+                    tabIndex={0}
+                    title="未编入巷道，仅单路预览"
+                    onClick={() => openMonitor(cam)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        openMonitor(cam);
+                      }
+                    }}
+                  >
+                    {cam.has_thumbnail ? (
+                      <img
+                        src={thumbnailUrl(cam.id, cam.last_frame_at, cam._thumbNonce)}
+                        alt={cam.name}
+                      />
+                    ) : (
+                      <div className="card-preview-empty">暂无画面</div>
+                    )}
+                    <div className="card-actions" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        className="btn-icon"
+                        title="抓帧"
+                        disabled={refreshingId === cam.id}
+                        onClick={() => captureFrame(cam)}
                       >
-                        {INFER_LABEL[cam.inference?.status] || INFER_LABEL.stopped}
-                      </span>
+                        ↻
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-icon"
+                        title="设置"
+                        onClick={() => openSetup(cam)}
+                      >
+                        ⚙
+                      </button>
                     </div>
-                    <div className="card-url" title={cam.url}>
-                      {cam.url}
+                    <div className="card-body">
+                      <h2 className="card-title">{cam.name}</h2>
+                      <div className="card-status">
+                        <span className={cam.online ? 'st-online' : 'st-offline'}>
+                          {cam.online ? '在线' : '离线'}
+                        </span>
+                        <span className="card-status-sep">·</span>
+                        <span className="card-activity">{formatDuration(cam._displayActivity)}</span>
+                        <span className="card-status-sep">·</span>
+                        <span className="card-infer stopped">未编入巷道</span>
+                      </div>
+                      <div className="card-url" title={cam.url}>
+                        请到巷道标注绑定左右路后，才能开 3D 检测
+                      </div>
                     </div>
                   </div>
-                </div>
-              </article>
-            ))
+                </article>
+              ))}
+            </>
           )}
         </div>
 

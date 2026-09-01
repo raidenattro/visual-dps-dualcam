@@ -37,12 +37,15 @@ export function formatInferenceMessage(message) {
   const raw = String(message).trim();
   const mapped = {
     推理运行中: '运行中',
-    容器已创建: '正在启动…',
+    容器已创建: '骨架推理启动中',
+    骨架推理启动中: '骨架推理启动中',
+    正在启动: '骨架推理启动中',
     容器异常退出: '检测已异常停止，请重试',
     已手动停止: '已停止',
     已在运行: '已在运行',
   };
   if (mapped[raw]) return mapped[raw];
+  if (/正在加载模型/.test(raw)) return '骨架推理启动中';
   if (/debug-info|MMDet|MMPose|visual-dps-infer|docker/i.test(raw)) return '';
   if (raw.length > 80 || /^[A-Za-z_\-./:\\]+$/.test(raw)) return '';
   return formatUserError(raw);

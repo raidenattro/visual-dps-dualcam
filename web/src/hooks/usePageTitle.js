@@ -10,6 +10,7 @@ const ROUTE_TITLES = {
   '/topology': '服务拓扑',
   '/monitor': '检测监控',
   '/aisle': '巷道标注',
+  '/live': '巷道检测',
   '/settings': '系统设置',
 };
 
@@ -18,6 +19,10 @@ export function usePageTitle() {
 
   useEffect(() => {
     const page = ROUTE_TITLES[pathname];
+    if (pathname.startsWith('/live/')) {
+      document.title = `巷道检测 - ${APP_NAME}`;
+      return;
+    }
     if (pathname === '/monitor' && search.includes('camera=')) {
       document.title = `检测监控 - ${APP_NAME}`;
       return;
