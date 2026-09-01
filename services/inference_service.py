@@ -26,6 +26,7 @@ from services.event_bus import get_event_snapshot
 from services.inference_backends import create_inference_backend, resolve_backend_name
 from services.pipeline_log import get_inference_logger, log_pipeline_stage, reload_process_logging
 from services.rtsp_capture import open_rtsp_capture, read_latest_frame
+from services.runtime_config_service import get_merged_inference_section
 
 
 def _snapshot_stream_frame(cap):
@@ -253,7 +254,7 @@ class InferenceService:
                 cap.release()
             return
 
-        infer_cfg = self.app_config.get("inference", {})
+        infer_cfg = get_merged_inference_section(self.app_config, self._runtime_config_path)
         infer_w, infer_h, resize_needed = _compute_infer_resolution(
             stream_w,
             stream_h,
@@ -264,7 +265,7 @@ class InferenceService:
         frame_rate = max(1.0, frame_rate)
         frame_period_sec = 1.0 / frame_rate
 
-        pose_frame_interval = int(infer_cfg.get("pose_frame_interval", 3) or 3)
+        pose_frame_interval = int(infer_cfg.get("pose_frame_interval", 2) or 2)
         pose_frame_interval = max(1, pose_frame_interval)
 
         preview_max_width = int(infer_cfg.get("preview_max_width", 640) or 640)
@@ -340,6 +341,17 @@ class InferenceService:
                 if frame_count == 1 or frame_count % 300 == 0 or (time.monotonic() - last_config_check_at) >= 30.0:
                     last_config_check_at = time.monotonic()
                     self._refresh_pipeline_log_if_needed()
+                    paced = get_merged_inference_section(self.app_config, self._runtime_config_path)
+                    try:
+                        pose_frame_interval = max(1, int(paced.get("pose_frame_interval", pose_frame_interval) or pose_frame_interval))
+                    except (TypeError, ValueError):
+                        pass
+                    try:
+                        new_rate = max(1.0, float(paced.get("frame_rate", frame_rate) or frame_rate))
+                        frame_rate = new_rate
+                        frame_period_sec = 1.0 / frame_rate
+                    except (TypeError, ValueError):
+                        pass
                 if resize_needed:
                     raw_frame = cv2.resize(frame, (infer_w, infer_h), interpolation=cv2.INTER_AREA)
                 else:

@@ -28,7 +28,7 @@
     "inference": {
         "frame_rate": 15,
         "height": 480,
-        "pose_frame_interval": 1,
+        "pose_frame_interval": 2,
         "stream_buffer_size": 1,
         "preview_max_width": 640,
         "preview_jpeg_quality": 60,
@@ -93,7 +93,7 @@
         "pitch": 45,
         "yaw": 0,
         "contact_m": 0,
-        "pair_window_periods": 1.5,
+        "pair_window_periods": 3.0,
         "pair_window_min_sec": 0.08,
         "pair_window_max_sec": 1.0
     },

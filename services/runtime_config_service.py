@@ -15,6 +15,8 @@ from services.inference_backends.model_registry import (
 )
 
 DEFAULT_PATH = os.environ.get("RUNTIME_CONFIG_FILE", "localdata/runtime_config.json")
+# 出厂姿态间隔；app_config / runtime 未写时用这个，避免再落到旧默认 3
+DEFAULT_POSE_FRAME_INTERVAL = 2
 
 # 现场暴露项（与 ROADMAP 一致）
 PUBLIC_KEYS = {
@@ -183,8 +185,39 @@ def get_collision_prefilter_section(app_config: dict | None = None, path: str = 
     return base
 
 
+def ensure_runtime_overlay(app_config: dict | None = None, path: str = DEFAULT_PATH) -> str:
+    """若 runtime 文件不存在，写入一份最小覆盖，方便现场找到并改 pose_frame_interval。
+
+    路径默认 `localdata/runtime_config.json`（gitignore，设置页保存也会写这里）。
+    已有文件不覆盖。
+    """
+    if os.path.isfile(path):
+        return path
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    infer = dict((app_config or {}).get("inference") or {})
+    try:
+        interval = int(infer.get("pose_frame_interval") or DEFAULT_POSE_FRAME_INTERVAL)
+    except (TypeError, ValueError):
+        interval = DEFAULT_POSE_FRAME_INTERVAL
+    payload = {
+        "inference": {
+            "frame_rate": int(infer.get("frame_rate") or 15),
+            "height": int(infer.get("height") or 480),
+            "pose_frame_interval": max(1, interval),
+        }
+    }
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    os.replace(tmp, path)
+    return path
+
+
 def get_merged_inference_section(app_config: dict | None = None, path: str = DEFAULT_PATH) -> dict:
-    """app_config.inference 与 runtime 覆盖合并（供 event-worker 读取告警门控）。"""
+    """app_config.inference 与 runtime 覆盖合并（供 event-worker / infer 读取）。"""
     base_infer = dict((app_config or {}).get("inference") or {})
     overlay = _load_json(path)
     overlay_infer = overlay.get("inference")
@@ -334,7 +367,9 @@ def get_public_settings(app_config: dict | None, path: str = DEFAULT_PATH) -> di
             "models.det": det,
             "inference.frame_rate": _deep_get(merged, "inference", "frame_rate", 15),
             "inference.height": _deep_get(merged, "inference", "height", 480),
-            "inference.pose_frame_interval": _deep_get(merged, "inference", "pose_frame_interval", 3),
+            "inference.pose_frame_interval": _deep_get(
+                merged, "inference", "pose_frame_interval", DEFAULT_POSE_FRAME_INTERVAL
+            ),
             "inference.alarm_min_consecutive_frames": max(
                 1,
                 int(_deep_get(merged, "inference", "alarm_min_consecutive_frames", 3) or 3),

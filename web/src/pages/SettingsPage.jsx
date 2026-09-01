@@ -273,6 +273,7 @@ export default function SettingsPage() {
           <form className="settings-panel" onSubmit={saveSettings}>
             <p className="settings-panel-lead">
               以下为<strong>全局默认值</strong>。帧率、推理高度等可在摄像头设置中勾选「自定义」覆盖；姿态检测间隔仅全局生效，保证左右路配对窗一致。
+              保存后写入 <code>localdata/runtime_config.json</code>（覆盖 <code>app_config.json</code>）。改姿态间隔后需重新启动各路检测。
             </p>
             <div className="settings-form-fields">
               <InferenceModelGlobalFields

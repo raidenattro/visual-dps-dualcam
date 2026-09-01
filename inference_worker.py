@@ -157,7 +157,7 @@ async def _run_worker():
         base_dir,
         camera_id,
         "starting",
-        f"正在加载模型（{backend}）…",
+        "骨架推理启动中",
         {"stream_url": stream_url, "json_path": json_path, "backend": backend, "rtm_det": rtm_det},
     )
 

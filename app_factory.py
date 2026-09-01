@@ -22,12 +22,14 @@ from services.camera_service import get_last_frame_b64
 from services.camera_store import load_cameras
 from services.inference_service import InferenceService
 from services.live_bus import live_hub
+from services.runtime_config_service import ensure_runtime_overlay
 from services.version_routes import register_version_routes
 from services.video_service import get_first_frame_b64, handle_video_upload, initialize_source_from_config
 
 
 def create_app():
     app_config = load_app_config()
+    ensure_runtime_overlay(app_config)
     paths = app_config["paths"]
     video_cfg = app_config["video"]
 
