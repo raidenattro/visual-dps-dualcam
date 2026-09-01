@@ -3,6 +3,7 @@ import { apiGet, apiPost, apiPut, thumbnailUrl } from '../api/client.js';
 import {
   meshCells,
   moveLayerRow,
+  projectPix,
   wallById,
   wallYSpan,
 } from '../lib/dualcamGeom.js';
@@ -16,10 +17,13 @@ const CORNERS = [
   { n: 4, title: '底沿·远端', detail: '货架底部、再绕回远端，围成一圈' },
 ];
 const HINT = CORNERS.map((c) => `${c.n} ${c.title}`);
+/** 右路画面角序与左路 3D 墙角相反（对齐后同一物理角）。 */
+const OPP_CORNER = [1, 0, 3, 2];
 const FALLBACK_W = 1280;
 const FALLBACK_H = 720;
 /** 层线命中 / 开始拖：屏幕像素。未超过拖动阈值的点击不得改线。 */
 const LAYER_HIT_PX = 10;
+const CORNER_HIT_PX = 16;
 const DRAG_START_PX = 8;
 
 function distToSeg(px, py, ax, ay, bx, by) {
@@ -39,6 +43,36 @@ const WALL_PALETTE = {
 
 function wallPalette(wallId) {
   return WALL_PALETTE[Number(wallId)] || WALL_PALETTE[1];
+}
+
+/** 空心圈：把反解出的 3D 矩形墙角投回该路画面，仅作残差提示，不参与编辑。 */
+function drawSolvedCornerHints(c, role, k, aisle) {
+  const sol = aisle?.solved;
+  if (!sol?.ok) return;
+  const cam = sol.cameras?.[role];
+  if (!cam?.C || !cam?.fwd) return;
+  const order = role === 'R' ? OPP_CORNER : [0, 1, 2, 3];
+  for (const w of sol.walls || []) {
+    const pal = wallPalette(w.wall_id);
+    order.forEach((ci, i) => {
+      const p = (w.corners || [])[ci];
+      if (!p) return;
+      const uv = projectPix(p, cam);
+      if (!uv) return;
+      const x = uv[0] * k;
+      const y = uv[1] * k;
+      c.beginPath();
+      c.arc(x, y, 11, 0, Math.PI * 2);
+      c.strokeStyle = pal.line;
+      c.lineWidth = 1.8;
+      c.stroke();
+      c.fillStyle = pal.line;
+      c.font = '10px sans-serif';
+      c.textAlign = 'center';
+      c.textBaseline = 'bottom';
+      c.fillText(String(i + 1), x, y - 13);
+    });
+  }
 }
 
 function viewSize(state, v) {
@@ -449,8 +483,11 @@ export default function AisleAnnotatePage() {
     setState(aisle);
     stateRef.current = aisle;
     setDirty(false);
-    const resid = aisle.solved?.cameras?.L?.resid_px ?? aisle.solved?.align_rms_m ?? '?';
-    showToast(`反解成功（残差 ${resid} px）。按住层线拖到层板，再点保存`);
+    const a = aisle.solved?.per_view?.L?.resid_px ?? aisle.solved?.cameras?.L?.resid_px;
+    const b = aisle.solved?.per_view?.R?.resid_px ?? aisle.solved?.cameras?.R?.resid_px;
+    showToast(
+      `反解成功（左 ${a ?? '?'} px · 右 ${b ?? '?'} px）。空心圈是墙角投回画面，套不进圈十几像素是正常的。`,
+    );
   };
 
   const draw = useCallback(() => {
@@ -572,6 +609,7 @@ export default function AisleAnnotatePage() {
           }
         }
       }
+      drawSolvedCornerHints(c, v, k, state);
     }
   }, [state, activeView, activeWall, selected]);
 
@@ -630,10 +668,44 @@ export default function AisleAnnotatePage() {
     return best;
   };
 
+  const hitWallCorner = (e, v, aisle = stateRef.current) => {
+    const canvas = cvs[v].current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const [IW, IH] = viewSize(aisle, v);
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    let best = null;
+    (aisle.views?.[v]?.walls || []).forEach((w, wi) => {
+      (w.quad || []).forEach((p, i) => {
+        const x = (p[0] / IW) * rect.width;
+        const y = (p[1] / IH) * rect.height;
+        const d = Math.hypot(x - mx, y - my);
+        if (d <= CORNER_HIT_PX && (!best || d < best.dist)) {
+          best = { kind: 'corner', v, wi, i, dist: d };
+        }
+      });
+    });
+    return best;
+  };
+
   const setLayerCursor = (e, v) => {
     const canvas = cvs[v].current;
     if (!canvas) return;
-    canvas.style.cursor = dragRef.current || hitLayerRow(e, v) ? 'ns-resize' : 'crosshair';
+    const drag = dragRef.current;
+    if (drag?.kind === 'corner') {
+      canvas.style.cursor = 'grabbing';
+      return;
+    }
+    if (drag) {
+      canvas.style.cursor = 'ns-resize';
+      return;
+    }
+    if (hitWallCorner(e, v)) {
+      canvas.style.cursor = 'grab';
+      return;
+    }
+    canvas.style.cursor = hitLayerRow(e, v) ? 'ns-resize' : 'crosshair';
   };
 
   const onCanvasClick = (e, v) => {
@@ -685,13 +757,37 @@ export default function AisleAnnotatePage() {
   const onCanvasDown = (e, v) => {
     if (e.button != null && e.button !== 0) return;
     setActiveView(v);
-    const hit = hitLayerRow(e, v);
-    if (!hit) return;
+    const aisle = stateRef.current;
+    const corner = hitWallCorner(e, v, aisle);
+    const layer = hitLayerRow(e, v, aisle);
+    // 角点优先：标定后外沿层线会贴在四角上，否则永远拖到层线
+    if (corner && (!layer || corner.dist <= layer.dist + 2)) {
+      setActiveWall(corner.wi);
+      dragRef.current = {
+        kind: 'corner',
+        v,
+        wi: corner.wi,
+        i: corner.i,
+        x0: e.clientX,
+        y0: e.clientY,
+      };
+      didDragRef.current = false;
+      skipClickRef.current = true;
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* 非主指针时部分浏览器会拒绝 capture */
+      }
+      e.preventDefault();
+      return;
+    }
+    if (!layer) return;
     dragRef.current = {
-      ...hit,
+      kind: 'layer',
+      ...layer,
       x0: e.clientX,
       y0: e.clientY,
-      tz: hit.tz ?? 0.5,
+      tz: layer.tz ?? 0.5,
     };
     didDragRef.current = false;
     skipClickRef.current = false;
@@ -712,16 +808,26 @@ export default function AisleAnnotatePage() {
     const moved = Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0);
     if (!didDragRef.current && moved < DRAG_START_PX) return;
     const aisle = stateRef.current;
+    const [u, vv] = evtToImg(e, v, aisle);
+    didDragRef.current = true;
+    skipClickRef.current = true;
+    if (drag.kind === 'corner') {
+      const next = structuredClone(aisle);
+      const wall = next.views?.[v]?.walls?.[drag.wi];
+      if (!wall?.quad?.[drag.i]) return;
+      wall.quad[drag.i] = [u, vv];
+      markDirty(next);
+      const canvas = cvs[v].current;
+      if (canvas) canvas.style.cursor = 'grabbing';
+      return;
+    }
     const wall = wallById(aisle.solved, drag.wallId);
     const mesh = meshForWall(aisle, drag.wallId);
     const quad = viewWallQuad(aisle, v, drag.wallId);
     if (!wall || !mesh || !quad) return;
-    const [u, vv] = evtToImg(e, v, aisle);
     const ty = tyAlongQuad(u, vv, quad, drag.tz);
     const [yBot, yTop] = wallYSpan(wall.corners);
     const y = yTop - ty * (yTop - yBot);
-    didDragRef.current = true;
-    skipClickRef.current = true;
     const nextMesh = moveLayerRow(mesh, wall.corners, drag.row, y);
     const next = structuredClone(aisle);
     next.slot_meshes = (aisle.slot_meshes || []).map((m) => (
@@ -741,9 +847,16 @@ export default function AisleAnnotatePage() {
     }
     if (canvas) canvas.style.cursor = 'crosshair';
     dragRef.current = null;
-    if (didDragRef.current) {
-      showToast(`墙${drag.wallId} 层线已调整，尚未保存。请点底部「保存墙${drag.wallId} 标定」`, 'warn');
+    if (!didDragRef.current) return;
+    if (drag.kind === 'corner') {
+      const wallId = stateRef.current?.views?.L?.walls?.[drag.wi]?.wall_id;
+      showToast(
+        `墙${wallId ?? ''} 四角已改，空心圈仍是上次反解。请再点「反解并对齐」`,
+        'warn',
+      );
+      return;
     }
+    showToast(`墙${drag.wallId} 层线已调整，尚未保存。请点底部「保存墙${drag.wallId} 标定」`, 'warn');
   };
 
   const applyBoxId = () => {
@@ -1176,8 +1289,8 @@ export default function AisleAnnotatePage() {
           </div>
           <p className="hint">
             {state.solved?.ok
-              ? '反解已完成。层线画在四角内：按住分层线上下拖，对齐后再保存。'
-              : '左右路四角都齐后点此。成功后会自动生成层线，再拖线对齐层板。'}
+              ? '空心圈=反解墙角投回画面（墙色）；实心点=你标的。模型按面宽×面高的竖直面拟合，残差十几像素套不进圈是正常的，不用死磕。层线画在四角内，按住分层线对齐后再保存。'
+              : '左右路四角都齐后点此。成功后会画出空心圈提示反投影，并自动生成层线。'}
           </p>
           <div className="btns">
             <button type="button" className="pri" onClick={solve} disabled={!grouped}>

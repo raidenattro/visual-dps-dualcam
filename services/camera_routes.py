@@ -1,5 +1,6 @@
 """摄像头与 MediaMTX 相关 API 路由注册。"""
 
+import asyncio
 import json
 import os
 import time
@@ -67,9 +68,12 @@ def register_camera_routes(
 ):
     @router.get("/cameras")
     async def list_cameras(probe: bool = True):
-        items = list_cameras_with_status(
+        # 探测 RTSP / Docker 会阻塞；放到线程里，避免卡住 SSE 骨架推送
+        items = await asyncio.to_thread(
+            list_cameras_with_status,
             camera_ips_file,
             frames_dir,
+            True,
             probe_online=probe,
         )
         return {"status": "success", "items": items}

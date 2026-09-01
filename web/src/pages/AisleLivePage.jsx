@@ -200,7 +200,7 @@ export default function AisleLivePage() {
     try {
       const [a, c] = await Promise.all([
         apiGet(`/api/aisles/${encodeURIComponent(aisleId)}`),
-        apiGet('/api/cameras?probe=1'),
+        apiGet('/api/cameras?probe=false'),
       ]);
       if (a.status !== 'success' || !a.aisle) {
         setMsg(a.error || '巷道不存在');
@@ -215,8 +215,6 @@ export default function AisleLivePage() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 15000);
-    return () => clearInterval(t);
   }, [load]);
 
   const idL = aisle?.cameras?.L?.camera_id || '';
@@ -226,6 +224,29 @@ export default function AisleLivePage() {
   const inferOn = aisleInferOn(camL, camR);
   const inferStatusRaw = aisleInferStatus(camL, camR);
   const inferLabel = AISLE_INFER_LABEL[inferStatusRaw] || AISLE_INFER_LABEL.stopped;
+
+  const refreshCameraMeta = useCallback(async () => {
+    const ids = [idL, idR].filter(Boolean);
+    if (!ids.length) return;
+    try {
+      const rows = await Promise.all(
+        ids.map((cid) => apiGet(`/api/cameras/${encodeURIComponent(cid)}?settings=0`)),
+      );
+      setCameras((prev) => {
+        const next = [...prev];
+        for (const data of rows) {
+          const cam = data?.camera;
+          if (!cam?.id) continue;
+          const i = next.findIndex((c) => c.id === cam.id);
+          if (i >= 0) next[i] = { ...next[i], ...cam };
+          else next.push(cam);
+        }
+        return next;
+      });
+    } catch {
+      /* 与原监控页一致：刷新失败忽略 */
+    }
+  }, [idL, idR]);
 
   useEffect(() => {
     let cancelled = false;
@@ -252,9 +273,9 @@ export default function AisleLivePage() {
 
   useEffect(() => {
     if (inferStatusRaw !== 'starting') return undefined;
-    const t = setInterval(load, 2000);
+    const t = setInterval(refreshCameraMeta, 2000);
     return () => clearInterval(t);
-  }, [inferStatusRaw, load]);
+  }, [inferStatusRaw, refreshCameraMeta]);
 
   useEffect(() => {
     const closers = [];
@@ -305,7 +326,7 @@ export default function AisleLivePage() {
       const r = on ? await startAisleInference(idL, idR) : await stopAisleInference(idL, idR);
       if (!r.ok) setMsg(r.error || (on ? '启动失败' : '停止失败'));
       else setMsg(on ? '左右路检测已启动' : '本巷道检测已停止');
-      await load();
+      await refreshCameraMeta();
     } catch (e) {
       setMsg(formatUserError(e.message));
     } finally {

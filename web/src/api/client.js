@@ -70,31 +70,60 @@ export function cameraPlaybackUrl(cameraId) {
 }
 
 /** SSE：推理 overlay（骨架/碰撞），与姿态帧同频推送 */
-export function openCameraLiveStream(cameraId, { onFrame, onReady, onError } = {}) {
+export function openCameraLiveStream(cameraId, { onFrame, onReady, onError, stallMs = 4000 } = {}) {
   const url = `/api/cameras/${encodeURIComponent(cameraId)}/live/stream`;
-  const es = new EventSource(url);
-  const handleFrame = (ev) => {
-    try {
-      const data = JSON.parse(ev.data);
-      onFrame?.(data);
-    } catch (e) {
-      onError?.(e);
-    }
+  let es = null;
+  let closed = false;
+  let lastAt = Date.now();
+
+  const bind = (socket) => {
+    const handleFrame = (ev) => {
+      lastAt = Date.now();
+      try {
+        const data = JSON.parse(ev.data);
+        onFrame?.(data);
+      } catch (e) {
+        onError?.(e);
+      }
+    };
+    socket.addEventListener('frame', handleFrame);
+    socket.addEventListener('ready', (ev) => {
+      lastAt = Date.now();
+      try {
+        onReady?.(JSON.parse(ev.data));
+      } catch {
+        onReady?.(null);
+      }
+    });
+    socket.onerror = () => {
+      onError?.(new Error('实时 overlay 连接中断'));
+    };
   };
-  es.addEventListener('frame', handleFrame);
-  es.addEventListener('ready', (ev) => {
-    try {
-      onReady?.(JSON.parse(ev.data));
-    } catch {
-      onReady?.(null);
+
+  const connect = () => {
+    if (closed) return;
+    if (es) {
+      es.close();
+      es = null;
     }
-  });
-  es.onerror = () => {
-    onError?.(new Error('实时 overlay 连接中断'));
+    es = new EventSource(url);
+    bind(es);
   };
+
+  connect();
+  const wait = Math.max(1000, Number(stallMs) || 4000);
+  const tick = window.setInterval(() => {
+    if (closed) return;
+    if (Date.now() - lastAt < wait) return;
+    lastAt = Date.now();
+    connect();
+  }, Math.min(2000, wait));
+
   return () => {
-    es.removeEventListener('frame', handleFrame);
-    es.close();
+    closed = true;
+    window.clearInterval(tick);
+    if (es) es.close();
+    es = null;
   };
 }
 
