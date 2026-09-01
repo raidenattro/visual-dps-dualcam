@@ -81,7 +81,51 @@ function CamPane({ cam, label, overlay, status }) {
 }
 
 function emptyOverlay() {
-  return { skeletons: [], inferW: 0, inferH: 0, persons3d: [], collisions: [], alarms: [] };
+  return { skeletons: [], inferW: 0, inferH: 0, persons3d: [], collisions: [], alarms: [], ts: 0 };
+}
+
+function newerOverlay(a, b) {
+  return (Number(a?.ts) || 0) >= (Number(b?.ts) || 0) ? a : b;
+}
+
+function stereoPersons(list) {
+  return (list || []).filter((p) => p?.xyz && p.preview !== true);
+}
+
+function mergeAisleOverlay(prev, data) {
+  const hasP3 = Array.isArray(data.persons_3d);
+  const p3 = hasP3 ? data.persons_3d : [];
+  const stereoIn = stereoPersons(p3);
+  let persons3d = hasP3 ? (stereoIn.length ? stereoIn : p3) : (prev.persons3d || []);
+  const hasCols = Array.isArray(data.collisions);
+  const hasAlarms = Array.isArray(data.alarm_collisions);
+  const cols = hasCols ? data.collisions : prev.collisions;
+  const alarms = hasAlarms ? data.alarm_collisions : prev.alarms;
+  if (hasAlarms && !alarms.length && Array.isArray(persons3d) && persons3d.length) {
+    persons3d = persons3d.map((p) => (
+      p?.wrist_alarm ? { ...p, wrist_alarm: { 9: false, 10: false } } : p
+    ));
+  }
+  return {
+    skeletons: Array.isArray(data.skeletons) ? data.skeletons : [],
+    inferW: Number(data.infer_width) || prev.inferW || 0,
+    inferH: Number(data.infer_height) || prev.inferH || 0,
+    persons3d,
+    collisions: cols,
+    alarms,
+    ts: Number(data.ts) || prev.ts || 0,
+  };
+}
+
+/** 任一 overlay 还有 3D 就画；两路都空才清。避免一路空 pose 把预览骨架闪掉。 */
+function pickOverlay3d(overlayL, overlayR) {
+  const a = overlayL.persons3d || [];
+  const b = overlayR.persons3d || [];
+  if (stereoPersons(a).length) return overlayL;
+  if (stereoPersons(b).length) return overlayR;
+  if (a.length) return overlayL;
+  if (b.length) return overlayR;
+  return newerOverlay(overlayL, overlayR);
 }
 
 function aisleFingerprint(a) {
@@ -148,24 +192,7 @@ export default function AisleLivePage() {
       closers.push(openCameraLiveStream(cameraId, {
         onFrame: (data) => {
           if (!data || typeof data !== 'object') return;
-          setOverlay((prev) => {
-            const p3 = Array.isArray(data.persons_3d) ? data.persons_3d : [];
-            const cols = Array.isArray(data.collisions) ? data.collisions : [];
-            const alarms = Array.isArray(data.alarm_collisions) ? data.alarm_collisions : [];
-            const stereoIn = p3.filter((p) => p?.xyz && p.preview !== true);
-            const prevStereo = (prev.persons3d || []).some((p) => p?.xyz && p.preview !== true);
-            // 单路预览帧不要盖掉已经配上的立体骨架
-            const persons3d = stereoIn.length ? stereoIn : (p3.length && !prevStereo ? p3 : prev.persons3d);
-            const got3d = stereoIn.length > 0 || (p3.length > 0 && !prevStereo);
-            return {
-              skeletons: Array.isArray(data.skeletons) ? data.skeletons : [],
-              inferW: Number(data.infer_width) || prev.inferW || 0,
-              inferH: Number(data.infer_height) || prev.inferH || 0,
-              persons3d,
-              collisions: got3d || cols.length ? cols : prev.collisions,
-              alarms: got3d || alarms.length ? alarms : prev.alarms,
-            };
-          });
+          setOverlay((prev) => mergeAisleOverlay(prev, data));
         },
       }));
     };
@@ -176,19 +203,13 @@ export default function AisleLivePage() {
     };
   }, [idL, idR, inferStatusRaw]);
 
-  const persons3d = (() => {
-    const a = overlayL.persons3d || [];
-    const b = overlayR.persons3d || [];
-    const pick = (list) => list.filter((p) => p?.xyz && p.preview !== true);
-    const sa = pick(a);
-    if (sa.length) return sa;
-    const sb = pick(b);
-    if (sb.length) return sb;
-    return a.length ? a : b;
-  })();
-  const collisions = overlayL.collisions?.length ? overlayL.collisions : overlayR.collisions;
-  const alarms = overlayL.alarms?.length ? overlayL.alarms : overlayR.alarms;
   const hasLiveSkel = (overlayL.skeletons?.length || 0) + (overlayR.skeletons?.length || 0) > 0;
+  const src3d = pickOverlay3d(overlayL, overlayR);
+  const raw3d = src3d.persons3d || [];
+  const stereo = stereoPersons(raw3d);
+  const persons3d = stereo.length ? stereo : raw3d;
+  const collisions = src3d.collisions || [];
+  const alarms = src3d.alarms || [];
   const inferStatus = hasLiveSkel && inferStatusRaw === 'starting' ? 'running' : inferStatusRaw;
   const inferLabelUi = AISLE_INFER_LABEL[inferStatus] || inferLabel;
   const hudText = (alarms || []).length

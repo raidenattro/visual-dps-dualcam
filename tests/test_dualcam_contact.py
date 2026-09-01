@@ -63,6 +63,39 @@ def test_processor_empty_without_solve():
     assert preview["alarm_collisions"] == []
 
 
+def test_process_pair_empty_without_prior_hold(calib):
+    aisle = {
+        "aisle_id": "t",
+        "solved": calib["solved"],
+        "cameras": {"L": {"camera_id": "cam1"}, "R": {"camera_id": "cam2"}},
+        "slot_meshes": calib.get("slot_meshes") or [],
+        "views": calib.get("views") or {},
+    }
+    proc = DualcamProcessor(aisle)
+    out = proc.process_pair({"frame_idx": 2, "persons": []}, {"frame_idx": 2, "persons": []})
+    assert out["persons_3d"] == []
+    assert proc._holds == []
+
+
+def test_hold_keeps_then_clears_like_dump_skel3d():
+    """闪断沿用 8 帧，第 9 帧空才丢掉（dump_skel3d.HOLD_FRAMES）。"""
+    proc = DualcamProcessor({"aisle_id": "x", "solved": {"ok": False}, "cameras": {}})
+    xyz = [[0.0, 1.0, 1.0] for _ in range(17)]
+    person = {"xyz": xyz, "src": ["stereo"] * 17, "preview": False, "wrist_alarm": {9: False, 10: False}}
+    first = proc._apply_hold([person])
+    assert len(first) == 1
+    assert not first[0].get("held")
+    for i in range(8):
+        held = proc._apply_hold([])
+        assert len(held) == 1, f"empty frame {i + 1} should hold"
+        assert held[0].get("held") is True
+        assert held[0].get("preview") is True
+    assert proc._apply_hold([]) == []
+    assert proc._holds == []
+    assert proc._prev_xyz == {}
+    assert proc._prefer == []
+
+
 def test_contact_src_excludes_mono():
     assert "Lmono" not in CONTACT_SRC
     assert "stereo" in CONTACT_SRC

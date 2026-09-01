@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 import numpy as np
@@ -33,6 +34,10 @@ def _kpt_uv_score(k: np.ndarray, s: np.ndarray, idx: int) -> tuple[np.ndarray, f
 
 # 单路预览不抬五官：贴墙射线会把鼻子/眼睛拉到货架平面，骨线变成「长射线」
 FACE_JOINTS = frozenset({0, 1, 2, 3, 4})
+# 与 pick-state dump_skel3d 一致：单路/检测闪断沿用上一帧 3D，满 8 帧再丢
+HOLD_FRAMES = 8
+HOLD_MATCH_M = 0.55
+TORSO_JOINTS = (5, 6, 11, 12)
 
 
 def _scale_pose(pose: dict, calib_w: int, calib_h: int) -> tuple[dict, dict]:
@@ -46,6 +51,18 @@ def _scale_pose(pose: dict, calib_w: int, calib_h: int) -> tuple[dict, dict]:
     out = dict(pose)
     out["persons"] = scaled
     return out, meta
+
+
+def _torso_centroid(xyz: list) -> np.ndarray | None:
+    pts = []
+    for i in TORSO_JOINTS:
+        if xyz and i < len(xyz) and xyz[i] and len(xyz[i]) >= 3:
+            pts.append(np.asarray(xyz[i][:3], float))
+    if len(pts) < 2:
+        pts = [np.asarray(p[:3], float) for p in (xyz or []) if p and len(p) >= 3]
+    if not pts:
+        return None
+    return np.mean(pts, axis=0)
 
 
 class DualcamProcessor:
@@ -66,6 +83,7 @@ class DualcamProcessor:
         self._prev_xyz: dict[tuple, np.ndarray] = {}
         self._new_prev: dict[tuple, np.ndarray] = {}
         self._prefer: list[tuple[np.ndarray, np.ndarray]] = []
+        self._holds: list[tuple[dict, int, np.ndarray]] = []
         cams = aisle.get("cameras") or {}
         self.cam_l = str((cams.get("L") or {}).get("camera_id") or "")
         self.cam_r = str((cams.get("R") or {}).get("camera_id") or "")
@@ -119,7 +137,49 @@ class DualcamProcessor:
             wrist_tokens[ji] = toks
         return xyz, srcs, wrist_tokens
 
-    def process_single(self, role: str, pose: dict) -> dict[str, Any]:
+    def _clear_hold(self) -> None:
+        self._holds = []
+        self._prev_xyz = {}
+        self._prefer = []
+
+    def _apply_hold(self, people: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """续帧匹配：对不上时沿用上一帧 3D，最多 HOLD_FRAMES 帧（与 dump_skel3d 相同）。"""
+        out = list(people or [])
+        cents = [_torso_centroid(p.get("xyz") or []) for p in out]
+        used: set[int] = set()
+        new_holds: list[tuple[dict, int, np.ndarray]] = []
+        for prev, miss, pt in self._holds:
+            best, best_d = None, HOLD_MATCH_M
+            for ci, c in enumerate(cents):
+                if ci in used or c is None:
+                    continue
+                d = float(np.linalg.norm(pt - c))
+                if d < best_d:
+                    best, best_d = ci, d
+            if best is not None:
+                used.add(best)
+                new_holds.append((out[best], 0, cents[best]))
+            elif miss + 1 <= HOLD_FRAMES:
+                held = copy.deepcopy(prev)
+                held["held"] = True
+                held["preview"] = True
+                held["wrist_alarm"] = {9: False, 10: False}
+                out.append(held)
+                new_holds.append((held, miss + 1, pt))
+        for ci, p in enumerate(out):
+            if ci in used or p.get("held"):
+                continue
+            c = cents[ci] if ci < len(cents) else _torso_centroid(p.get("xyz") or [])
+            if c is None:
+                continue
+            new_holds.append((p, 0, c))
+        self._holds = new_holds
+        if not new_holds:
+            self._prev_xyz = {}
+            self._prefer = []
+        return out
+
+    def process_single(self, role: str, pose: dict, *, apply_hold: bool = True) -> dict[str, Any]:
         """对侧未到时的 3D 预览：单路抬到墙平面，不报警。"""
         role = str(role or "").strip().upper() or "L"
         calib = self.calib_l if role == "L" else self.calib_r
@@ -151,7 +211,7 @@ class DualcamProcessor:
                 )
             people.append({"xyz": xyz, "src": srcs, "preview": True, "wrist_alarm": {9: False, 10: False}})
         self._prev_xyz = {**self._prev_xyz, **self._new_prev}
-        out["persons_3d"] = people
+        out["persons_3d"] = self._apply_hold(people) if apply_hold else people
         return out
 
     def ready(self) -> bool:
@@ -202,6 +262,7 @@ class DualcamProcessor:
             "scale_r": meta_r,
         }
         if not self.ready():
+            self._clear_hold()
             return empty
 
         fl = keypoints_to_ks(pose_ls.get("persons") or [])
@@ -209,9 +270,9 @@ class DualcamProcessor:
         pairs = pick_pairs(fl, fr, self.cams, prefer=self._prefer, aabb=self.aabb)
         if not pairs:
             people = []
-            people.extend(self.process_single("L", pose_l).get("persons_3d") or [])
-            people.extend(self.process_single("R", pose_r).get("persons_3d") or [])
-            empty["persons_3d"] = people
+            people.extend(self.process_single("L", pose_l, apply_hold=False).get("persons_3d") or [])
+            people.extend(self.process_single("R", pose_r, apply_hold=False).get("persons_3d") or [])
+            empty["persons_3d"] = self._apply_hold(people)
             empty["preview"] = True
             return empty
         tokens: list[str] = []
@@ -240,6 +301,7 @@ class DualcamProcessor:
 
         self._prefer = new_prefer
         self._prev_xyz = self._new_prev
+        persons_3d = self._apply_hold(persons_3d)
         return {
             "frame_idx": frame_idx,
             "collisions": list(tokens),

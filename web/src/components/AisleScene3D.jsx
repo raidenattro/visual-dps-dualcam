@@ -113,6 +113,7 @@ function updateSkelRig(rig, people) {
     const xyz = person?.xyz;
     if (!xyz) {
       slot.g.visible = false;
+      slot.geo.setDrawRange(0, 0);
       continue;
     }
     const preview = isPreviewPerson(person);
