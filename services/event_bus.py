@@ -45,6 +45,7 @@ def build_event_frame(
     collisions: list,
     alarm_collisions: list,
     skeletons: list | None = None,
+    persons_3d: list | None = None,
 ) -> dict[str, Any]:
     frame: dict[str, Any] = {
         "schema": EVENT_SCHEMA_VERSION,
@@ -57,6 +58,8 @@ def build_event_frame(
     }
     if skeletons is not None:
         frame["skeletons"] = list(skeletons)
+    if persons_3d is not None:
+        frame["persons_3d"] = list(persons_3d)
     return frame
 
 
@@ -67,6 +70,7 @@ def publish_event_frame(
     collisions: list,
     alarm_collisions: list,
     skeletons: list | None = None,
+    persons_3d: list | None = None,
 ) -> bool:
     cid = str(camera_id or "").strip()
     if not cid:
@@ -77,6 +81,7 @@ def publish_event_frame(
         collisions=collisions,
         alarm_collisions=alarm_collisions,
         skeletons=skeletons,
+        persons_3d=persons_3d,
     )
     payload = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
     try:

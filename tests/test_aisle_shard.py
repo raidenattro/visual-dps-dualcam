@@ -41,3 +41,14 @@ def test_aisle_env_overrides_camera_hash(monkeypatch):
     monkeypatch.setenv("POSE_LOGICAL_SHARD_COUNT", "16")
     monkeypatch.setenv("AISLE_ID", "forced-aisle")
     assert stream_key_for_camera("whatever") == stream_key_for_aisle("forced-aisle")
+
+
+def test_cam1_cam2_must_use_aisle_shard(monkeypatch):
+    """现场 cam1/cam2 按 camera_id 会落到 6 和 12，aisle-1 在 7；不设 AISLE_ID 就永远配不上。"""
+    monkeypatch.setenv("POSE_LOGICAL_SHARD_COUNT", "16")
+    monkeypatch.delenv("AISLE_ID", raising=False)
+    assert logical_shard_id("cam1") != logical_shard_id("cam2")
+    assert logical_shard_id("cam1") != logical_shard_id("aisle-1")
+    assert logical_shard_id("cam2") != logical_shard_id("aisle-1")
+    monkeypatch.setenv("AISLE_ID", "aisle-1")
+    assert stream_key_for_camera("cam1") == stream_key_for_camera("cam2") == stream_key_for_aisle("aisle-1")

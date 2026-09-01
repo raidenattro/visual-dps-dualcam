@@ -55,6 +55,7 @@ def merge_live_frame(pose: dict[str, Any] | None, event: dict[str, Any] | None) 
         "infer_height": int(pose.get("infer_height") or 0),
         "frame_idx": int(pose.get("frame_idx") or event.get("frame_idx") or 0),
         "skeletons": list(skeletons),
+        "persons_3d": list(event.get("persons_3d") or []),
         "collisions": list(event.get("collisions") or []),
         "alarm_collisions": list(event.get("alarm_collisions") or []),
     }
@@ -208,7 +209,14 @@ class LiveHub:
             self._subscribers.setdefault(cid, set()).add(queue)
 
         try:
-            snap = await asyncio.to_thread(get_snapshot, cid)
+            pose = await asyncio.to_thread(get_pose_snapshot, cid)
+            event = await asyncio.to_thread(get_event_snapshot, cid)
+            async with self._lock:
+                if pose:
+                    self._pose_cache[cid] = pose
+                if event:
+                    self._event_cache[cid] = event
+            snap = merge_live_frame(pose, event) if (pose or event) else None
             if snap:
                 yield format_sse("frame", json.dumps(snap, ensure_ascii=False, separators=(",", ":")))
             yield format_sse("ready", json.dumps({"camera_id": cid, "ts": time.time()}))

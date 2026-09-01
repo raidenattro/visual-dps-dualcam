@@ -1,6 +1,7 @@
 """按摄像头启停独立推理 Docker 容器。"""
 
 import json
+import logging
 import os
 import time
 
@@ -17,7 +18,13 @@ from services.inference_backends.model_registry import (
 
 _LITE_BACKENDS = LITE_BACKEND_FAMILIES
 from services.annotation_service import ensure_camera_annotation_file
-from services.runtime_config_service import effective_pipeline_log_enabled, get_effective_settings
+from services.runtime_config_service import (
+    effective_pipeline_log_enabled,
+    ensure_runtime_overlay,
+    get_effective_settings,
+)
+
+logger = logging.getLogger(__name__)
 
 INFERENCE_CONTAINER_PREFIX = os.environ.get("INFERENCE_CONTAINER_PREFIX", "visual-dps-infer-")
 INFERENCE_IMAGE = os.environ.get("INFERENCE_IMAGE", "").strip()
@@ -177,8 +184,13 @@ def _compose_inference_status(
                 "exit_code": exit_code,
             }
         )
-        if mapped == "running" and worker.get("state") == "running":
+        worker_state = str(worker.get("state") or "").strip()
+        if mapped == "running" and worker_state == "running":
             base["message"] = worker.get("message") or "推理运行中"
+        elif mapped == "running" and worker_state == "starting":
+            # 仅模型加载中保持 starting；status 文件空时不要一直挂「启动中」
+            base["status"] = "starting"
+            base["message"] = worker.get("message") or "骨架推理启动中"
         elif mapped == "error":
             if state_error:
                 base["message"] = state_error[:240]
@@ -319,6 +331,7 @@ def start_inference_container(camera: dict, request=None) -> dict:
         pass
 
     app_config = load_app_config()
+    ensure_runtime_overlay(app_config)
     paths = app_config.get("paths", {})
     json_dir = str(paths.get("json_dir", "localdata/json"))
     default_json = str(paths.get("default_json_file", INFERENCE_JSON_PATH))
@@ -348,6 +361,7 @@ def start_inference_container(camera: dict, request=None) -> dict:
             "services/inference_backends/rtmpose_onnx_backend.py",
             "services/pipeline_log.py",
             "services/pose_bus.py",
+            "services/aisle_store.py",
             "services/event_engine/sharding.py",
             "services/inference_backends/onnx_assets.py",
             "services/inference_backends/yolo_pose_backend.py",
@@ -373,7 +387,8 @@ def start_inference_container(camera: dict, request=None) -> dict:
         "MEDIAMTX_INTERNAL_HOST": os.environ.get("MEDIAMTX_INTERNAL_HOST", "mediamtx"),
         "INFERENCE_FRAME_RATE": str(effective.get("inference.frame_rate", 15)),
         "INFERENCE_HEIGHT": str(effective.get("inference.height", 480)),
-        "INFERENCE_POSE_FRAME_INTERVAL": str(effective.get("inference.pose_frame_interval", 3)),
+        "INFERENCE_POSE_FRAME_INTERVAL": str(effective.get("inference.pose_frame_interval", 2)),
+        "RUNTIME_CONFIG_FILE": "/app/localdata/runtime_config.json",
         "INFERENCE_DEBUG_VISUAL": "1" if effective.get("debug-info.enabled") else "0",
         "PIPELINE_LOG": "1" if effective_pipeline_log_enabled(app_config, camera) else "0",
         "RTSP_CAPTURE_BACKEND": rtsp_backend,
@@ -384,9 +399,17 @@ def start_inference_container(camera: dict, request=None) -> dict:
         "POSE_STREAM_KEY_PREFIX": os.environ.get("POSE_STREAM_KEY_PREFIX", "pose:stream"),
         "POSE_STREAM_GROUP": os.environ.get("POSE_STREAM_GROUP", "event-workers"),
         "POSE_STREAM_MAXLEN": os.environ.get("POSE_STREAM_MAXLEN", "2000"),
+        "JSON_DIR": "/app/localdata/json",
         "AISLE_ID": str((grouped or {}).get("aisle_id") or ""),
         "AISLE_ROLE": str((grouped or {}).get("role") or ""),
     }
+    logger.info(
+        "推理容器挂载 HOST_PROJECT_ROOT=%s camera=%s aisle=%s role=%s",
+        HOST_PROJECT_ROOT,
+        camera_id,
+        env["AISLE_ID"],
+        env["AISLE_ROLE"],
+    )
     env.update(infer_thread_env_for_container())
     tz = os.environ.get("TZ", "Asia/Shanghai").strip() or "Asia/Shanghai"
     env["TZ"] = tz
@@ -473,7 +496,7 @@ def start_inference_container(camera: dict, request=None) -> dict:
             {
                 "camera_id": camera_id,
                 "state": "starting",
-                "message": "正在启动",
+                "message": "骨架推理启动中",
                 "updated_at": time.time(),
                 "stream_url": stream_url,
                 "backend": preset.id,
@@ -486,6 +509,14 @@ def start_inference_container(camera: dict, request=None) -> dict:
 
     from services.event_service import record_event
 
+    logger.info(
+        "推理容器注入 camera=%s pose_frame_interval=%s frame_rate=%s height=%s runtime=%s",
+        camera_id,
+        env.get("INFERENCE_POSE_FRAME_INTERVAL"),
+        env.get("INFERENCE_FRAME_RATE"),
+        env.get("INFERENCE_HEIGHT"),
+        env.get("RUNTIME_CONFIG_FILE"),
+    )
     record_event(
         "inference.started",
         camera_id=camera_id,

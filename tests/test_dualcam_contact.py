@@ -57,8 +57,38 @@ def test_processor_empty_without_solve():
     proc = DualcamProcessor({"aisle_id": "x", "solved": {"ok": False}, "cameras": {}})
     out = proc.process_pair({"frame_idx": 1, "persons": []}, {"frame_idx": 1, "persons": []})
     assert out["alarm_collisions"] == []
+    assert out["persons_3d"] == []
+    preview = proc.process_single("L", {"frame_idx": 1, "persons": []})
+    assert preview["persons_3d"] == []
+    assert preview["alarm_collisions"] == []
 
 
 def test_contact_src_excludes_mono():
     assert "Lmono" not in CONTACT_SRC
     assert "stereo" in CONTACT_SRC
+
+
+def test_process_single_skips_face_joints(calib):
+    """单路预览不得抬鼻子/眼睛，否则 3D 会出现射向墙面的长线。"""
+    aisle = {
+        "aisle_id": "t",
+        "solved": calib["solved"],
+        "cameras": {"L": {"camera_id": "cam1"}, "R": {"camera_id": "cam2"}},
+        "slot_meshes": calib.get("slot_meshes") or [],
+        "views": calib.get("views") or {},
+    }
+    proc = DualcamProcessor(aisle)
+    kpts = [[640.0, 360.0, 0.95] for _ in range(17)]
+    pose = {
+        "frame_idx": 1,
+        "persons": [{"keypoints": kpts}],
+        "infer_width": 1280,
+        "infer_height": 720,
+    }
+    for role in ("L", "R"):
+        people = proc.process_single(role, pose).get("persons_3d") or []
+        if not people:
+            continue
+        xyz = people[0].get("xyz") or []
+        for ji in range(5):
+            assert xyz[ji] is None, f"{role} 单路不应抬五官关节 {ji}"

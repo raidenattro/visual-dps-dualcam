@@ -22,6 +22,7 @@ class DualcamRedisWorker(EventRedisWorker):
         self._aisle_proc: dict[str, DualcamProcessor] = {}
         self._aisle_mtime: dict[str, float] = {}
         self._pending: dict[str, dict[str, tuple[float, dict]]] = {}
+        self._last_role_mono: dict[str, dict[str, float]] = {}
         self._pair_window = pair_window_sec(app_config)
         self._last_drop_log: dict[str, float] = {}
         logger.info("dualcam pair_window=%.3fs", self._pair_window)
@@ -93,44 +94,89 @@ class DualcamRedisWorker(EventRedisWorker):
         aisle_id = g["aisle_id"]
         role = g["role"]
         if not self._owns_aisle(aisle_id):
+            self._note(
+                f"shard:{camera_id}",
+                "dualcam worker: camera=%s 巷道 %s 不在本实例分片上（pose 仍按 camera_id 分片时会对不上），丢弃",
+                camera_id,
+                aisle_id,
+            )
             return
 
         window = self._refresh_pair_window()
         now = float(pose.get("ts") or time.time())
+        now_mono = time.monotonic()
         bucket = self._pending.setdefault(aisle_id, {})
+        seen = self._last_role_mono.setdefault(aisle_id, {})
+        seen[role] = now_mono
         bucket[role] = (now, pose)
 
         stale = [k for k, (t, _) in bucket.items() if now - t > window * 3]
         for k in stale:
             bucket.pop(k, None)
 
+        proc = self._aisle_processor(aisle_id)
+
+        async def _publish(result: dict) -> None:
+            if proc is None:
+                return
+            frame_idx = int(result.get("frame_idx") or 0)
+            collisions = result.get("collisions") or []
+            alarm_collisions = result.get("alarm_collisions") or []
+            skel_map = {
+                proc.cam_l: result.get("skeletons_l"),
+                proc.cam_r: result.get("skeletons_r"),
+            }
+            people = result.get("persons_3d") or []
+            for cid in (proc.cam_l, proc.cam_r):
+                if not cid:
+                    continue
+                await asyncio.to_thread(
+                    publish_event_frame,
+                    cid,
+                    frame_idx=frame_idx,
+                    collisions=collisions,
+                    alarm_collisions=alarm_collisions,
+                    skeletons=skel_map.get(cid),
+                    persons_3d=people,
+                )
+
         if "L" not in bucket or "R" not in bucket:
             missing = "R" if "L" in bucket else "L"
+            other_last = seen.get(missing)
+            # 对侧从未到过，或刚还在出帧：等配对，不要立刻推单路
+            if other_last is None or (now_mono - other_last) <= max(window * 4, 0.6):
+                return
             self._note(
                 f"wait:{aisle_id}:{missing}",
-                "dualcam worker: 巷道 %s 只收到 %s，等待对侧 %s（窗=%.3fs）。请确认左右路都已开检测。",
+                "dualcam worker: 巷道 %s 只收到 %s，等待对侧 %s 已 %.2fs（窗=%.3fs）。单路 3D 预览仍推送。",
                 aisle_id,
                 role,
                 missing,
+                now_mono - other_last,
                 window,
             )
+            if proc is not None and proc.ready():
+                preview = await asyncio.to_thread(proc.process_single, role, pose)
+                await _publish(preview)
             return
         t_l, pose_l = bucket["L"]
         t_r, pose_r = bucket["R"]
         if abs(t_l - t_r) > window:
             self._note(
                 f"skew:{aisle_id}",
-                "dualcam worker: 巷道 %s L/R 时差 %.3fs 超过配对窗 %.3fs，本帧丢弃。可在设置里加大姿态间隔对应的配对窗系数。",
+                "dualcam worker: 巷道 %s L/R 时差 %.3fs 超过配对窗 %.3fs，本帧改单路预览。",
                 aisle_id,
                 abs(t_l - t_r),
                 window,
             )
+            if proc is not None and proc.ready():
+                preview = await asyncio.to_thread(proc.process_single, role, pose)
+                await _publish(preview)
             return
 
         bucket.pop("L", None)
         bucket.pop("R", None)
 
-        proc = self._aisle_processor(aisle_id)
         if proc is None or not proc.ready():
             reason = proc.not_ready_reason() if proc else f"巷道 {aisle_id} 标定文件读失败"
             self._note(f"ready:{aisle_id}", "dualcam worker: %s，丢弃配对帧", reason)
@@ -139,46 +185,30 @@ class DualcamRedisWorker(EventRedisWorker):
         started = time.monotonic()
         result = await asyncio.to_thread(proc.process_pair, pose_l, pose_r)
         worker_ms = round((time.monotonic() - started) * 1000.0, 1)
-        frame_idx = int(result.get("frame_idx") or 0)
         collisions = result.get("collisions") or []
         alarm_collisions = result.get("alarm_collisions") or []
 
         log_pipeline_stage(
             "worker_done",
             camera_id=aisle_id,
-            frame_idx=frame_idx,
+            frame_idx=int(result.get("frame_idx") or 0),
             worker_ms=worker_ms,
             hits=len(collisions),
             alarms=len(alarm_collisions),
         )
 
-        skel_map = {
-            proc.cam_l: result.get("skeletons_l"),
-            proc.cam_r: result.get("skeletons_r"),
-        }
-        for cid in (proc.cam_l, proc.cam_r):
-            if not cid:
-                continue
-            await asyncio.to_thread(
-                publish_event_frame,
-                cid,
-                frame_idx=frame_idx,
-                collisions=collisions,
-                alarm_collisions=alarm_collisions,
-                skeletons=skel_map.get(cid),
-            )
-            # 回调 JSON 契约不变；只固定走左路，避免 L/R 各报一次
-            if self.callback_reporter and alarm_collisions and cid == proc.cam_l:
-                upload_tag = f"infer_{cid}"
-                video_time_sec = frame_idx / max(self._video_fps, 1.0)
-                for collision in alarm_collisions:
-                    shelf_code, box_id = parse_collision_token(collision)
-                    if not box_id:
-                        continue
-                    self.callback_reporter.enqueue_pick_finished(
-                        box_id=box_id,
-                        frame_idx=frame_idx,
-                        video_time_sec=video_time_sec,
-                        upload_tag=upload_tag,
-                        shelf_code=shelf_code or None,
-                    )
+        await _publish(result)
+        if self.callback_reporter and alarm_collisions and proc.cam_l:
+            upload_tag = f"infer_{proc.cam_l}"
+            video_time_sec = int(result.get("frame_idx") or 0) / max(self._video_fps, 1.0)
+            for collision in alarm_collisions:
+                shelf_code, box_id = parse_collision_token(collision)
+                if not box_id:
+                    continue
+                self.callback_reporter.enqueue_pick_finished(
+                    box_id=box_id,
+                    frame_idx=int(result.get("frame_idx") or 0),
+                    video_time_sec=video_time_sec,
+                    upload_tag=upload_tag,
+                    shelf_code=shelf_code or None,
+                )
