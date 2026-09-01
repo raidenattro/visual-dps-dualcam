@@ -309,6 +309,9 @@ def describe_stream_error(
 
 def reload_mediamtx_runtime(cameras: List[dict]) -> dict:
     """通过 Control API 热更新托管路径；不可用时静默跳过（仍依赖配置文件热重载）。"""
+    # pytest 会走 create_camera → 本函数；禁止动本机正在跑的 MediaMTX（否则会删掉 cam1/cam2）
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return {"reloaded": False, "skipped": True, "reason": "pytest"}
     mtx_paths = cameras_needing_mediamtx_paths(cameras)
     if not MEDIAMTX_API_URL:
         return {"reloaded": False, "skipped": True, "reason": "api_disabled"}

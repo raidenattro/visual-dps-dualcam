@@ -4,9 +4,12 @@ import {
   meshCells,
   moveLayerRow,
   projectPix,
+  rayPlane,
+  vertIndex,
   wallById,
-  wallYSpan,
+  wallPlane,
 } from '../lib/dualcamGeom.js';
+import { letterboxParams } from '../lib/previewLayout.js';
 import { formatUserError } from '../lib/userFacingText.js';
 import './AisleAnnotatePage.css';
 
@@ -21,6 +24,8 @@ const HINT = CORNERS.map((c) => `${c.n} ${c.title}`);
 const OPP_CORNER = [1, 0, 3, 2];
 const FALLBACK_W = 1280;
 const FALLBACK_H = 720;
+/** 抽帧按上限高度，再把 image_size 写成返回的真实宽高（不沿用旧标定高度）。 */
+const GRAB_HEIGHT = 720;
 /** 层线命中 / 开始拖：屏幕像素。未超过拖动阈值的点击不得改线。 */
 const LAYER_HIT_PX = 10;
 const CORNER_HIT_PX = 16;
@@ -46,7 +51,7 @@ function wallPalette(wallId) {
 }
 
 /** 空心圈：把反解出的 3D 矩形墙角投回该路画面，仅作残差提示，不参与编辑。 */
-function drawSolvedCornerHints(c, role, k, aisle) {
+function drawSolvedCornerHints(c, role, layout, aisle) {
   const sol = aisle?.solved;
   if (!sol?.ok) return;
   const cam = sol.cameras?.[role];
@@ -57,12 +62,10 @@ function drawSolvedCornerHints(c, role, k, aisle) {
     order.forEach((ci, i) => {
       const p = (w.corners || [])[ci];
       if (!p) return;
-      const uv = projectPix(p, cam);
-      if (!uv) return;
-      const x = uv[0] * k;
-      const y = uv[1] * k;
+      const xy = mapCalibToCanvas(projectPix(p, cam), layout);
+      if (!xy) return;
       c.beginPath();
-      c.arc(x, y, 11, 0, Math.PI * 2);
+      c.arc(xy[0], xy[1], 11, 0, Math.PI * 2);
       c.strokeStyle = pal.line;
       c.lineWidth = 1.8;
       c.stroke();
@@ -70,7 +73,7 @@ function drawSolvedCornerHints(c, role, k, aisle) {
       c.font = '10px sans-serif';
       c.textAlign = 'center';
       c.textBaseline = 'bottom';
-      c.fillText(String(i + 1), x, y - 13);
+      c.fillText(String(i + 1), xy[0], xy[1] - 13);
     });
   }
 }
@@ -117,7 +120,52 @@ function viewWallQuad(aisle, role, wallId) {
   return quad.length >= 4 ? quad : null;
 }
 
-/** 与 3D bilinear 同一约定：ty 顶→底，tz 远→近。层线画在 2D 四角内，避免 3D 矩形投影跑出标注。 */
+function camOf(aisle, role) {
+  return aisle?.solved?.ok ? aisle.solved?.cameras?.[role] || null : null;
+}
+
+/**
+ * 底图 object-fit:contain：叠层跟照片内容框对齐（均匀缩放 + 黑边），禁止 kx≠ky 铺满 pane。
+ * 标定像素先铺到底图自然尺寸（同图只是均匀缩放），再 contain 进 CSS 盒子。
+ */
+function overlayLayout(canvas, IW, IH) {
+  const rect = canvas.getBoundingClientRect();
+  const dw = Math.max(2, Math.floor(rect.width));
+  const dh = Math.max(2, Math.floor(rect.height));
+  const img = canvas.parentElement?.querySelector('img.bg');
+  const nw = Number(img?.naturalWidth) || 0;
+  const nh = Number(img?.naturalHeight) || 0;
+  const srcW = nw > 1 ? nw : IW;
+  const srcH = nh > 1 ? nh : IH;
+  const box = letterboxParams(srcW, srcH, dw, dh);
+  return {
+    dw,
+    dh,
+    srcW,
+    srcH,
+    sx: srcW / Math.max(IW, 1e-6),
+    sy: srcH / Math.max(IH, 1e-6),
+    ...box,
+  };
+}
+
+function mapCalibToCanvas(uv, layout) {
+  if (!uv || uv.length < 2 || !layout) return null;
+  return [
+    uv[0] * layout.sx * layout.scale + layout.padX,
+    uv[1] * layout.sy * layout.scale + layout.padY,
+  ];
+}
+
+function unmapCanvasToCalib(mx, my, layout) {
+  const s = Math.max(layout.scale, 1e-9);
+  return [
+    (mx - layout.padX) / s / layout.sx,
+    (my - layout.padY) / s / layout.sy,
+  ];
+}
+
+/** 墙名标签：只在 2D 四角附近摆字，层线不用这个。 */
 function lerpQuad(quad, ty, tz) {
   if (!quad || quad.length < 4) return null;
   const [c0, c1, c2, c3] = quad;
@@ -125,20 +173,6 @@ function lerpQuad(quad, ty, tz) {
     (1 - ty) * (1 - tz) * c0[0] + (1 - ty) * tz * c1[0] + ty * tz * c2[0] + ty * (1 - tz) * c3[0],
     (1 - ty) * (1 - tz) * c0[1] + (1 - ty) * tz * c1[1] + ty * tz * c2[1] + ty * (1 - tz) * c3[1],
   ];
-}
-
-function meshRowTys(mesh, solvedWall) {
-  const rows = Number(mesh?.rows) || 0;
-  if (rows < 1) return [];
-  const corners = solvedWall?.corners;
-  const ys = mesh?.row_ys;
-  if (corners?.length >= 4 && Array.isArray(ys) && ys.length >= 2) {
-    const yTop = Math.max(...corners.map((p) => Number(p[1])));
-    const yBot = Math.min(...corners.map((p) => Number(p[1])));
-    const h = yTop - yBot;
-    return ys.map((y) => (Math.abs(h) < 1e-9 ? 0 : (yTop - Number(y)) / h));
-  }
-  return Array.from({ length: rows + 1 }, (_, i) => i / rows);
 }
 
 function pointInPoly(u, v, pts) {
@@ -150,21 +184,6 @@ function pointInPoly(u, v, pts) {
     }
   }
   return inside;
-}
-
-function tzOnSeg(u, v, a, b) {
-  const dx = b[0] - a[0];
-  const dy = b[1] - a[1];
-  const len2 = dx * dx + dy * dy;
-  if (len2 < 1e-9) return 0;
-  return Math.min(1, Math.max(0, ((u - a[0]) * dx + (v - a[1]) * dy) / len2));
-}
-
-function tyAlongQuad(u, v, quad, tz) {
-  const top = lerpQuad(quad, 0, tz);
-  const bot = lerpQuad(quad, 1, tz);
-  if (!top || !bot) return 0;
-  return tzOnSeg(u, v, top, bot);
 }
 
 function shelfCodeOf(aisle, wallId) {
@@ -235,6 +254,7 @@ export default function AisleAnnotatePage() {
   const [boxIdEdit, setBoxIdEdit] = useState('');
   const [frameAt, setFrameAt] = useState({});
   const [grabbing, setGrabbing] = useState(false);
+  const [importing, setImporting] = useState(false);
   const dragRef = useRef(null);
   const didDragRef = useRef(false);
   const skipClickRef = useRef(false);
@@ -290,6 +310,34 @@ export default function AisleAnnotatePage() {
     setCamR(R);
   };
 
+  const importPickstateCalib = async () => {
+    if (!aisleId) {
+      setMsg('请先打开巷道');
+      return;
+    }
+    if (!window.confirm('用实验仓 dual_1-3 覆盖本巷道四角、层线和反解？摄像头绑定保持不变。')) {
+      return;
+    }
+    setImporting(true);
+    try {
+      const d = await apiPost(`/api/aisles/${encodeURIComponent(aisleId)}/import-calib`, {});
+      if (d.status !== 'success' || !d.aisle) {
+        showToast(d.error || '导入失败', 'err');
+        return;
+      }
+      applyAisle(d.aisle);
+      const residL = d.aisle.solved?.cameras?.L?.resid_px;
+      const residR = d.aisle.solved?.cameras?.R?.resid_px;
+      showToast(
+        `已导入实验仓标定（残差 左 ${residL ?? '?'} px · 右 ${residR ?? '?'} px）。抽帧后对照空心圈即可。`,
+      );
+    } catch (e) {
+      showToast(formatUserError(e.message), 'err');
+    } finally {
+      setImporting(false);
+    }
+  };
+
   useEffect(() => {
     apiGet('/api/cameras?probe=0').then((d) => setCameras(d.items || [])).catch(() => {});
     apiGet('/api/aisles')
@@ -328,13 +376,13 @@ export default function AisleAnnotatePage() {
     setGrabbing(true);
     try {
       const stamps = {};
+      const sizes = {};
       const errs = [];
       await Promise.all(
         targets.map(async ([role, id]) => {
-          const h = viewSize(aisleState, role)[1] || 480;
           try {
             const data = await apiPost(
-              `/api/cameras/${encodeURIComponent(id)}/capture?height=${h}`,
+              `/api/cameras/${encodeURIComponent(id)}/capture?height=${GRAB_HEIGHT}`,
               {},
             );
             if (data?.error || data?.status !== 'success') {
@@ -342,6 +390,9 @@ export default function AisleAnnotatePage() {
               return;
             }
             stamps[role] = data.last_frame_at ?? Date.now() / 1000;
+            const w = Number(data.width);
+            const h = Number(data.height);
+            if (w > 1 && h > 1) sizes[role] = { width: w, height: h };
           } catch (e) {
             errs.push(`${role === 'L' ? '左路' : '右路'}：${formatUserError(e.message)}`);
           }
@@ -360,8 +411,29 @@ export default function AisleAnnotatePage() {
           }),
         );
       }
+      const aid = aisleState?.aisle_id || aisleId;
+      if (aid && Object.keys(sizes).length) {
+        const sized = await apiPost(`/api/aisles/${encodeURIComponent(aid)}/capture-sizes`, {
+          ...sizes,
+          views: aisleState?.views || stateRef.current?.views,
+        });
+        if (sized?.status === 'success' && sized.aisle) {
+          applyAisle(sized.aisle);
+          const lsz = sized.aisle.views?.L?.image_size;
+          const rsz = sized.aisle.views?.R?.image_size;
+          const dim = (s) => (Array.isArray(s) ? `${s[0]}×${s[1]}` : '');
+          if (sized.size_changed) {
+            showToast(`已按实际画面更新标定像素（左 ${dim(lsz)} · 右 ${dim(rsz)}）。若已反解请再点一次反解。`, 'ok');
+          } else if (!errs.length) {
+            setMsg(`已抽取静止画面（左 ${dim(lsz)} · 右 ${dim(rsz)}），可在图上标墙四角`);
+          }
+        } else if (sized?.error) {
+          errs.push(formatUserError(sized.error));
+        }
+      } else if (!errs.length) {
+        setMsg('已抽取静止画面，可在图上标墙四角');
+      }
       if (errs.length) setMsg(errs.join('\n'));
-      else setMsg('已抽取静止画面，可在图上标墙四角');
     } finally {
       setGrabbing(false);
     }
@@ -494,17 +566,14 @@ export default function AisleAnnotatePage() {
     for (const v of ['L', 'R']) {
       const canvas = cvs[v].current;
       if (!canvas) continue;
-      const rect = canvas.getBoundingClientRect();
-      const w = Math.max(2, Math.floor(rect.width));
       const [IW, IH] = viewSize(state, v);
-      const h = Math.max(2, Math.floor((w * IH) / IW));
-      if (canvas.width !== w || canvas.height !== h) {
-        canvas.width = w;
-        canvas.height = h;
+      const layout = overlayLayout(canvas, IW, IH);
+      if (canvas.width !== layout.dw || canvas.height !== layout.dh) {
+        canvas.width = layout.dw;
+        canvas.height = layout.dh;
       }
       const c = canvas.getContext('2d');
-      c.clearRect(0, 0, w, h);
-      const k = w / IW;
+      c.clearRect(0, 0, layout.dw, layout.dh);
       const walls = (state.views?.[v]?.walls || []);
       walls.forEach((wall, wi) => {
         if (!wall.quad?.length) return;
@@ -514,94 +583,94 @@ export default function AisleAnnotatePage() {
         c.lineWidth = on ? 2.6 : 1.6;
         c.beginPath();
         wall.quad.forEach((p, i) => {
-          if (i === 0) c.moveTo(p[0] * k, p[1] * k);
-          else c.lineTo(p[0] * k, p[1] * k);
+          const xy = mapCalibToCanvas(p, layout);
+          if (!xy) return;
+          if (i === 0) c.moveTo(xy[0], xy[1]);
+          else c.lineTo(xy[0], xy[1]);
         });
         if (wall.quad.length === 4) c.closePath();
         c.stroke();
         wall.quad.forEach((p, i) => {
+          const xy = mapCalibToCanvas(p, layout);
+          if (!xy) return;
           c.beginPath();
-          c.arc(p[0] * k, p[1] * k, 8, 0, Math.PI * 2);
+          c.arc(xy[0], xy[1], 8, 0, Math.PI * 2);
           c.fillStyle = on ? pal.line : pal.dim;
           c.fill();
           c.fillStyle = pal.ink;
           c.font = 'bold 11px sans-serif';
           c.textAlign = 'center';
           c.textBaseline = 'middle';
-          c.fillText(String(i + 1), p[0] * k, p[1] * k);
+          c.fillText(String(i + 1), xy[0], xy[1]);
         });
         if (wall.quad.length >= 4) {
-          const tag = lerpQuad(wall.quad, 0.08, 0.12);
+          const tag = mapCalibToCanvas(lerpQuad(wall.quad, 0.08, 0.12), layout);
           if (tag) {
             c.font = 'bold 12px sans-serif';
             c.textAlign = 'left';
             c.textBaseline = 'middle';
             c.fillStyle = pal.line;
-            c.fillText(`墙${wall.wall_id}`, tag[0] * k, tag[1] * k);
+            c.fillText(`墙${wall.wall_id}`, tag[0], tag[1]);
           }
         }
       });
-      if (state.solved?.ok) {
+      const cam = camOf(state, v);
+      if (state.solved?.ok && cam) {
         for (const mesh of state.slot_meshes || []) {
-          const quad = viewWallQuad(state, v, mesh.wall_id);
-          if (!quad) continue;
           const pal = wallPalette(mesh.wall_id);
           const onWall = Number(mesh.wall_id) === Number(state.views?.L?.walls?.[activeWall]?.wall_id);
-          const rows = mesh.rows;
-          const cols = mesh.cols;
-          const tys = meshRowTys(mesh, wallById(state.solved, mesh.wall_id));
-          if (tys.length < 2) continue;
-          const drawPoly = (pts, color, width) => {
+          const rows = Number(mesh.rows) || 0;
+          const cols = Number(mesh.cols) || 0;
+          if (rows < 1 || cols < 1 || !mesh.vertices) continue;
+          const toUv = (r, col) => projectPix(mesh.vertices[vertIndex(rows, cols, r, col)], cam);
+          const strokeUv = (pts, color, width) => {
+            const mapped = pts.map((p) => mapCalibToCanvas(p, layout)).filter(Boolean);
+            if (mapped.length < 2) return;
             c.beginPath();
-            pts.forEach((p, i) => {
-              if (i === 0) c.moveTo(p[0] * k, p[1] * k);
-              else c.lineTo(p[0] * k, p[1] * k);
+            mapped.forEach((p, i) => {
+              if (i === 0) c.moveTo(p[0], p[1]);
+              else c.lineTo(p[0], p[1]);
             });
             c.strokeStyle = color;
             c.lineWidth = width;
             c.stroke();
           };
-          for (let i = 0; i <= rows; i++) {
-            const pts = [];
-            for (let j = 0; j <= cols; j++) pts.push(lerpQuad(quad, tys[i], j / cols));
-            drawPoly(pts, onWall ? (i > 0 && i < rows ? pal.mesh : pal.line) : pal.dim, onWall ? (i > 0 && i < rows ? 2.4 : 1.4) : 1.1);
-          }
           for (let j = 0; j <= cols; j++) {
             const pts = [];
-            for (let i = 0; i <= rows; i++) pts.push(lerpQuad(quad, tys[i], j / cols));
-            drawPoly(pts, onWall ? pal.dim : pal.dim, onWall ? 1.2 : 0.9);
+            for (let i = 0; i <= rows; i++) pts.push(toUv(i, j));
+            strokeUv(pts, onWall ? pal.dim : pal.dim, onWall ? 1.2 : 0.9);
+          }
+          for (let i = 0; i <= rows; i++) {
+            const pts = [];
+            for (let j = 0; j <= cols; j++) pts.push(toUv(i, j));
+            const inner = i > 0 && i < rows;
+            strokeUv(
+              pts,
+              onWall ? (inner ? pal.mesh : pal.line) : pal.dim,
+              onWall ? (inner ? 2.4 : 1.4) : 1.1,
+            );
           }
           for (const cell of meshCells(mesh)) {
-            const ty0 = tys[cell.row];
-            const ty1 = tys[cell.row + 1];
-            if (ty0 == null || ty1 == null) continue;
-            const tz0 = cell.col / cols;
-            const tz1 = (cell.col + 1) / cols;
-            const corners = [
-              lerpQuad(quad, ty0, tz0),
-              lerpQuad(quad, ty0, tz1),
-              lerpQuad(quad, ty1, tz1),
-              lerpQuad(quad, ty1, tz0),
-            ].filter(Boolean);
-            if (corners.length < 4) continue;
-            const xs = corners.map((p) => p[0] * k);
-            const ys = corners.map((p) => p[1] * k);
-            const cw = Math.max(...xs) - Math.min(...xs);
-            const ch = Math.max(...ys) - Math.min(...ys);
+            const a = projectPix(cell.corners[0], cam);
+            const b = projectPix(cell.corners[2], cam);
+            if (!a || !b) continue;
+            const pa = mapCalibToCanvas(a, layout);
+            const pb = mapCalibToCanvas(b, layout);
+            if (!pa || !pb) continue;
+            const cw = Math.abs(pb[0] - pa[0]);
+            const ch = Math.abs(pb[1] - pa[1]);
             const key = `${mesh.wall_id}:${cell.slot_key || cell.box_id}`;
             const onSel = selected === key;
             if (!onSel && !onWall) continue;
             if (!onSel && (cw < 28 || ch < 16)) continue;
-            const mid = lerpQuad(quad, (ty0 + ty1) / 2, (tz0 + tz1) / 2);
-            if (!mid) continue;
+            const mx = (pa[0] + pb[0]) / 2;
+            const my = (pa[1] + pb[1]) / 2;
             const label = String(cell.box_id || '');
             c.font = onSel ? 'bold 11px sans-serif' : '10px sans-serif';
             c.textAlign = 'center';
             c.textBaseline = 'middle';
             const tw = c.measureText(label).width;
             if (!onSel && tw + 8 > cw) continue;
-            const mx = mid[0] * k;
-            const my = mid[1] * k;
             c.fillStyle = 'rgba(8, 12, 16, 0.62)';
             c.fillRect(mx - tw / 2 - 3, my - 7, tw + 6, 14);
             c.fillStyle = onSel ? '#ffe08a' : '#f4f8fb';
@@ -609,60 +678,52 @@ export default function AisleAnnotatePage() {
           }
         }
       }
-      drawSolvedCornerHints(c, v, k, state);
+      drawSolvedCornerHints(c, v, layout, state);
     }
   }, [state, activeView, activeWall, selected]);
 
   useEffect(() => {
     draw();
+    const nodes = [cvs.L.current, cvs.R.current].filter(Boolean);
+    if (!nodes.length) return undefined;
+    const obs = new ResizeObserver(() => draw());
+    nodes.forEach((n) => obs.observe(n));
+    return () => obs.disconnect();
   }, [draw]);
 
   const evtToImg = (e, v, aisle = stateRef.current) => {
     const canvas = cvs[v].current;
     const r = canvas.getBoundingClientRect();
     const [IW, IH] = viewSize(aisle, v);
-    return [((e.clientX - r.left) / r.width) * IW, ((e.clientY - r.top) / r.height) * IH];
+    const layout = overlayLayout(canvas, IW, IH);
+    const mx = (e.clientX - r.left) * (layout.dw / Math.max(r.width, 1e-6));
+    const my = (e.clientY - r.top) * (layout.dh / Math.max(r.height, 1e-6));
+    return unmapCanvasToCalib(mx, my, layout);
   };
 
-  /** 当前墙的内部分层线：沿四角内的 2D 层线测距。 */
+  /** 层线命中：与实验仓 dualcam_annot 一样，在标定像素里测 3D 投影线段。 */
   const hitLayerRow = (e, v, aisle = stateRef.current) => {
     if (!aisle.solved?.ok) return null;
+    const cam = camOf(aisle, v);
     const canvas = cvs[v].current;
-    if (!canvas) return null;
+    if (!cam || !canvas) return null;
     const wallId = (aisle.views?.L?.walls || [])[activeWall]?.wall_id;
     const mesh = meshForWall(aisle, wallId);
-    const quad = viewWallQuad(aisle, v, wallId);
-    if (!mesh || !quad) return null;
-    const rect = canvas.getBoundingClientRect();
+    if (!mesh?.vertices) return null;
     const [IW, IH] = viewSize(aisle, v);
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    const tys = meshRowTys(mesh, wallById(aisle.solved, wallId));
-    const cols = Number(mesh.cols) || 1;
-    const [iu, iv] = [((e.clientX - rect.left) / rect.width) * IW, ((e.clientY - rect.top) / rect.height) * IH];
+    const layout = overlayLayout(canvas, IW, IH);
+    const [iu, iv] = evtToImg(e, v, aisle);
+    const hitPx = LAYER_HIT_PX / Math.max(layout.scale * ((layout.sx + layout.sy) / 2), 1e-6);
+    const rows = Number(mesh.rows) || 0;
+    const cols = Number(mesh.cols) || 0;
     let best = null;
-    for (let i = 1; i < mesh.rows; i++) {
-      let dMin = Infinity;
-      let tzHit = 0.5;
-      for (let j = 0; j < cols; j++) {
-        const a = lerpQuad(quad, tys[i], j / cols);
-        const b = lerpQuad(quad, tys[i], (j + 1) / cols);
-        if (!a || !b) continue;
-        const d = distToSeg(
-          mx,
-          my,
-          (a[0] / IW) * rect.width,
-          (a[1] / IH) * rect.height,
-          (b[0] / IW) * rect.width,
-          (b[1] / IH) * rect.height,
-        );
-        if (d < dMin) {
-          dMin = d;
-          tzHit = (j + tzOnSeg(iu, iv, a, b)) / cols;
-        }
-      }
-      if (dMin <= LAYER_HIT_PX && (!best || dMin < best.dist)) {
-        best = { v, row: i, wallId: Number(mesh.wall_id), dist: dMin, tz: tzHit };
+    for (let i = 1; i < rows; i++) {
+      const a = projectPix(mesh.vertices[vertIndex(rows, cols, i, 0)], cam);
+      const b = projectPix(mesh.vertices[vertIndex(rows, cols, i, cols)], cam);
+      if (!a || !b) continue;
+      const d = distToSeg(iu, iv, a[0], a[1], b[0], b[1]);
+      if (d <= hitPx && (!best || d < best.dist)) {
+        best = { v, row: i, wallId: Number(mesh.wall_id), dist: d };
       }
     }
     return best;
@@ -673,14 +734,15 @@ export default function AisleAnnotatePage() {
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
     const [IW, IH] = viewSize(aisle, v);
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
+    const layout = overlayLayout(canvas, IW, IH);
+    const mx = (e.clientX - rect.left) * (layout.dw / Math.max(rect.width, 1e-6));
+    const my = (e.clientY - rect.top) * (layout.dh / Math.max(rect.height, 1e-6));
     let best = null;
     (aisle.views?.[v]?.walls || []).forEach((w, wi) => {
       (w.quad || []).forEach((p, i) => {
-        const x = (p[0] / IW) * rect.width;
-        const y = (p[1] / IH) * rect.height;
-        const d = Math.hypot(x - mx, y - my);
+        const xy = mapCalibToCanvas(p, layout);
+        if (!xy) return;
+        const d = Math.hypot(xy[0] - mx, xy[1] - my);
         if (d <= CORNER_HIT_PX && (!best || d < best.dist)) {
           best = { kind: 'corner', v, wi, i, dist: d };
         }
@@ -727,24 +789,12 @@ export default function AisleAnnotatePage() {
     }
     if (!aisle.solved?.ok) return;
     const [u, vv] = evtToImg(e, v, aisle);
+    const cam = camOf(aisle, v);
     for (const mesh of aisle.slot_meshes || []) {
       if (Number(mesh.wall_id) !== Number(wallsL[activeWall]?.wall_id)) continue;
-      const quad = viewWallQuad(aisle, v, mesh.wall_id);
-      if (!quad) continue;
-      const tys = meshRowTys(mesh, wallById(aisle.solved, mesh.wall_id));
-      const cols = mesh.cols;
+      if (!cam) continue;
       for (const cell of meshCells(mesh)) {
-        const ty0 = tys[cell.row];
-        const ty1 = tys[cell.row + 1];
-        if (ty0 == null || ty1 == null) continue;
-        const tz0 = cell.col / cols;
-        const tz1 = (cell.col + 1) / cols;
-        const pts = [
-          lerpQuad(quad, ty0, tz0),
-          lerpQuad(quad, ty0, tz1),
-          lerpQuad(quad, ty1, tz1),
-          lerpQuad(quad, ty1, tz0),
-        ].filter(Boolean);
+        const pts = (cell.corners || []).map((p) => projectPix(p, cam)).filter(Boolean);
         if (pts.length < 4 || !pointInPoly(u, vv, pts)) continue;
         const key = `${mesh.wall_id}:${cell.slot_key || `r${cell.row}c${cell.col}`}`;
         setSelected(key);
@@ -787,7 +837,6 @@ export default function AisleAnnotatePage() {
       ...layer,
       x0: e.clientX,
       y0: e.clientY,
-      tz: layer.tz ?? 0.5,
     };
     didDragRef.current = false;
     skipClickRef.current = false;
@@ -823,12 +872,12 @@ export default function AisleAnnotatePage() {
     }
     const wall = wallById(aisle.solved, drag.wallId);
     const mesh = meshForWall(aisle, drag.wallId);
-    const quad = viewWallQuad(aisle, v, drag.wallId);
-    if (!wall || !mesh || !quad) return;
-    const ty = tyAlongQuad(u, vv, quad, drag.tz);
-    const [yBot, yTop] = wallYSpan(wall.corners);
-    const y = yTop - ty * (yTop - yBot);
-    const nextMesh = moveLayerRow(mesh, wall.corners, drag.row, y);
+    const cam = camOf(aisle, v);
+    if (!wall || !mesh || !cam) return;
+    const plane = wallPlane(wall.corners);
+    const hit = rayPlane(u, vv, cam, plane.p0, plane.n);
+    if (!hit) return;
+    const nextMesh = moveLayerRow(mesh, wall.corners, drag.row, hit[1]);
     const next = structuredClone(aisle);
     next.slot_meshes = (aisle.slot_meshes || []).map((m) => (
       Number(m.wall_id) === Number(drag.wallId) ? nextMesh : m
@@ -988,6 +1037,9 @@ export default function AisleAnnotatePage() {
           <button type="button" className="pri" onClick={() => grabStills()} disabled={grabbing || !grouped}>
             {grabbing ? '抽帧中…' : '抽帧'}
           </button>
+          <button type="button" onClick={importPickstateCalib} disabled={!aisleId || importing}>
+            {importing ? '导入中…' : '导入实验仓标定'}
+          </button>
         </div>
         {shard !== null && shard !== undefined && (
           <p className="ok">logical shard = {shard}（L/R 共用）</p>
@@ -1111,7 +1163,11 @@ export default function AisleAnnotatePage() {
       )}
       <div className="aisle-views">
         {['L', 'R'].map((v) => (
-          <div key={v} className={`pane ${activeView === v ? 'on' : ''}`}>
+          <div
+            key={v}
+            className={`pane ${activeView === v ? 'on' : ''}`}
+            style={{ '--pane-ar': `${viewSize(state, v)[0]} / ${viewSize(state, v)[1]}` }}
+          >
             <span className="tag" onClick={() => setActiveView(v)}>
               {v === 'L' ? '左路' : '右路'}
               {v === activeView ? ' · 正在标' : ''}
@@ -1129,7 +1185,15 @@ export default function AisleAnnotatePage() {
                   </div>
                 );
               }
-              return <img alt="" src={thumbnailUrl(camId, stamp)} className="bg" draggable={false} />;
+              return (
+                <img
+                  alt=""
+                  src={thumbnailUrl(camId, stamp)}
+                  className="bg"
+                  draggable={false}
+                  onLoad={() => draw()}
+                />
+              );
             })()}
             <canvas
               ref={cvs[v]}
@@ -1211,6 +1275,7 @@ export default function AisleAnnotatePage() {
           </div>
           <div className="aisle-field">
             <span className="aisle-field-label">{activeView === 'L' ? '左路' : '右路'} 标定宽 × 高 (px)</span>
+            <p className="muted">抽帧后自动写成静止图真实像素，勿再手填 16:9 默认值。</p>
             <div className="aisle-field-pair">
               <input
                 type="number"

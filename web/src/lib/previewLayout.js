@@ -12,6 +12,13 @@ export function letterboxParams(srcW, srcH, dstW, dstH) {
   };
 }
 
+/** dst 画布坐标 → src 像素（letterboxMapPoint 的逆） */
+export function letterboxUnmapPoint(x, y, srcW, srcH, dstW, dstH) {
+  const { scale, padX, padY } = letterboxParams(srcW, srcH, dstW, dstH);
+  if (!scale) return [Number(x) || 0, Number(y) || 0];
+  return [(Number(x) - padX) / scale, (Number(y) - padY) / scale];
+}
+
 export function letterboxMapPoint(x, y, srcW, srcH, dstW, dstH) {
   const { scale, padX, padY } = letterboxParams(srcW, srcH, dstW, dstH);
   return [Number(x) * scale + padX, Number(y) * scale + padY];

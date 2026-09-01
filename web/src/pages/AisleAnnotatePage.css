@@ -474,7 +474,8 @@ td .aisle-wall-dot {
 .pane {
   position: relative;
   width: 100%;
-  height: fit-content;
+  aspect-ratio: var(--pane-ar, 16 / 9);
+  height: auto;
   background: #111;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -487,8 +488,11 @@ td .aisle-wall-dot {
 
 .pane .bg {
   display: block;
+  position: absolute;
+  inset: 0;
   width: 100%;
-  aspect-ratio: 16 / 9;
+  height: 100%;
+  /* 与 canvas letterbox 同一套 contain：不要 cover/fill，否则层线相对货架整体错位 */
   object-fit: contain;
   background: #000;
   pointer-events: none;

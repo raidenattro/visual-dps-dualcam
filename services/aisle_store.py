@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
+from pathlib import Path
 from typing import Any
 
 _AISLE_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
@@ -149,6 +151,145 @@ def wall_shelf_code(aisle: dict | None, wall_id: int) -> str:
     return ""
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+PICKSTATE_CALIB_CANDIDATES = (
+    Path("/home/hqit/workspace/visual-dps-pick-state/output/calib/dual_1-3.json"),
+    _REPO_ROOT / "fixtures" / "dual_1-3.json",
+)
+
+
+def resolve_pickstate_calib(path: str | None = None) -> Path:
+    raw = str(path or os.environ.get("PICKSTATE_CALIB") or "").strip()
+    if raw:
+        p = Path(raw)
+        if not p.is_file():
+            raise FileNotFoundError(f"标定文件不存在：{p}")
+        return p
+    for cand in PICKSTATE_CALIB_CANDIDATES:
+        if cand.is_file():
+            return cand
+    raise FileNotFoundError("找不到实验仓 dual_1-3.json（visual-dps-pick-state 或本仓 fixtures）")
+
+
+def _shelf_map(aisle: dict | None) -> dict[int, str]:
+    out: dict[int, str] = {}
+    data = aisle if isinstance(aisle, dict) else {}
+    views = data.get("views") or {}
+    for role in ROLES:
+        for wall in ((views.get(role) or {}).get("walls") or []):
+            if not isinstance(wall, dict):
+                continue
+            try:
+                wid = int(wall.get("wall_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            code = str(wall.get("shelf_code") or "").strip()
+            if wid >= 1 and code and wid not in out:
+                out[wid] = code
+    for mesh in data.get("slot_meshes") or []:
+        if not isinstance(mesh, dict):
+            continue
+        try:
+            wid = int(mesh.get("wall_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        code = str(mesh.get("shelf_code") or "").strip()
+        if wid >= 1 and code and wid not in out:
+            out[wid] = code
+    return out
+
+
+def merge_pickstate_calib(aisle: dict, calib: dict) -> dict:
+    """把实验仓 dualcam 标定并进本仓巷道：保留 aisle_id / 相机绑定 / aabb / 货架号。"""
+    if not isinstance(calib, dict) or not (calib.get("views") or calib.get("solved")):
+        raise ValueError("标定文件缺少 views 或 solved")
+    out = dict(aisle)
+    keep_id = str(aisle.get("aisle_id") or "").strip()
+    keep_cams = copy.deepcopy(aisle.get("cameras") or {})
+    keep_aabb = copy.deepcopy(aisle.get("aabb")) if aisle.get("aabb") else None
+    shelves = _shelf_map(aisle)
+    for key in ("aisle", "contact_m", "prior"):
+        if key in calib and calib[key] is not None:
+            out[key] = copy.deepcopy(calib[key])
+    solved = calib.get("solved")
+    if isinstance(solved, dict):
+        out["solved"] = copy.deepcopy(solved)
+    meshes_in = calib.get("slot_meshes")
+    mesh_by_wall: dict[int, dict] = {}
+    if isinstance(meshes_in, list):
+        meshes = []
+        for mesh in meshes_in:
+            if not isinstance(mesh, dict):
+                continue
+            m = copy.deepcopy(mesh)
+            try:
+                wid = int(m.get("wall_id") or 0)
+            except (TypeError, ValueError):
+                meshes.append(m)
+                continue
+            code = str(m.get("shelf_code") or "").strip() or shelves.get(wid) or f"wall{wid}"
+            m["shelf_code"] = code
+            if wid >= 1:
+                mesh_by_wall[wid] = m
+            meshes.append(m)
+        out["slot_meshes"] = meshes
+    views_in = calib.get("views") or {}
+    views_out: dict[str, Any] = {}
+    for role in ROLES:
+        src = views_in.get(role) if isinstance(views_in, dict) else None
+        if not isinstance(src, dict):
+            views_out[role] = copy.deepcopy((aisle.get("views") or {}).get(role) or {"name": role})
+            continue
+        view = copy.deepcopy(src)
+        view["name"] = role
+        walls = []
+        for wall in view.get("walls") or []:
+            if not isinstance(wall, dict):
+                continue
+            w = dict(wall)
+            try:
+                wid = int(w.get("wall_id") or 0)
+            except (TypeError, ValueError):
+                walls.append(w)
+                continue
+            mesh = mesh_by_wall.get(wid) or {}
+            w["shelf_code"] = str(w.get("shelf_code") or "").strip() or shelves.get(wid) or f"wall{wid}"
+            layers = int(w.get("n_layers") or mesh.get("n_layers") or mesh.get("rows") or 4)
+            cols = int(w.get("n_cols") or mesh.get("cols") or 4)
+            w["n_layers"] = layers
+            w["n_cols"] = cols
+            walls.append(w)
+        view["walls"] = walls
+        views_out[role] = view
+    out["views"] = views_out
+    out["aisle_id"] = keep_id
+    out["cameras"] = keep_cams
+    if keep_aabb:
+        out["aabb"] = keep_aabb
+    if not parse_wall_ids(out.get("required_wall_ids")):
+        out["required_wall_ids"] = sorted(mesh_by_wall.keys()) or [1]
+    return out
+
+
+def import_pickstate_calib(
+    aisle_id: str,
+    calib_path: str | None = None,
+    json_dir: str | None = None,
+) -> tuple[dict, str]:
+    """从实验仓 JSON 导入标定，覆盖四角 / 层线 / 反解 / 货格，不改摄像头绑定。"""
+    aid = str(aisle_id or "").strip()
+    data = load_aisle(aid, json_dir)
+    if not data:
+        raise FileNotFoundError(f"巷道 {aid} 不存在")
+    src = resolve_pickstate_calib(calib_path)
+    calib = _read(str(src))
+    if not calib:
+        raise ValueError(f"无法读取标定：{src}")
+    merged = merge_pickstate_calib(data, calib)
+    saved = save_aisle(merged, json_dir)
+    return saved, str(src)
+
+
 def list_aisles(json_dir: str | None = None) -> list[dict]:
     d = aisles_dir(json_dir)
     if not os.path.isdir(d):
@@ -177,6 +318,49 @@ def load_aisle(aisle_id: str, json_dir: str | None = None) -> dict | None:
     if not aid:
         return None
     return _read(aisle_path(aid, json_dir))
+
+
+def apply_capture_sizes(
+    aisle_id: str,
+    sizes: dict[str, Any],
+    json_dir: str | None = None,
+    views_overlay: dict | None = None,
+) -> tuple[dict | None, bool]:
+    """把抽帧得到的真实宽高写入 L/R image_size。尺寸变了则作废反解。
+
+    sizes 形如 {"L": {"width": 960, "height": 720}, "R": {...}}。
+    views_overlay 可带上尚未保存的四角，避免只改了磁盘上的旧点。
+    返回 (aisle, size_changed)。
+    """
+    from services.dualcam_config import remap_view_image_size
+
+    data = load_aisle(aisle_id, json_dir)
+    if not data:
+        return None, False
+    views = dict(data.get("views") or {})
+    if isinstance(views_overlay, dict):
+        for role in ROLES:
+            overlay = views_overlay.get(role)
+            if isinstance(overlay, dict):
+                views[role] = dict(overlay)
+    changed = False
+    for role in ROLES:
+        spec = sizes.get(role) if isinstance(sizes, dict) else None
+        if not isinstance(spec, dict):
+            continue
+        try:
+            width = int(spec.get("width") or 0)
+            height = int(spec.get("height") or 0)
+        except (TypeError, ValueError):
+            continue
+        view = dict(views.get(role) or {"name": role})
+        if remap_view_image_size(view, width, height):
+            changed = True
+        views[role] = view
+    data["views"] = views
+    if changed:
+        data["solved"] = {"ok": False}
+    return save_aisle(data, json_dir), changed
 
 
 def save_aisle(data: dict, json_dir: str | None = None) -> dict:

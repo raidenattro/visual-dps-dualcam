@@ -175,6 +175,76 @@ def letterbox_params(
     return scale, pad_x, pad_y
 
 
+def letterbox_unmap_point(
+    x: float,
+    y: float,
+    src_w: int | float,
+    src_h: int | float,
+    dst_w: int | float,
+    dst_h: int | float,
+) -> tuple[float, float]:
+    """letterbox_params 的逆映射：dst 画布坐标 → src 像素。"""
+    scale, pad_x, pad_y = letterbox_params(src_w, src_h, dst_w, dst_h)
+    if scale <= 1e-12:
+        return float(x), float(y)
+    return (float(x) - pad_x) / scale, (float(y) - pad_y) / scale
+
+
+def _remap_xy_list(points: list | None, old_w: int, old_h: int, new_w: int, new_h: int) -> list:
+    out = []
+    for pt in points or []:
+        if not isinstance(pt, (list, tuple)) or len(pt) < 2:
+            out.append(pt)
+            continue
+        x, y = letterbox_unmap_point(pt[0], pt[1], new_w, new_h, old_w, old_h)
+        extra = list(pt[2:])
+        out.append([x, y, *extra])
+    return out
+
+
+def remap_view_image_size(view: dict | None, new_w: int, new_h: int) -> bool:
+    """把 view.image_size 写成抽帧真实宽高，并把已标四角从旧画布 contain 回真实像素。
+
+    标注页曾把画面 contain 进 image_size（默认 1280×720 / 16:9）再记点。
+    抽帧后 image_size 必须等于静止图像素，否则 4:3 源会把黑边算进墙角。
+    尺寸变化时返回 True（调用方应作废已反解相机）。
+    """
+    if not isinstance(view, dict):
+        return False
+    nw = _as_int(new_w, 0)
+    nh = _as_int(new_h, 0)
+    if nw < 2 or nh < 2:
+        return False
+    old_w, old_h = calib_size_from_view(view)
+    if old_w == nw and old_h == nh:
+        view["image_size"] = [nw, nh]
+        return False
+    walls = view.get("walls")
+    if isinstance(walls, list):
+        remapped = []
+        for wall in walls:
+            if not isinstance(wall, dict):
+                remapped.append(wall)
+                continue
+            cloned = dict(wall)
+            cloned["quad"] = _remap_xy_list(wall.get("quad"), old_w, old_h, nw, nh)
+            remapped.append(cloned)
+        view["walls"] = remapped
+    lines = view.get("layer_lines")
+    if isinstance(lines, list):
+        new_lines = []
+        for line in lines:
+            if not isinstance(line, dict):
+                new_lines.append(line)
+                continue
+            cloned = dict(line)
+            cloned["uv"] = _remap_xy_list(line.get("uv"), old_w, old_h, nw, nh)
+            new_lines.append(cloned)
+        view["layer_lines"] = new_lines
+    view["image_size"] = [nw, nh]
+    return True
+
+
 def scale_keypoints_to_calib(
     persons: list | None,
     infer_w: int,

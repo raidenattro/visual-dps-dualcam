@@ -62,6 +62,31 @@ def test_scale_unknown_when_infer_missing_but_already_pixels():
     assert out[0]["keypoints"][0][0] == 400.0
 
 
+def test_remap_view_unmaps_pillarbox_from_default_16x9():
+    """4:3 抽帧 960×720：原先记在 1280×720 contain 画布上的点要回到真实像素。"""
+    from services.dualcam_config import remap_view_image_size
+
+    view = {
+        "image_size": [1280, 720],
+        "walls": [{"wall_id": 1, "quad": [[160.0, 0.0], [1120.0, 0.0], [1120.0, 720.0], [160.0, 720.0]]}],
+    }
+    assert remap_view_image_size(view, 960, 720) is True
+    assert view["image_size"] == [960, 720]
+    quad = view["walls"][0]["quad"]
+    assert quad[0][0] == pytest.approx(0.0, abs=0.5)
+    assert quad[0][1] == pytest.approx(0.0, abs=0.5)
+    assert quad[1][0] == pytest.approx(960.0, abs=0.5)
+    assert quad[2][1] == pytest.approx(720.0, abs=0.5)
+
+
+def test_remap_view_identity_when_size_matches():
+    from services.dualcam_config import remap_view_image_size
+
+    view = {"image_size": [1280, 720], "walls": [{"quad": [[100.0, 50.0]]}]}
+    assert remap_view_image_size(view, 1280, 720) is False
+    assert view["walls"][0]["quad"][0][0] == 100.0
+
+
 def test_pair_window_follows_pose_interval(monkeypatch):
     from services.dualcam_config import DEFAULT_DUALCAM
 

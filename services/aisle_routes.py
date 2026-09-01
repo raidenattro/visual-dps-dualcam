@@ -7,10 +7,12 @@ from fastapi import APIRouter, Request
 from dualcam.geom import make_layer_mesh, wall_by_id
 from dualcam.solve import solve_dual
 from services.aisle_store import (
+    apply_capture_sizes,
     bind_group,
     camera_group,
     create_aisle_with_cameras,
     delete_aisle_with_cameras,
+    import_pickstate_calib,
     list_aisles,
     load_aisle,
     save_aisle,
@@ -131,6 +133,37 @@ def register_aisle_routes(
         except ValueError as exc:
             return {"status": "error", "error": str(exc)}
         return {"status": "success", "aisle": data}
+
+    @router.post("/aisles/{aisle_id}/capture-sizes")
+    async def api_apply_capture_sizes(aisle_id: str, payload: dict):
+        """抽帧后把各路真实像素写入 image_size，并按 contain 逆映射已标四角。"""
+        sizes = payload.get("sizes") if isinstance(payload, dict) else None
+        if not isinstance(sizes, dict):
+            sizes = payload if isinstance(payload, dict) else {}
+        views_overlay = payload.get("views") if isinstance(payload, dict) else None
+        data, changed = apply_capture_sizes(
+            aisle_id, sizes, json_dir, views_overlay=views_overlay if isinstance(views_overlay, dict) else None
+        )
+        if not data:
+            return {"status": "error", "error": "巷道不存在"}
+        data = dict(data)
+        data["logical_shard"] = logical_shard_id(aisle_id)
+        return {"status": "success", "aisle": data, "size_changed": changed}
+
+    @router.post("/aisles/{aisle_id}/import-calib")
+    async def api_import_pickstate_calib(aisle_id: str, payload: dict | None = None):
+        """导入实验仓 dual_1-3 标定（四角、层线、反解、货格），不改 cam1/cam2 绑定。"""
+        body = payload if isinstance(payload, dict) else {}
+        path = str(body.get("path") or "").strip() or None
+        try:
+            data, src = import_pickstate_calib(aisle_id, path, json_dir)
+        except FileNotFoundError as exc:
+            return {"status": "error", "error": str(exc)}
+        except ValueError as exc:
+            return {"status": "error", "error": str(exc)}
+        data = dict(data)
+        data["logical_shard"] = logical_shard_id(aisle_id)
+        return {"status": "success", "aisle": data, "source": src}
 
     @router.post("/aisles/{aisle_id}/solve")
     async def api_solve_aisle(aisle_id: str, payload: dict | None = None):

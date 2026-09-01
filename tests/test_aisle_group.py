@@ -27,6 +27,14 @@ def json_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     return str(d)
 
 
+@pytest.fixture(autouse=True)
+def _no_live_mediamtx(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "services.mediamtx_service.reload_mediamtx_runtime",
+        lambda cameras: {"reloaded": False, "skipped": True, "reason": "test"},
+    )
+
+
 def test_bind_group_and_lookup(json_dir: str):
     bind_group("aisle-13", "cam-l", "cam-r", json_dir)
     assert camera_group("cam-l", json_dir) == {"aisle_id": "aisle-13", "role": "L"}
@@ -169,3 +177,46 @@ def test_delete_aisle_with_cameras_unbinds(tmp_path: Path, json_dir: str, monkey
     assert leftover
     assert not leftover["cameras"]["L"]["camera_id"]
     assert not leftover["cameras"]["R"]["camera_id"]
+
+
+def test_apply_capture_sizes_writes_pixels_and_invalidates_solve(json_dir: str):
+    from services.aisle_store import apply_capture_sizes, empty_aisle
+
+    data = empty_aisle("aisle-sz")
+    data["views"]["L"]["image_size"] = [1280, 720]
+    data["views"]["L"]["walls"][0]["quad"] = [
+        [160.0, 0.0], [1120.0, 0.0], [1120.0, 720.0], [160.0, 720.0],
+    ]
+    data["solved"] = {"ok": True, "cameras": {"L": {}, "R": {}}}
+    save_aisle(data, json_dir)
+    out, changed = apply_capture_sizes(
+        "aisle-sz",
+        {"L": {"width": 960, "height": 720}},
+        json_dir,
+    )
+    assert changed is True
+    assert out["views"]["L"]["image_size"] == [960, 720]
+    assert out["views"]["L"]["walls"][0]["quad"][0][0] == pytest.approx(0.0, abs=0.5)
+    assert out["solved"].get("ok") is not True
+
+
+def test_import_pickstate_calib_keeps_cameras(json_dir: str):
+    from pathlib import Path
+
+    from services.aisle_store import empty_aisle, import_pickstate_calib
+
+    fixture = Path(__file__).resolve().parents[1] / "fixtures" / "dual_1-3.json"
+    if not fixture.is_file():
+        pytest.skip("缺少 fixtures/dual_1-3.json")
+    data = empty_aisle("aisle-imp")
+    data["cameras"] = {"L": {"camera_id": "cam1", "role": "L"}, "R": {"camera_id": "cam2", "role": "R"}}
+    data["views"]["L"]["walls"][0]["shelf_code"] = "左货架"
+    save_aisle(data, json_dir)
+    out, src = import_pickstate_calib("aisle-imp", str(fixture), json_dir)
+    assert src.endswith("dual_1-3.json")
+    assert out["cameras"]["L"]["camera_id"] == "cam1"
+    assert out["cameras"]["R"]["camera_id"] == "cam2"
+    assert out["solved"]["ok"] is True
+    assert len(out["views"]["L"]["walls"][0]["quad"]) == 4
+    assert out["slot_meshes"]
+    assert out["views"]["L"]["walls"][0]["shelf_code"] == "左货架"
