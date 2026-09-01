@@ -290,10 +290,13 @@ def capture_camera_frame(
     online_since = runtime.get("online_since")
     activity_seconds = int(time.time() - online_since) if online_since else 0
 
+    fh, fw = frame.shape[:2]
     return {
         "status": "success",
         "image": image_b64,
         "camera_id": camera_id,
+        "width": int(fw),
+        "height": int(fh),
         "last_frame_at": os.path.getmtime(thumb_path),
         "online": True,
         "activity_seconds": activity_seconds,

@@ -10,7 +10,9 @@ import pytest
 from services.aisle_store import (
     bind_group,
     camera_group,
+    empty_aisle,
     require_grouped,
+    save_aisle,
     unbind_group,
 )
 
@@ -55,3 +57,29 @@ def test_unbind_clears_group(json_dir: str):
     ok, err = require_grouped("cam-l", json_dir)
     assert ok is None
     assert err
+
+
+def test_save_keeps_both_wall_quads(json_dir: str):
+    """整份巷道落盘必须同时保留两面墙的四角，不能只留下当前墙。"""
+    data = empty_aisle("aisle-keep")
+    data["views"]["L"]["walls"][0]["quad"] = [[10, 10], [20, 10], [20, 20], [10, 20]]
+    data["views"]["L"]["walls"][1]["quad"] = [[80, 10], [90, 10], [90, 20], [80, 20]]
+    data["views"]["R"]["walls"][0]["quad"] = [[11, 11], [21, 11], [21, 21], [11, 21]]
+    data["views"]["R"]["walls"][1]["quad"] = [[81, 11], [91, 11], [91, 21], [81, 21]]
+    saved = save_aisle(data, json_dir)
+    assert saved["views"]["L"]["walls"][0]["quad"][0] == [10, 10]
+    assert saved["views"]["L"]["walls"][1]["quad"][0] == [80, 10]
+    assert saved["views"]["R"]["walls"][1]["quad"][0] == [81, 11]
+
+
+def test_each_wall_keeps_own_grid(json_dir: str):
+    data = empty_aisle("aisle-grid")
+    data["views"]["L"]["walls"][0]["n_layers"] = 5
+    data["views"]["L"]["walls"][0]["n_cols"] = 3
+    data["views"]["L"]["walls"][1]["n_layers"] = 2
+    data["views"]["L"]["walls"][1]["n_cols"] = 6
+    saved = save_aisle(data, json_dir)
+    w1 = saved["views"]["L"]["walls"][0]
+    w2 = saved["views"]["L"]["walls"][1]
+    assert (w1["n_layers"], w1["n_cols"]) == (5, 3)
+    assert (w2["n_layers"], w2["n_cols"]) == (2, 6)

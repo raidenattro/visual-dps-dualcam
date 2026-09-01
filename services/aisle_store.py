@@ -80,8 +80,8 @@ def empty_aisle(aisle_id: str) -> dict[str, Any]:
 
 def _empty_walls() -> list[dict]:
     return [
-        {"wall_id": 1, "width": 2.2, "height": 2.0, "base": 0.0, "quad": [], "shelf_code": ""},
-        {"wall_id": 2, "width": 2.2, "height": 2.0, "base": 0.0, "quad": [], "shelf_code": ""},
+        {"wall_id": 1, "width": 2.2, "height": 2.0, "base": 0.0, "quad": [], "shelf_code": "", "n_layers": 4, "n_cols": 4},
+        {"wall_id": 2, "width": 2.2, "height": 2.0, "base": 0.0, "quad": [], "shelf_code": "", "n_layers": 4, "n_cols": 4},
     ]
 
 
@@ -284,7 +284,7 @@ def require_inference_ready(camera_id: str, json_dir: str | None = None) -> tupl
         walls = "、".join(f"墙{w}" for w in missing)
         return None, (
             f"巷道 {aid} 已配置拣货墙 {[f'墙{w}' for w in need]}，但{walls}尚未生成货格层线。"
-            "请到「巷道标注」选中该墙后点「2. 生成本墙层线」。"
+            "请到「巷道标注」反解后拖层线，再点「保存墙标定」。"
             "没有 slot_meshes 就无法做 3D 贴墙碰撞。"
         )
     no_shelf = [w for w in need if not str((by_wall[w] or {}).get("shelf_code") or "").strip()

@@ -395,7 +395,7 @@ def register_camera_routes(
         return result
 
     @router.post("/cameras/{camera_id}/capture")
-    async def camera_capture_frame(camera_id: str):
+    async def camera_capture_frame(camera_id: str, height: int | None = None):
         import asyncio
 
         found = get_camera(camera_ips_file, camera_id)
@@ -404,10 +404,12 @@ def register_camera_routes(
         url = str(found["camera"].get("url") or "").strip()
         if not url:
             return JSONResponse(status_code=400, content={"error": "请填写视频流地址"})
+        # 标注页可按标定高度抽帧；总览未传 height 时仍用全局 capture_height
+        h = clamp_stream_height(height) if height is not None else capture_height
         return await asyncio.to_thread(
             capture_camera_frame,
             url=url,
-            capture_height=capture_height,
+            capture_height=h,
             frames_dir=frames_dir,
             last_frame_file=last_frame_file,
             camera_ips_file=camera_ips_file,

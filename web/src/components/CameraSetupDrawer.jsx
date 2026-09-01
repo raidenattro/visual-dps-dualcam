@@ -441,7 +441,7 @@ function DualcamGeomSection({ cameraId }) {
         <div className="drawer-section-head">
           <h3>双路 3D 几何</h3>
           <p className="drawer-section-desc">
-            该路尚未编入巷道同一组。请先到 <Link to="/aisle">巷道标注</Link> 勾选左右路，否则禁止开推理。
+            该路尚未编入巷道。请先到 <Link to="/aisle">巷道标注</Link> 绑定左右路，否则禁止开推理。
           </p>
         </div>
       </section>

@@ -213,7 +213,8 @@ export function meshCells(mesh) {
 }
 
 export function wallById(solved, wallId) {
-  return ((solved && solved.walls) || []).find((w) => w.wall_id === wallId) || null;
+  const id = Number(wallId);
+  return ((solved && solved.walls) || []).find((w) => Number(w.wall_id) === id) || null;
 }
 
 export function signedWallDist(p, wall) {
