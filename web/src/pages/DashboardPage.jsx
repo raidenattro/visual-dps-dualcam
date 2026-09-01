@@ -420,7 +420,6 @@ export default function DashboardPage() {
   return (
     <div className="page dashboard-page">
         <h1 className="page-title">摄像头总览</h1>
-        <p className="dash-lead">成组巷道点进即是「左路 · 3D · 右路」。未编组的仍单路预览。</p>
 
         <div className="toolbar">
           <span className={`msg ${msgErr ? 'err' : ''}`}>
@@ -480,18 +479,24 @@ export default function DashboardPage() {
               {aisleCards.map((aisle) => {
                 const left = cameras.find((c) => c.id === aisle.camera_l);
                 const right = cameras.find((c) => c.id === aisle.camera_r);
+                const thumb = (left?.has_thumbnail && left) || (right?.has_thumbnail && right) || left || right;
                 const on = aisleInferOn(left, right);
                 const inferSt = aisleInferStatus(left, right);
                 const inferText = inferLoadingId === aisle.aisle_id && !on
                   ? AISLE_INFER_LABEL.starting
                   : (AISLE_INFER_LABEL[inferSt] || AISLE_INFER_LABEL.stopped);
+                const online = Boolean(left?.online || right?.online);
+                const activity = Math.max(Number(left?._displayActivity) || 0, Number(right?._displayActivity) || 0);
                 return (
-                  <article className="card aisle-card" key={aisle.aisle_id}>
+                  <article
+                    className={`card${on || inferSt === 'starting' ? ' is-inferring' : ''}`}
+                    key={aisle.aisle_id}
+                  >
                     <div
                       className="card-preview card-preview-link"
                       role="button"
                       tabIndex={0}
-                      title="进入巷道检测（左路 + 3D + 右路）"
+                      title={`进入 ${aisle.aisle_id}`}
                       onClick={() => navigate(`/live/${encodeURIComponent(aisle.aisle_id)}`)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
@@ -500,63 +505,54 @@ export default function DashboardPage() {
                         }
                       }}
                     >
-                      <div className="aisle-thumbs">
-                        <figure>
-                          <span>左路</span>
-                          {left?.has_thumbnail ? (
-                            <img
-                              src={thumbnailUrl(left.id, left.last_frame_at, left._thumbNonce)}
-                              alt={left.name}
-                            />
-                          ) : (
-                            <div className="card-preview-empty">暂无画面</div>
-                          )}
-                        </figure>
-                        <div className="aisle-thumb-mid" aria-hidden="true">
-                          <span>3D</span>
-                        </div>
-                        <figure>
-                          <span>右路</span>
-                          {right?.has_thumbnail ? (
-                            <img
-                              src={thumbnailUrl(right.id, right.last_frame_at, right._thumbNonce)}
-                              alt={right.name}
-                            />
-                          ) : (
-                            <div className="card-preview-empty">暂无画面</div>
-                          )}
-                        </figure>
-                      </div>
+                      {thumb?.has_thumbnail ? (
+                        <img
+                          src={thumbnailUrl(thumb.id, thumb.last_frame_at, thumb._thumbNonce)}
+                          alt={aisle.aisle_id}
+                        />
+                      ) : (
+                        <div className="card-preview-empty">暂无画面</div>
+                      )}
                       <div className="card-actions" onClick={(e) => e.stopPropagation()}>
                         <InferenceToggle
                           on={on}
                           loading={inferLoadingId === aisle.aisle_id}
                           disabled={inferToggleDisabled}
-                          title={on ? '停止本巷道两路检测' : '同时启动本巷道两路检测'}
+                          title={on ? '停止检测' : '开启检测'}
                           onToggle={(turnOn) => toggleAisleInference(aisle, turnOn)}
                         />
                         <button
                           type="button"
                           className="btn-icon"
-                          title="设置左路"
+                          title="抓帧"
+                          disabled={!thumb || refreshingId === thumb.id}
+                          onClick={() => thumb && captureFrame(thumb)}
+                        >
+                          ↻
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-icon"
+                          title="设置"
                           onClick={() => left && openSetup(left)}
                         >
                           ⚙
                         </button>
                       </div>
                       <div className="card-body">
-                        <h2 className="card-title">巷道 {aisle.aisle_id}</h2>
+                        <h2 className="card-title">{aisle.aisle_id}</h2>
                         <div className="card-status">
-                          <span className={left?.online || right?.online ? 'st-online' : 'st-offline'}>
-                            {left?.name || aisle.camera_l} / {right?.name || aisle.camera_r}
+                          <span className={online ? 'st-online' : 'st-offline'}>
+                            {online ? '在线' : '离线'}
                           </span>
                           <span className="card-status-sep">·</span>
-                          <span className={`card-infer ${inferSt}`}>
-                            {inferText}
-                          </span>
+                          <span className="card-activity">{formatDuration(activity)}</span>
+                          <span className="card-status-sep">·</span>
+                          <span className={`card-infer ${inferSt}`}>{inferText}</span>
                         </div>
                         <div className="card-url">
-                          {aisle.solved ? '已反解 · 点开查看 3D 骨架' : '未反解 · 请先巷道标注'}
+                          {left?.name || aisle.camera_l}
+                          {right ? ` · ${right.name || aisle.camera_r}` : ''}
                         </div>
                       </div>
                     </div>
