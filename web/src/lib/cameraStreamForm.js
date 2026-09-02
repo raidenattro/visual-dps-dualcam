@@ -36,6 +36,21 @@ export function defaultPlaybackUrl(path, host = DEFAULT_RTSP_HOST, port = DEFAUL
   return `rtsp://${host}:${port}/${slug}`;
 }
 
+/** 本机播放地址是否仍是按通道号自动生成的（空也算），改通道号时跟着刷新 */
+export function isAutoPlaybackUrl(url, path) {
+  const play = defaultPlaybackUrl(path);
+  const cur = String(url || '').trim();
+  return !cur || cur === play;
+}
+
+/** 通道号变了且播放地址未手改时，写成新的本机地址（写入 value，不用灰色 placeholder） */
+export function syncAutoPlaybackUrl(side, prevPath) {
+  const type = side?.source_type || DEFAULT_SOURCE_TYPE;
+  if (type === 'external') return side;
+  if (!isAutoPlaybackUrl(side.url, prevPath)) return side;
+  return { ...side, url: defaultPlaybackUrl(side.path) };
+}
+
 function parseRtspPath(url) {
   try {
     const u = new URL(url);
@@ -96,11 +111,12 @@ export function emptyCameraForm() {
 export function cameraToForm(cam) {
   if (!cam) return emptyCameraForm();
   const { source_type, url, pull_url } = normalizeSourceTypeForForm(cam);
+  const path = cam.path || cam.id || '';
   return {
-    path: cam.path || cam.id || '',
+    path,
     name: cam.name || '',
     source_type,
-    url,
+    url: url || (source_type === 'external' ? '' : defaultPlaybackUrl(path)),
     pull_url,
     enabled: cam.enabled !== false,
     settings: { ...(cam.settings || {}) },
@@ -142,6 +158,26 @@ export function sourceTypeLabel(value) {
   );
 }
 
+/** 切换流类型时一并改相关字段。巷道左右路若连续 onChange 会互相覆盖，必须一次写入。 */
+export function sourceTypeFormPatch(form, nextType) {
+  const source_type = nextType || DEFAULT_SOURCE_TYPE;
+  const patch = { source_type };
+  if (source_type === 'publisher' || source_type === 'rtsp_pull') {
+    const play = defaultPlaybackUrl(form?.path);
+    if (play && !form?.url) patch.url = play;
+  }
+  if (source_type === 'external') patch.pull_url = '';
+  return patch;
+}
+
+/** 表单字段更新：支持 (field, value) 或一次写入的 patch 对象 */
+export function applyFormFields(prev, field, value) {
+  if (field && typeof field === 'object' && value === undefined) {
+    return { ...prev, ...field };
+  }
+  return { ...prev, [field]: value };
+}
+
 export function emptyAisleCreateForm() {
   return {
     aisle_id: '',
@@ -158,9 +194,16 @@ export function applyAisleIdToCreateForm(form, aisleId) {
   const autoName = (side) => (prev ? `${prev} ${side}` : '');
   const left = { ...form.left };
   const right = { ...form.right };
+  const prevLeftPath = left.path;
+  const prevRightPath = right.path;
   if (!left.path || left.path === autoPath('L')) left.path = id ? `${id}-L` : '';
   if (!right.path || right.path === autoPath('R')) right.path = id ? `${id}-R` : '';
   if (!left.name || left.name === autoName('左路')) left.name = id ? `${id} 左路` : '';
   if (!right.name || right.name === autoName('右路')) right.name = id ? `${id} 右路` : '';
-  return { ...form, aisle_id: id, left, right };
+  return {
+    ...form,
+    aisle_id: id,
+    left: syncAutoPlaybackUrl(left, prevLeftPath),
+    right: syncAutoPlaybackUrl(right, prevRightPath),
+  };
 }

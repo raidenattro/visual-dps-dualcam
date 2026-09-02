@@ -181,7 +181,6 @@ export default function CameraSetupDrawer({
               <CameraStreamFields
                 form={form}
                 onChange={onChange}
-                pathLocked={!isCreate}
                 showEnabled={isCreate}
               />
               {!isCreate && form.source_type ? (

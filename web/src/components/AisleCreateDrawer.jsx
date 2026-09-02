@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import CameraStreamFields from './CameraStreamFields.jsx';
 import InferenceToggle from './InferenceToggle';
-import { applyAisleIdToCreateForm } from '../lib/cameraStreamForm';
+import { applyAisleIdToCreateForm, applyFormFields } from '../lib/cameraStreamForm';
 import { formatDuration, thumbnailUrl } from '../api/client';
 import { formatStreamError } from '../lib/userFacingText';
 import './CameraSetupDrawer.css';
@@ -59,9 +59,14 @@ export default function AisleCreateDrawer({
   if (!open) return null;
 
   const isEdit = mode === 'aisle';
-  const setAisleId = (value) => onChange(applyAisleIdToCreateForm(form, value));
+  const setAisleId = (value) => {
+    onChange((prev) => applyAisleIdToCreateForm(prev || form, value));
+  };
   const setSide = (side, field, value) => {
-    onChange({ ...form, [side]: { ...form[side], [field]: value } });
+    onChange((prev) => {
+      const cur = prev || form;
+      return { ...cur, [side]: applyFormFields(cur[side] || {}, field, value) };
+    });
   };
   const online = Boolean(camL?.online || camR?.online);
   const activity = Math.max(
@@ -75,10 +80,10 @@ export default function AisleCreateDrawer({
       <aside className="drawer-panel aisle-create-panel" role="dialog" aria-labelledby="aisle-create-title">
         <header className="drawer-header">
           <div>
-            <h2 id="aisle-create-title">{isEdit ? '巷道设置' : '添加巷道'}</h2>
+            <h2 id="aisle-create-title">{isEdit ? '修改巷道' : '添加巷道'}</h2>
             <p className="drawer-subtitle">
               {isEdit
-                ? form.aisle_id
+                ? '巷道号、通道号、名称、流类型、视频流地址均可改。'
                 : '左右路各配一路视频流，标注时只选这条巷道。'}
             </p>
           </div>
@@ -142,14 +147,17 @@ export default function AisleCreateDrawer({
                   onChange={(e) => setAisleId(e.target.value)}
                   placeholder="如 aisle-1"
                   required
-                  readOnly={isEdit}
                 />
               </label>
               {!isEdit ? (
                 <p className="drawer-field-hint">
                   通道号默认 {form.aisle_id || '编号'}-L / {form.aisle_id || '编号'}-R，可改。
                 </p>
-              ) : null}
+              ) : (
+                <p className="drawer-field-hint">
+                  巷道号只是名称，可改。检测正在跑时改名会先停止该巷道检测。
+                </p>
+              )}
             </section>
             <div className="aisle-cam-grid">
               <section className="drawer-section aisle-cam-block">
@@ -157,7 +165,6 @@ export default function AisleCreateDrawer({
                 <CameraStreamFields
                   dense
                   showEnabled
-                  pathLocked={isEdit}
                   form={form.left}
                   onChange={(field, value) => setSide('left', field, value)}
                 />
@@ -167,7 +174,6 @@ export default function AisleCreateDrawer({
                 <CameraStreamFields
                   dense
                   showEnabled
-                  pathLocked={isEdit}
                   form={form.right}
                   onChange={(field, value) => setSide('right', field, value)}
                 />
@@ -197,7 +203,7 @@ export default function AisleCreateDrawer({
               取消
             </button>
             <button type="submit" form="aisle-create-form" disabled={saving}>
-              {saving ? (isEdit ? '保存中…' : '创建中…') : isEdit ? '保存' : '创建巷道'}
+              {saving ? (isEdit ? '保存中…' : '创建中…') : isEdit ? '保存修改' : '创建巷道'}
             </button>
           </div>
         </footer>

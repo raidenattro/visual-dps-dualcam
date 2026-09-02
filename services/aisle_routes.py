@@ -12,7 +12,7 @@ from services.aisle_store import (
     camera_group,
     create_aisle_with_cameras,
     delete_aisle_with_cameras,
-    import_pickstate_calib,
+    update_aisle_cameras,
     list_aisles,
     load_aisle,
     save_aisle,
@@ -74,6 +74,27 @@ def register_aisle_routes(
             json_dir=json_dir,
         )
         audit_from_result(request, "aisle.delete", "aisle", aisle_id, result)
+        return result
+
+    @router.put("/aisles/{aisle_id}/cameras")
+    async def api_update_aisle_cameras(aisle_id: str, payload: dict, request: Request):
+        from services.audit_service import audit_from_result
+
+        result = update_aisle_cameras(
+            aisle_id,
+            (payload or {}).get("camera_l") or (payload or {}).get("L") or {},
+            (payload or {}).get("camera_r") or (payload or {}).get("R") or {},
+            camera_file=camera_ips_file,
+            mediamtx_config_path=mediamtx_config_path,
+            json_dir=json_dir,
+            new_aisle_id=str((payload or {}).get("aisle_id") or "").strip() or None,
+        )
+        if result.get("status") == "success":
+            aisle = dict(result["aisle"])
+            aid = str(aisle.get("aisle_id") or aisle_id)
+            aisle["logical_shard"] = logical_shard_id(aid)
+            result["aisle"] = aisle
+        audit_from_result(request, "aisle.update_cameras", "aisle", aisle_id, result)
         return result
 
     @router.get("/aisles/by-camera/{camera_id}")
@@ -149,21 +170,6 @@ def register_aisle_routes(
         data = dict(data)
         data["logical_shard"] = logical_shard_id(aisle_id)
         return {"status": "success", "aisle": data, "size_changed": changed}
-
-    @router.post("/aisles/{aisle_id}/import-calib")
-    async def api_import_pickstate_calib(aisle_id: str, payload: dict | None = None):
-        """导入实验仓 dual_1-3 标定（四角、层线、反解、货格），不改 cam1/cam2 绑定。"""
-        body = payload if isinstance(payload, dict) else {}
-        path = str(body.get("path") or "").strip() or None
-        try:
-            data, src = import_pickstate_calib(aisle_id, path, json_dir)
-        except FileNotFoundError as exc:
-            return {"status": "error", "error": str(exc)}
-        except ValueError as exc:
-            return {"status": "error", "error": str(exc)}
-        data = dict(data)
-        data["logical_shard"] = logical_shard_id(aisle_id)
-        return {"status": "success", "aisle": data, "source": src}
 
     @router.post("/aisles/{aisle_id}/solve")
     async def api_solve_aisle(aisle_id: str, payload: dict | None = None):

@@ -11,7 +11,7 @@ import {
   formatUserError,
 } from '../lib/userFacingText';
 import { aisleInferOn, aisleInferStatus, AISLE_INFER_LABEL, startAisleInference, stopAisleInference } from '../lib/aisleInference';
-import { cameraToForm, emptyAisleCreateForm, emptyCameraForm, formToCameraPayload } from '../lib/cameraStreamForm';
+import { applyFormFields, cameraToForm, emptyAisleCreateForm, emptyCameraForm, formToCameraPayload } from '../lib/cameraStreamForm';
 import './DashboardPage.css';
 
 const POLL_MS = 30000;
@@ -28,6 +28,27 @@ function aisleStreamHint(left, right) {
   if (le) parts.push(`左路 ${le}`);
   if (re) parts.push(`右路 ${re}`);
   return parts.join(' · ');
+}
+
+/** 创建接口返回的是整份 aisle JSON，总览卡片要的是 list 那套 camera_l / camera_r */
+function aisleCardFromMutation(data) {
+  const a = data?.aisle;
+  if (!a?.aisle_id) return null;
+  const cams = a.cameras || {};
+  const idOf = (role, fallback) => {
+    const fromRole = cams[role]?.camera_id;
+    if (fromRole) return fromRole;
+    if (typeof fallback === 'string') return fallback;
+    return fallback?.id || '';
+  };
+  return {
+    aisle_id: a.aisle_id,
+    camera_l: idOf('L', data.camera_l),
+    camera_r: idOf('R', data.camera_r),
+    solved: Boolean(a.solved?.ok),
+    mesh_walls: Array.isArray(a.slot_meshes) ? a.slot_meshes.length : Number(a.mesh_walls) || 0,
+    logical_shard: a.logical_shard,
+  };
 }
 
 export default function DashboardPage() {
@@ -61,38 +82,81 @@ export default function DashboardPage() {
   const applyCameraItems = useCallback((items) => {
     if (!Array.isArray(items)) return false;
     const now = Date.now() / 1000;
-    const mapped = items.map((item) => ({
-      ...item,
-      _syncedAt: now,
-      _displayActivity: item.activity_seconds ?? 0,
-    }));
-    setCameras(mapped);
+    setCameras((prev) => {
+      const prevById = new Map(prev.map((c) => [c.id, c]));
+      return items.map((item) => {
+        const old = prevById.get(item.id);
+        const hasListStatus = typeof item.has_thumbnail === 'boolean' || typeof item.online === 'boolean';
+        if (!old || hasListStatus) {
+          return {
+            ...item,
+            _syncedAt: now,
+            _displayActivity: item.activity_seconds ?? old?._displayActivity ?? 0,
+            _thumbNonce: item._thumbNonce ?? old?._thumbNonce,
+            has_thumbnail: item.has_thumbnail ?? old?.has_thumbnail,
+            last_frame_at: item.last_frame_at ?? old?.last_frame_at,
+          };
+        }
+        return {
+          ...old,
+          ...item,
+          has_thumbnail: old.has_thumbnail,
+          last_frame_at: old.last_frame_at,
+          online: old.online,
+          activity_seconds: old.activity_seconds,
+          inference: old.inference,
+          stream_error: old.stream_error,
+          _thumbNonce: old._thumbNonce,
+          _syncedAt: now,
+          _displayActivity: old._displayActivity ?? old.activity_seconds ?? 0,
+        };
+      });
+    });
     setSetupCamera((prev) => {
       if (!prev) return prev;
-      return mapped.find((c) => c.id === prev.id) || prev;
+      const next = items.find((c) => c.id === prev.id);
+      return next ? { ...prev, ...next } : prev;
     });
     setMsg(`共 ${items.length} 路摄像头 · 上次更新 ${new Date().toLocaleTimeString()}`);
     setMsgErr(false);
     return true;
   }, []);
 
+  const loadAisles = useCallback(async () => {
+    try {
+      const ad = await apiGet('/api/aisles');
+      if (ad.status === 'success' && Array.isArray(ad.items)) setAisles(ad.items);
+    } catch {
+      /* 巷道列表失败时仍展示单路卡片 */
+    }
+  }, []);
+
+  const applyAislesFromMutation = useCallback((data) => {
+    const card = aisleCardFromMutation(data);
+    if (card) {
+      const drop = new Set([card.aisle_id, data?.renamed_from].filter(Boolean));
+      setAisles((prev) => [...prev.filter((a) => !drop.has(a.aisle_id)), card]);
+      return;
+    }
+    if (data?.aisle_id && !data?.aisle) {
+      setAisles((prev) => prev.filter((a) => a.aisle_id !== data.aisle_id));
+    }
+  }, []);
+
   const loadCameras = useCallback(async ({ probe = false } = {}) => {
     if (probe) setProbing(true);
     try {
       const qs = probe ? '' : '?probe=false';
-      const data = await apiGet(`/api/cameras${qs}`);
+      const [data] = await Promise.all([
+        apiGet(`/api/cameras${qs}`),
+        loadAisles(),
+      ]);
       if (data.status !== 'success' || !Array.isArray(data.items)) {
         setMsg(formatUserError(data.error) || '加载失败');
         setMsgErr(true);
         return false;
       }
       applyCameraItems(data.items);
-      try {
-        const ad = await apiGet('/api/aisles');
-        if (ad.status === 'success' && Array.isArray(ad.items)) setAisles(ad.items);
-      } catch {
-        /* 巷道列表失败时仍展示单路卡片 */
-      }
       return true;
     } catch (e) {
       setMsg(formatUserError(e.message) || '无法连接服务器');
@@ -105,7 +169,7 @@ export default function DashboardPage() {
         setListLoading(false);
       }
     }
-  }, [applyCameraItems]);
+  }, [applyCameraItems, loadAisles]);
 
   const refreshListFastThenProbe = useCallback(async () => {
     await loadCameras({ probe: false });
@@ -114,15 +178,18 @@ export default function DashboardPage() {
 
   const refreshCamerasAfterMutation = useCallback(
     async (mutationData) => {
-      if (applyCameraItems(mutationData?.items)) {
-        setListLoading(false);
-        void loadCameras({ probe: true });
-        return;
-      }
+      applyAislesFromMutation(mutationData);
+      // 创建/保存返回的 items 是裸 camera_ips，没有缩略图和在线状态，不能整表替换。
       await refreshListFastThenProbe();
     },
-    [applyCameraItems, refreshListFastThenProbe],
+    [applyAislesFromMutation, refreshListFastThenProbe],
   );
+
+  useEffect(() => {
+    if (!configHint) return undefined;
+    const t = setTimeout(() => setConfigHint(''), 4000);
+    return () => clearTimeout(t);
+  }, [configHint]);
 
   useEffect(() => {
     let cancelled = false;
@@ -178,7 +245,7 @@ export default function DashboardPage() {
     }
   }, []);
 
-  const openAisleSetup = (aisle) => {
+  const openAisleSetup = async (aisle) => {
     const left = cameras.find((c) => c.id === aisle.camera_l);
     const right = cameras.find((c) => c.id === aisle.camera_r);
     setDrawerMode('aisle');
@@ -191,6 +258,23 @@ export default function DashboardPage() {
     });
     setDrawerOpen(true);
     loadGlobalSettings();
+    try {
+      const [ld, rd] = await Promise.all([
+        aisle.camera_l
+          ? apiGet(`/api/cameras/${encodeURIComponent(aisle.camera_l)}`)
+          : Promise.resolve(null),
+        aisle.camera_r
+          ? apiGet(`/api/cameras/${encodeURIComponent(aisle.camera_r)}`)
+          : Promise.resolve(null),
+      ]);
+      setAisleForm((prev) => ({
+        ...prev,
+        left: cameraToForm(ld?.camera || left),
+        right: cameraToForm(rd?.camera || right),
+      }));
+    } catch {
+      /* 列表里的表单仍可用 */
+    }
   };
 
   const openSetup = async (cam) => {
@@ -240,7 +324,7 @@ export default function DashboardPage() {
   }, [drawerOpen]);
 
   const onFormChange = (field, value) => {
-    setForm((prev) => ({ ...prev, [field]: value }));
+    setForm((prev) => applyFormFields(prev, field, value));
   };
 
   const saveFromDrawer = async () => {
@@ -276,27 +360,28 @@ export default function DashboardPage() {
         alert('巷道未绑定左右路');
         return;
       }
+      const nextAisleId = String(aisleForm.aisle_id || '').trim();
+      if (!nextAisleId) {
+        alert('请填写巷道编号');
+        return;
+      }
       setSaving(true);
       try {
-        const leftData = await apiPut(
-          `/api/cameras/${encodeURIComponent(setupAisle.camera_l)}`,
-          formToCameraPayload(aisleForm.left),
+        const data = await apiPut(
+          `/api/aisles/${encodeURIComponent(setupAisle.aisle_id)}/cameras`,
+          {
+            aisle_id: String(aisleForm.aisle_id || '').trim(),
+            camera_l: formToCameraPayload(aisleForm.left),
+            camera_r: formToCameraPayload(aisleForm.right),
+          },
         );
-        if (leftData.error) {
-          alert(formatUserError(leftData.error) || '左路保存失败');
+        if (data.error) {
+          alert(formatUserError(data.error) || '保存失败');
           return;
         }
-        const rightData = await apiPut(
-          `/api/cameras/${encodeURIComponent(setupAisle.camera_r)}`,
-          formToCameraPayload(aisleForm.right),
-        );
-        if (rightData.error) {
-          alert(formatUserError(rightData.error) || '右路保存失败');
-          return;
-        }
-        applyConfigHint(rightData);
+        applyConfigHint(data);
         closeDrawer();
-        await refreshCamerasAfterMutation(rightData);
+        await refreshCamerasAfterMutation(data);
       } catch (err) {
         alert(formatUserError(err.message) || '保存失败');
       } finally {
@@ -433,20 +518,41 @@ export default function DashboardPage() {
   };
 
   const startAllInference = async () => {
-    if (!window.confirm('确认启动全部已启用摄像头的智能检测？')) return;
+    const targets = aisles.filter((a) => a.camera_l && a.camera_r);
+    if (!targets.length) {
+      alert('没有已成组巷道可启动。未编入巷道的摄像头不会开推理。');
+      return;
+    }
+    if (!window.confirm(`确认启动全部 ${targets.length} 条巷道的智能检测？将按左右路成对启动。`)) {
+      return;
+    }
     setBatchInferAction('start');
-    setMsg('正在批量启动智能检测…');
+    setMsg('正在按巷道启动智能检测…');
     setMsgErr(false);
     try {
-      const data = await apiPost('/api/inference/start-all', {});
-      if (data.error) {
-        setMsg(formatUserError(data.error));
-        setMsgErr(true);
-        return;
+      let started = 0;
+      let skipped = 0;
+      let failed = 0;
+      const errors = [];
+      const isLive = (st) => st === 'running' || st === 'starting';
+      for (const aisle of targets) {
+        const left = cameras.find((c) => c.id === aisle.camera_l);
+        const right = cameras.find((c) => c.id === aisle.camera_r);
+        if (isLive(left?.inference?.status) && isLive(right?.inference?.status)) {
+          skipped += 1;
+          continue;
+        }
+        const r = await startAisleInference(aisle.camera_l, aisle.camera_r);
+        if (!r.ok) {
+          failed += 1;
+          if (r.error) errors.push(`${aisle.aisle_id}：${r.error}`);
+        } else {
+          started += 1;
+        }
       }
-      const failed = Number(data.failed) || 0;
+      const detail = errors.length ? `。${errors[0]}` : '';
       setMsg(
-        `批量启动完成：成功 ${data.started ?? 0} 路，跳过 ${data.skipped ?? 0} 路，失败 ${failed} 路`,
+        `按巷道启动完成：成功 ${started} 条，跳过 ${skipped} 条，失败 ${failed} 条${detail}`,
       );
       setMsgErr(failed > 0);
       await loadCameras({ probe: false });
@@ -546,8 +652,8 @@ export default function DashboardPage() {
             <button
               type="button"
               className="btn-batch"
-              title="启动全部已启用摄像头的智能检测"
-              disabled={batchInferBusy || listLoading || !cameras.length}
+              title="按巷道成对启动智能检测（未编入巷道的不启动）"
+              disabled={batchInferBusy || listLoading || !aisleCards.length}
               onClick={startAllInference}
             >
               {batchInferAction === 'start' ? '启动中…' : '全部启动检测'}
@@ -652,7 +758,7 @@ export default function DashboardPage() {
                         <button
                           type="button"
                           className="btn-icon"
-                          title="设置"
+                          title="修改巷道"
                           onClick={() => openAisleSetup(aisle)}
                         >
                           ⚙

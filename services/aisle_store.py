@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import copy
 import json
 import os
 import re
-from pathlib import Path
 from typing import Any
 
 _AISLE_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
@@ -151,146 +149,7 @@ def wall_shelf_code(aisle: dict | None, wall_id: int) -> str:
     return ""
 
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-PICKSTATE_CALIB_CANDIDATES = (
-    Path("/home/hqit/workspace/visual-dps-pick-state/output/calib/dual_1-3.json"),
-    _REPO_ROOT / "fixtures" / "dual_1-3.json",
-)
-
-
-def resolve_pickstate_calib(path: str | None = None) -> Path:
-    raw = str(path or os.environ.get("PICKSTATE_CALIB") or "").strip()
-    if raw:
-        p = Path(raw)
-        if not p.is_file():
-            raise FileNotFoundError(f"标定文件不存在：{p}")
-        return p
-    for cand in PICKSTATE_CALIB_CANDIDATES:
-        if cand.is_file():
-            return cand
-    raise FileNotFoundError("找不到实验仓 dual_1-3.json（visual-dps-pick-state 或本仓 fixtures）")
-
-
-def _shelf_map(aisle: dict | None) -> dict[int, str]:
-    out: dict[int, str] = {}
-    data = aisle if isinstance(aisle, dict) else {}
-    views = data.get("views") or {}
-    for role in ROLES:
-        for wall in ((views.get(role) or {}).get("walls") or []):
-            if not isinstance(wall, dict):
-                continue
-            try:
-                wid = int(wall.get("wall_id") or 0)
-            except (TypeError, ValueError):
-                continue
-            code = str(wall.get("shelf_code") or "").strip()
-            if wid >= 1 and code and wid not in out:
-                out[wid] = code
-    for mesh in data.get("slot_meshes") or []:
-        if not isinstance(mesh, dict):
-            continue
-        try:
-            wid = int(mesh.get("wall_id") or 0)
-        except (TypeError, ValueError):
-            continue
-        code = str(mesh.get("shelf_code") or "").strip()
-        if wid >= 1 and code and wid not in out:
-            out[wid] = code
-    return out
-
-
-def merge_pickstate_calib(aisle: dict, calib: dict) -> dict:
-    """把实验仓 dualcam 标定并进本仓巷道：保留 aisle_id / 相机绑定 / aabb / 货架号。"""
-    if not isinstance(calib, dict) or not (calib.get("views") or calib.get("solved")):
-        raise ValueError("标定文件缺少 views 或 solved")
-    out = dict(aisle)
-    keep_id = str(aisle.get("aisle_id") or "").strip()
-    keep_cams = copy.deepcopy(aisle.get("cameras") or {})
-    keep_aabb = copy.deepcopy(aisle.get("aabb")) if aisle.get("aabb") else None
-    shelves = _shelf_map(aisle)
-    for key in ("aisle", "contact_m", "prior"):
-        if key in calib and calib[key] is not None:
-            out[key] = copy.deepcopy(calib[key])
-    solved = calib.get("solved")
-    if isinstance(solved, dict):
-        out["solved"] = copy.deepcopy(solved)
-    meshes_in = calib.get("slot_meshes")
-    mesh_by_wall: dict[int, dict] = {}
-    if isinstance(meshes_in, list):
-        meshes = []
-        for mesh in meshes_in:
-            if not isinstance(mesh, dict):
-                continue
-            m = copy.deepcopy(mesh)
-            try:
-                wid = int(m.get("wall_id") or 0)
-            except (TypeError, ValueError):
-                meshes.append(m)
-                continue
-            code = str(m.get("shelf_code") or "").strip() or shelves.get(wid) or f"wall{wid}"
-            m["shelf_code"] = code
-            if wid >= 1:
-                mesh_by_wall[wid] = m
-            meshes.append(m)
-        out["slot_meshes"] = meshes
-    views_in = calib.get("views") or {}
-    views_out: dict[str, Any] = {}
-    for role in ROLES:
-        src = views_in.get(role) if isinstance(views_in, dict) else None
-        if not isinstance(src, dict):
-            views_out[role] = copy.deepcopy((aisle.get("views") or {}).get(role) or {"name": role})
-            continue
-        view = copy.deepcopy(src)
-        view["name"] = role
-        walls = []
-        for wall in view.get("walls") or []:
-            if not isinstance(wall, dict):
-                continue
-            w = dict(wall)
-            try:
-                wid = int(w.get("wall_id") or 0)
-            except (TypeError, ValueError):
-                walls.append(w)
-                continue
-            mesh = mesh_by_wall.get(wid) or {}
-            w["shelf_code"] = str(w.get("shelf_code") or "").strip() or shelves.get(wid) or f"wall{wid}"
-            layers = int(w.get("n_layers") or mesh.get("n_layers") or mesh.get("rows") or 4)
-            cols = int(w.get("n_cols") or mesh.get("cols") or 4)
-            w["n_layers"] = layers
-            w["n_cols"] = cols
-            walls.append(w)
-        view["walls"] = walls
-        views_out[role] = view
-    out["views"] = views_out
-    out["aisle_id"] = keep_id
-    out["cameras"] = keep_cams
-    if keep_aabb:
-        out["aabb"] = keep_aabb
-    if not parse_wall_ids(out.get("required_wall_ids")):
-        out["required_wall_ids"] = sorted(mesh_by_wall.keys()) or [1]
-    return out
-
-
-def import_pickstate_calib(
-    aisle_id: str,
-    calib_path: str | None = None,
-    json_dir: str | None = None,
-) -> tuple[dict, str]:
-    """从实验仓 JSON 导入标定，覆盖四角 / 层线 / 反解 / 货格，不改摄像头绑定。"""
-    aid = str(aisle_id or "").strip()
-    data = load_aisle(aid, json_dir)
-    if not data:
-        raise FileNotFoundError(f"巷道 {aid} 不存在")
-    src = resolve_pickstate_calib(calib_path)
-    calib = _read(str(src))
-    if not calib:
-        raise ValueError(f"无法读取标定：{src}")
-    merged = merge_pickstate_calib(data, calib)
-    saved = save_aisle(merged, json_dir)
-    return saved, str(src)
-
-
-def list_aisles(json_dir: str | None = None) -> list[dict]:
+def list_aisles(json_dir: str | None = None, *, bound_only: bool = True) -> list[dict]:
     d = aisles_dir(json_dir)
     if not os.path.isdir(d):
         return []
@@ -302,15 +161,39 @@ def list_aisles(json_dir: str | None = None) -> list[dict]:
         if not data:
             continue
         cams = data.get("cameras") or {}
+        camera_l = (cams.get("L") or {}).get("camera_id") or ""
+        camera_r = (cams.get("R") or {}).get("camera_id") or ""
+        if bound_only and (not str(camera_l).strip() or not str(camera_r).strip()):
+            continue
         meshes = data.get("slot_meshes") or []
         out.append({
+            "id": data.get("id"),
             "aisle_id": data.get("aisle_id") or name[:-5],
-            "camera_l": (cams.get("L") or {}).get("camera_id") or "",
-            "camera_r": (cams.get("R") or {}).get("camera_id") or "",
+            "camera_l": camera_l,
+            "camera_r": camera_r,
             "solved": bool((data.get("solved") or {}).get("ok")),
             "mesh_walls": len(meshes) if isinstance(meshes, list) else 0,
         })
     return out
+
+
+def _next_aisle_pk(json_dir: str | None = None) -> int:
+    """巷道内部自增主键；aisle_id 只是显示用的巷道号。"""
+    max_n = 0
+    for item in list_aisles(json_dir, bound_only=False):
+        raw = item.get("id")
+        if str(raw).isdigit():
+            max_n = max(max_n, int(raw))
+    return max_n + 1
+
+
+def _ensure_aisle_pk(data: dict, json_dir: str | None = None) -> dict:
+    data = dict(data)
+    if str(data.get("id") or "").isdigit():
+        data["id"] = int(data["id"])
+        return data
+    data["id"] = _next_aisle_pk(json_dir)
+    return data
 
 
 def load_aisle(aisle_id: str, json_dir: str | None = None) -> dict | None:
@@ -391,12 +274,47 @@ def save_aisle(data: dict, json_dir: str | None = None) -> dict:
     return data
 
 
+def rename_aisle(old_id: str, new_id: str, json_dir: str | None = None) -> dict:
+    """改巷道号（显示名）。内部 id 不变；标定文件改名。检测会先停，避免 AISLE_ID 指向旧文件。"""
+    old = str(old_id or "").strip()
+    new = str(new_id or "").strip()
+    if old == new:
+        data = load_aisle(old, json_dir)
+        return {"status": "success", "aisle": data} if data else {"error": "巷道不存在"}
+    if not _AISLE_RE.match(new):
+        return {"error": "巷道编号仅支持字母、数字、下划线、中划线（1–64）"}
+    if load_aisle(new, json_dir):
+        return {"error": f"巷道 {new} 已存在"}
+    data = load_aisle(old, json_dir)
+    if not data:
+        return {"error": "巷道不存在"}
+
+    from services.inference_container_service import stop_inference_container
+
+    cams = data.get("cameras") or {}
+    for role in ROLES:
+        cid = str((cams.get(role) or {}).get("camera_id") or "").strip()
+        if cid:
+            stop_inference_container(cid)
+
+    data = _ensure_aisle_pk(data, json_dir)
+    data["aisle_id"] = new
+    saved = save_aisle(data, json_dir)
+    old_path = aisle_path(old, json_dir)
+    if os.path.isfile(old_path):
+        try:
+            os.remove(old_path)
+        except OSError:
+            pass
+    return {"status": "success", "aisle": saved, "renamed_from": old}
+
+
 def camera_group(camera_id: str, json_dir: str | None = None) -> dict | None:
     """查找相机所属巷道：{aisle_id, role}。"""
     cid = str(camera_id or "").strip()
     if not cid:
         return None
-    for item in list_aisles(json_dir):
+    for item in list_aisles(json_dir, bound_only=False):
         aid = item["aisle_id"]
         data = load_aisle(aid, json_dir)
         if not data:
@@ -411,7 +329,7 @@ def camera_group(camera_id: str, json_dir: str | None = None) -> dict | None:
 def grouped_cameras(json_dir: str | None = None) -> dict[str, dict]:
     """camera_id → {aisle_id, role}。"""
     out: dict[str, dict] = {}
-    for item in list_aisles(json_dir):
+    for item in list_aisles(json_dir, bound_only=False):
         data = load_aisle(item["aisle_id"], json_dir)
         if not data:
             continue
@@ -502,7 +420,7 @@ def bind_group(
     if left == right:
         raise ValueError("左右路不能是同一台摄像头")
 
-    for other in list_aisles(json_dir):
+    for other in list_aisles(json_dir, bound_only=False):
         oid = other["aisle_id"]
         if oid == aid:
             continue
@@ -580,7 +498,7 @@ def create_aisle_with_cameras(
     if r2.get("error"):
         for cid in created:
             if cid:
-                delete_camera(camera_file, mediamtx_config_path, cid)
+                delete_camera(camera_file, mediamtx_config_path, cid, json_dir=json_dir)
         return {"error": f"右路：{r2['error']}"}
     created.append(str((r2.get("camera") or {}).get("id") or ""))
     try:
@@ -588,8 +506,9 @@ def create_aisle_with_cameras(
     except ValueError as exc:
         for cid in created:
             if cid:
-                delete_camera(camera_file, mediamtx_config_path, cid)
+                delete_camera(camera_file, mediamtx_config_path, cid, json_dir=json_dir)
         return {"error": str(exc)}
+    aisle = save_aisle(_ensure_aisle_pk(aisle, json_dir), json_dir)
     return {
         "status": "success",
         "aisle": aisle,
@@ -600,6 +519,58 @@ def create_aisle_with_cameras(
     }
 
 
+def update_aisle_cameras(
+    aisle_id: str,
+    camera_l: dict,
+    camera_r: dict,
+    *,
+    camera_file: str,
+    mediamtx_config_path: str,
+    json_dir: str | None = None,
+    new_aisle_id: str | None = None,
+) -> dict:
+    """更新已成组巷道的左右路视频流；巷道号（aisle_id）可改，内部 id 不变。"""
+    from services.camera_store import update_camera
+
+    aid = str(aisle_id or "").strip()
+    data = load_aisle(aid, json_dir)
+    if not data:
+        return {"error": "巷道不存在"}
+    renamed_from = None
+    nxt = str(new_aisle_id or "").strip()
+    if nxt and nxt != aid:
+        renamed = rename_aisle(aid, nxt, json_dir)
+        if renamed.get("error"):
+            return renamed
+        aid = nxt
+        renamed_from = renamed.get("renamed_from") or aisle_id
+        data = renamed.get("aisle") or load_aisle(aid, json_dir)
+    cams = data.get("cameras") or {}
+    id_l = str((cams.get("L") or {}).get("camera_id") or "").strip()
+    id_r = str((cams.get("R") or {}).get("camera_id") or "").strip()
+    if not id_l or not id_r:
+        return {"error": "巷道未绑定左右路"}
+
+    r1 = update_camera(camera_file, mediamtx_config_path, id_l, dict(camera_l or {}))
+    if r1.get("error"):
+        return {"error": f"左路：{r1['error']}"}
+    r2 = update_camera(camera_file, mediamtx_config_path, id_r, dict(camera_r or {}))
+    if r2.get("error"):
+        return {"error": f"右路：{r2['error']}"}
+    aisle = load_aisle(aid, json_dir) or data
+    out = {
+        "status": "success",
+        "aisle": aisle,
+        "camera_l": r1.get("camera"),
+        "camera_r": r2.get("camera"),
+        "items": r2.get("items"),
+        "mediamtx": r2.get("mediamtx"),
+    }
+    if renamed_from:
+        out["renamed_from"] = renamed_from
+    return out
+
+
 def delete_aisle_with_cameras(
     aisle_id: str,
     *,
@@ -607,7 +578,7 @@ def delete_aisle_with_cameras(
     mediamtx_config_path: str,
     json_dir: str | None = None,
 ) -> dict:
-    """删除巷道绑定的左右路摄像头，并解开成组（标定 JSON 保留）。"""
+    """删除巷道：左右路摄像头、标注 JSON、巷道标定文件一并删掉。"""
     from services.camera_store import delete_camera, load_cameras
 
     aid = str(aisle_id or "").strip()
@@ -622,15 +593,91 @@ def delete_aisle_with_cameras(
             ids.append(cid)
     last = {"items": load_cameras(camera_file), "mediamtx": None}
     for cid in ids:
-        r = delete_camera(camera_file, mediamtx_config_path, cid)
+        r = delete_camera(camera_file, mediamtx_config_path, cid, json_dir=json_dir)
         if r.get("error") and r["error"] != "未找到该摄像头":
             return {"error": f"{cid}：{r['error']}"}
         if r.get("status") == "success":
             last = r
-    unbind_group(aid, json_dir)
+    aisle_json = aisle_path(aid, json_dir)
+    if os.path.isfile(aisle_json):
+        try:
+            os.remove(aisle_json)
+        except OSError:
+            return {"error": f"无法删除巷道文件 {aid}"}
     return {
         "status": "success",
         "aisle_id": aid,
         "items": last.get("items"),
         "mediamtx": last.get("mediamtx"),
+    }
+
+
+def purge_unbound_aisles_and_cameras(
+    *,
+    camera_file: str,
+    mediamtx_config_path: str,
+    json_dir: str | None = None,
+) -> dict:
+    """清掉未成组巷道 JSON、未编入巷道的摄像头，以及无主标注 JSON。"""
+    from services.annotation_service import delete_camera_annotation
+    from services.camera_store import delete_camera, load_cameras
+
+    removed_aisles: list[str] = []
+    bound_cam_ids: set[str] = set()
+    d = aisles_dir(json_dir)
+    if os.path.isdir(d):
+        for name in list(os.listdir(d)):
+            if not name.endswith(".json"):
+                continue
+            path = os.path.join(d, name)
+            data = _read(path)
+            if not data:
+                continue
+            cams = data.get("cameras") or {}
+            left = str((cams.get("L") or {}).get("camera_id") or "").strip()
+            right = str((cams.get("R") or {}).get("camera_id") or "").strip()
+            aid = str(data.get("aisle_id") or name[:-5]).strip()
+            if left and right:
+                bound_cam_ids.add(left)
+                bound_cam_ids.add(right)
+                continue
+            try:
+                os.remove(path)
+                removed_aisles.append(aid)
+            except OSError:
+                pass
+
+    removed_cameras: list[str] = []
+    last_items = load_cameras(camera_file)
+    last_mtx = None
+    for cam in list(last_items):
+        cid = str(cam.get("id") or "").strip()
+        if not cid or cid in bound_cam_ids:
+            continue
+        r = delete_camera(camera_file, mediamtx_config_path, cid, json_dir=json_dir)
+        if r.get("status") == "success":
+            removed_cameras.append(cid)
+            last_items = r.get("items") or last_items
+            last_mtx = r.get("mediamtx")
+
+    keep = {str(c.get("id") or "") for c in last_items}
+    removed_annotations: list[str] = []
+    cam_dir = os.path.join(_json_dir(json_dir), "cameras")
+    if os.path.isdir(cam_dir):
+        for name in list(os.listdir(cam_dir)):
+            if not name.endswith(".json"):
+                continue
+            cid = name[:-5]
+            if cid in keep:
+                continue
+            if delete_camera_annotation(cid, _json_dir(json_dir)):
+                removed_annotations.append(cid)
+
+    return {
+        "status": "success",
+        "removed_aisles": removed_aisles,
+        "removed_cameras": removed_cameras,
+        "removed_annotations": removed_annotations,
+        "items": last_items,
+        "mediamtx": last_mtx,
     }

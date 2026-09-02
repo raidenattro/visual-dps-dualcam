@@ -254,7 +254,6 @@ export default function AisleAnnotatePage() {
   const [boxIdEdit, setBoxIdEdit] = useState('');
   const [frameAt, setFrameAt] = useState({});
   const [grabbing, setGrabbing] = useState(false);
-  const [importing, setImporting] = useState(false);
   const dragRef = useRef(null);
   const didDragRef = useRef(false);
   const skipClickRef = useRef(false);
@@ -310,39 +309,11 @@ export default function AisleAnnotatePage() {
     setCamR(R);
   };
 
-  const importPickstateCalib = async () => {
-    if (!aisleId) {
-      setMsg('请先打开巷道');
-      return;
-    }
-    if (!window.confirm('用实验仓 dual_1-3 覆盖本巷道四角、层线和反解？摄像头绑定保持不变。')) {
-      return;
-    }
-    setImporting(true);
-    try {
-      const d = await apiPost(`/api/aisles/${encodeURIComponent(aisleId)}/import-calib`, {});
-      if (d.status !== 'success' || !d.aisle) {
-        showToast(d.error || '导入失败', 'err');
-        return;
-      }
-      applyAisle(d.aisle);
-      const residL = d.aisle.solved?.cameras?.L?.resid_px;
-      const residR = d.aisle.solved?.cameras?.R?.resid_px;
-      showToast(
-        `已导入实验仓标定（残差 左 ${residL ?? '?'} px · 右 ${residR ?? '?'} px）。抽帧后对照空心圈即可。`,
-      );
-    } catch (e) {
-      showToast(formatUserError(e.message), 'err');
-    } finally {
-      setImporting(false);
-    }
-  };
-
   useEffect(() => {
     apiGet('/api/cameras?probe=0').then((d) => setCameras(d.items || [])).catch(() => {});
     apiGet('/api/aisles')
       .then(async (d) => {
-        const items = d.items || [];
+        const items = (d.items || []).filter((a) => a.camera_l && a.camera_r);
         setAisleList(items);
         const first = items.find((a) => a.camera_l && a.camera_r) || items[0];
         if (!first?.aisle_id) return;
@@ -1036,9 +1007,6 @@ export default function AisleAnnotatePage() {
         <div className="btns">
           <button type="button" className="pri" onClick={() => grabStills()} disabled={grabbing || !grouped}>
             {grabbing ? '抽帧中…' : '抽帧'}
-          </button>
-          <button type="button" onClick={importPickstateCalib} disabled={!aisleId || importing}>
-            {importing ? '导入中…' : '导入实验仓标定'}
           </button>
         </div>
         {shard !== null && shard !== undefined && (

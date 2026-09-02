@@ -14,6 +14,18 @@ def camera_annotation_path(json_dir: str, camera_id: str) -> str:
     return os.path.join(json_dir, "cameras", f"{cid}.json")
 
 
+def delete_camera_annotation(camera_id: str, json_dir: str) -> bool:
+    """删除该摄像头的标注 JSON。文件不存在不算失败。"""
+    path = camera_annotation_path(json_dir, camera_id)
+    if not path or not os.path.isfile(path):
+        return False
+    try:
+        os.remove(path)
+        return True
+    except OSError:
+        return False
+
+
 def _read_annotation_file(json_path: str):
     if not os.path.isfile(json_path):
         return None

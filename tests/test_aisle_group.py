@@ -119,9 +119,15 @@ def test_create_aisle_with_cameras_binds_pair(tmp_path: Path, json_dir: str):
     )
     assert out.get("status") == "success", out
     aisle = load_aisle("aisle-9", json_dir)
-    assert aisle["cameras"]["L"]["camera_id"] == "aisle-9-L"
-    assert aisle["cameras"]["R"]["camera_id"] == "aisle-9-R"
-    assert camera_group("aisle-9-L", json_dir)["role"] == "L"
+    id_l = out["camera_l"]["id"]
+    id_r = out["camera_r"]["id"]
+    assert id_l != "aisle-9-L" and id_l.isdigit()
+    assert out["camera_l"]["path"] == "aisle-9-L"
+    assert out["camera_r"]["path"] == "aisle-9-R"
+    assert aisle["cameras"]["L"]["camera_id"] == id_l
+    assert aisle["cameras"]["R"]["camera_id"] == id_r
+    assert camera_group(id_l, json_dir)["role"] == "L"
+    assert out["aisle"].get("id") == 1
     dup = create_aisle_with_cameras(
         "aisle-9",
         {"path": "x-L", "name": "x", "source_type": "rtsp_pull", "pull_url": "rtsp://10.0.0.3:554/s"},
@@ -162,6 +168,10 @@ def test_delete_aisle_with_cameras_unbinds(tmp_path: Path, json_dir: str, monkey
         json_dir=json_dir,
     )
     assert created.get("status") == "success", created
+    cam_json = Path(json_dir) / "cameras"
+    cam_json.mkdir(parents=True, exist_ok=True)
+    (cam_json / f"{created['camera_l']['id']}.json").write_text("{}", encoding="utf-8")
+    (cam_json / f"{created['camera_r']['id']}.json").write_text("{}", encoding="utf-8")
     out = delete_aisle_with_cameras(
         "aisle-del",
         camera_file=cam_file,
@@ -170,13 +180,210 @@ def test_delete_aisle_with_cameras_unbinds(tmp_path: Path, json_dir: str, monkey
     )
     assert out.get("status") == "success", out
     ids = {c["id"] for c in load_cameras(cam_file)}
-    assert "aisle-del-L" not in ids
-    assert "aisle-del-R" not in ids
-    assert camera_group("aisle-del-L", json_dir) is None
+    assert created["camera_l"]["id"] not in ids
+    assert created["camera_r"]["id"] not in ids
+    assert camera_group(created["camera_l"]["id"], json_dir) is None
     leftover = load_aisle("aisle-del", json_dir)
-    assert leftover
-    assert not leftover["cameras"]["L"]["camera_id"]
-    assert not leftover["cameras"]["R"]["camera_id"]
+    assert leftover is None
+    from services.aisle_store import list_aisles
+    assert "aisle-del" not in {a["aisle_id"] for a in list_aisles(json_dir, bound_only=False)}
+    assert not (cam_json / f"{created['camera_l']['id']}.json").is_file()
+    assert not (cam_json / f"{created['camera_r']['id']}.json").is_file()
+
+
+def test_list_aisles_hides_unbound(json_dir: str):
+    from services.aisle_store import list_aisles
+
+    bind_group("aisle-ok", "cam-l", "cam-r", json_dir)
+    save_aisle(empty_aisle("ghost"), json_dir)
+    bound = {a["aisle_id"] for a in list_aisles(json_dir)}
+    all_ids = {a["aisle_id"] for a in list_aisles(json_dir, bound_only=False)}
+    assert bound == {"aisle-ok"}
+    assert "ghost" in all_ids
+    unbind_group("aisle-ok", json_dir)
+    assert list_aisles(json_dir) == []
+
+
+def test_purge_unbound_aisles_and_orphan_cameras(tmp_path: Path, json_dir: str, monkeypatch: pytest.MonkeyPatch):
+    from services.aisle_store import purge_unbound_aisles_and_cameras
+    from services.camera_store import create_camera, load_cameras
+    import services.inference_container_service as infer_svc
+
+    monkeypatch.setattr(infer_svc, "stop_inference_container", lambda *_a, **_k: None)
+
+    cam_file = str(tmp_path / "cameras.json")
+    mtx = str(tmp_path / "mediamtx.yml")
+    Path(cam_file).write_text("[]", encoding="utf-8")
+    created = create_aisle_with_cameras(
+        "aisle-keep",
+        {
+            "path": "keep-L",
+            "name": "左",
+            "source_type": "rtsp_pull",
+            "pull_url": "rtsp://10.0.0.1:554/s1",
+        },
+        {
+            "path": "keep-R",
+            "name": "右",
+            "source_type": "rtsp_pull",
+            "pull_url": "rtsp://10.0.0.2:554/s1",
+        },
+        camera_file=cam_file,
+        mediamtx_config_path=mtx,
+        json_dir=json_dir,
+    )
+    assert created.get("status") == "success", created
+    save_aisle(empty_aisle("ghost"), json_dir)
+    lonely = create_camera(
+        cam_file,
+        mtx,
+        {"path": "lonely", "name": "无巷道", "source_type": "publisher"},
+    )
+    assert lonely.get("status") == "success", lonely
+    cam_json = Path(json_dir) / "cameras"
+    cam_json.mkdir(parents=True, exist_ok=True)
+    (cam_json / "orphan-old.json").write_text("{}", encoding="utf-8")
+    (cam_json / f"{created['camera_l']['id']}.json").write_text("{}", encoding="utf-8")
+
+    out = purge_unbound_aisles_and_cameras(
+        camera_file=cam_file,
+        mediamtx_config_path=mtx,
+        json_dir=json_dir,
+    )
+    assert out.get("status") == "success", out
+    assert "ghost" in out["removed_aisles"]
+    assert lonely["camera"]["id"] in out["removed_cameras"]
+    assert "orphan-old" in out["removed_annotations"]
+    assert load_aisle("ghost", json_dir) is None
+    assert load_aisle("aisle-keep", json_dir)
+    ids = {c["id"] for c in load_cameras(cam_file)}
+    assert created["camera_l"]["id"] in ids
+    assert created["camera_r"]["id"] in ids
+    assert lonely["camera"]["id"] not in ids
+    assert not (cam_json / "orphan-old.json").is_file()
+    assert (cam_json / f"{created['camera_l']['id']}.json").is_file()
+
+
+def test_update_aisle_cameras_changes_stream_not_ids(tmp_path: Path, json_dir: str):
+    from services.aisle_store import update_aisle_cameras
+    from services.camera_store import load_cameras
+
+    cam_file = str(tmp_path / "cameras.json")
+    mtx = str(tmp_path / "mediamtx.yml")
+    Path(cam_file).write_text("[]", encoding="utf-8")
+    created = create_aisle_with_cameras(
+        "aisle-up",
+        {
+            "path": "aisle-up-L",
+            "name": "左",
+            "source_type": "rtsp_pull",
+            "pull_url": "rtsp://10.0.0.1:554/s1",
+        },
+        {
+            "path": "aisle-up-R",
+            "name": "右",
+            "source_type": "rtsp_pull",
+            "pull_url": "rtsp://10.0.0.2:554/s1",
+        },
+        camera_file=cam_file,
+        mediamtx_config_path=mtx,
+        json_dir=json_dir,
+    )
+    assert created.get("status") == "success", created
+    id_l = created["camera_l"]["id"]
+    id_r = created["camera_r"]["id"]
+    out = update_aisle_cameras(
+        "aisle-up",
+        {
+            "name": "左路新",
+            "path": "aisle-up-L2",
+            "source_type": "rtsp_pull",
+            "pull_url": "rtsp://10.0.0.8:554/live",
+            "url": "rtsp://127.0.0.1:8554/aisle-up-L",
+        },
+        {
+            "name": "右路新",
+            "source_type": "publisher",
+            "url": "rtsp://127.0.0.1:8554/aisle-up-R",
+        },
+        camera_file=cam_file,
+        mediamtx_config_path=mtx,
+        json_dir=json_dir,
+    )
+    assert out.get("status") == "success", out
+    by_id = {c["id"]: c for c in load_cameras(cam_file)}
+    assert set(by_id) == {id_l, id_r}
+    assert by_id[id_l]["name"] == "左路新"
+    assert by_id[id_l]["path"] == "aisle-up-L2"
+    assert by_id[id_l]["pull_url"] == "rtsp://10.0.0.8:554/live"
+    assert by_id[id_r]["name"] == "右路新"
+    assert by_id[id_r]["source_type"] == "publisher"
+    aisle = load_aisle("aisle-up", json_dir)
+    assert aisle["cameras"]["L"]["camera_id"] == id_l
+    missing = update_aisle_cameras(
+        "no-such",
+        {"name": "x"},
+        {"name": "y"},
+        camera_file=cam_file,
+        mediamtx_config_path=mtx,
+        json_dir=json_dir,
+    )
+    assert "不存在" in (missing.get("error") or "")
+
+
+def test_rename_aisle_number_keeps_pk(tmp_path: Path, json_dir: str, monkeypatch: pytest.MonkeyPatch):
+    from services.aisle_store import update_aisle_cameras
+    import services.inference_container_service as infer_svc
+
+    monkeypatch.setattr(infer_svc, "stop_inference_container", lambda *_a, **_k: {"status": "success"})
+    cam_file = str(tmp_path / "cameras.json")
+    mtx = str(tmp_path / "mediamtx.yml")
+    Path(cam_file).write_text("[]", encoding="utf-8")
+    created = create_aisle_with_cameras(
+        "aisle-old",
+        {
+            "path": "aisle-old-L",
+            "name": "左",
+            "source_type": "rtsp_pull",
+            "pull_url": "rtsp://10.0.0.1:554/s1",
+        },
+        {
+            "path": "aisle-old-R",
+            "name": "右",
+            "source_type": "rtsp_pull",
+            "pull_url": "rtsp://10.0.0.2:554/s1",
+        },
+        camera_file=cam_file,
+        mediamtx_config_path=mtx,
+        json_dir=json_dir,
+    )
+    assert created.get("status") == "success", created
+    pk = created["aisle"]["id"]
+    id_l = created["camera_l"]["id"]
+    out = update_aisle_cameras(
+        "aisle-old",
+        {
+            "name": "左",
+            "source_type": "rtsp_pull",
+            "pull_url": "rtsp://10.0.0.1:554/s1",
+        },
+        {
+            "name": "右",
+            "source_type": "rtsp_pull",
+            "pull_url": "rtsp://10.0.0.2:554/s1",
+        },
+        camera_file=cam_file,
+        mediamtx_config_path=mtx,
+        json_dir=json_dir,
+        new_aisle_id="aisle-new",
+    )
+    assert out.get("status") == "success", out
+    assert out["aisle"]["aisle_id"] == "aisle-new"
+    assert out["aisle"]["id"] == pk
+    assert out.get("renamed_from") == "aisle-old"
+    assert load_aisle("aisle-old", json_dir) is None
+    assert load_aisle("aisle-new", json_dir)["cameras"]["L"]["camera_id"] == id_l
+    assert camera_group(id_l, json_dir)["aisle_id"] == "aisle-new"
 
 
 def test_apply_capture_sizes_writes_pixels_and_invalidates_solve(json_dir: str):
@@ -198,25 +405,3 @@ def test_apply_capture_sizes_writes_pixels_and_invalidates_solve(json_dir: str):
     assert out["views"]["L"]["image_size"] == [960, 720]
     assert out["views"]["L"]["walls"][0]["quad"][0][0] == pytest.approx(0.0, abs=0.5)
     assert out["solved"].get("ok") is not True
-
-
-def test_import_pickstate_calib_keeps_cameras(json_dir: str):
-    from pathlib import Path
-
-    from services.aisle_store import empty_aisle, import_pickstate_calib
-
-    fixture = Path(__file__).resolve().parents[1] / "fixtures" / "dual_1-3.json"
-    if not fixture.is_file():
-        pytest.skip("缺少 fixtures/dual_1-3.json")
-    data = empty_aisle("aisle-imp")
-    data["cameras"] = {"L": {"camera_id": "cam1", "role": "L"}, "R": {"camera_id": "cam2", "role": "R"}}
-    data["views"]["L"]["walls"][0]["shelf_code"] = "左货架"
-    save_aisle(data, json_dir)
-    out, src = import_pickstate_calib("aisle-imp", str(fixture), json_dir)
-    assert src.endswith("dual_1-3.json")
-    assert out["cameras"]["L"]["camera_id"] == "cam1"
-    assert out["cameras"]["R"]["camera_id"] == "cam2"
-    assert out["solved"]["ok"] is True
-    assert len(out["views"]["L"]["walls"][0]["quad"]) == 4
-    assert out["slot_meshes"]
-    assert out["views"]["L"]["walls"][0]["shelf_code"] == "左货架"

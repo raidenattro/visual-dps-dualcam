@@ -44,10 +44,13 @@ def _normalize_record(raw: dict) -> dict | None:
     source_type = str(raw.get("source_type") or SOURCE_RTSP_PULL).strip()
     if source_type == "v4l2":
         source_type = SOURCE_PUBLISHER
-    path = str(raw.get("path") or raw.get("id") or "").strip()
+    path = str(raw.get("path") or "").strip()
+    cid = str(raw.get("id") or "").strip()
     name = str(raw.get("name") or "").strip()
     url = str(raw.get("url") or "").strip()
 
+    if not path:
+        path = cid
     if not path and url:
         path = path_from_url(url)
     if not path and source_type != SOURCE_EXTERNAL:
@@ -68,8 +71,12 @@ def _normalize_record(raw: dict) -> dict | None:
         if not url:
             url = build_playback_url(path)
 
+    # 旧数据没有独立 id 时，id 仍等于 path；新数据 id 为自增数字
+    if not cid:
+        cid = path
+
     record = {
-        "id": path,
+        "id": cid,
         "name": name,
         "path": path,
         "url": url,
@@ -133,10 +140,40 @@ def save_cameras(camera_file: str, items: List[dict]):
         json.dump(items, f, ensure_ascii=False, indent=2)
 
 
+def _next_camera_id(items: List[dict]) -> str:
+    """自增数字 id。旧记录若仍用 path 当 id，不影响计数。"""
+    max_n = 0
+    for cam in items:
+        cid = str(cam.get("id") or "").strip()
+        if cid.isdigit():
+            max_n = max(max_n, int(cid))
+    return str(max_n + 1)
+
+
+def _path_taken(items: List[dict], path: str, *, except_id: str | None = None) -> bool:
+    p = str(path or "").strip()
+    if not p:
+        return False
+    for cam in items:
+        if str(cam.get("path") or "").strip() != p:
+            continue
+        if except_id is not None and str(cam.get("id") or "") == str(except_id):
+            continue
+        return True
+    return False
+
+
+def _is_auto_playback_url(url: str, path: str) -> bool:
+    cur = str(url or "").strip()
+    if not cur:
+        return True
+    return cur == build_playback_url(path)
+
+
 def validate_camera_payload(data: dict, existing_id: str | None = None) -> tuple[dict | None, str | None]:
-    path = str(data.get("path") or data.get("id") or "").strip()
-    if existing_id:
-        path = existing_id
+    path = str(data.get("path") or "").strip()
+    if not path:
+        path = str(data.get("id") or existing_id or "").strip()
 
     source_type = str(data.get("source_type") or SOURCE_RTSP_PULL).strip()
     if source_type == "v4l2":
@@ -169,8 +206,9 @@ def validate_camera_payload(data: dict, existing_id: str | None = None) -> tuple
     else:
         return None, f"不支持的 source_type: {source_type}"
 
+    rec_id = str(existing_id or data.get("id") or path).strip()
     raw_rec = {
-        "id": path,
+        "id": rec_id,
         "path": path,
         "name": name,
         "url": url,
@@ -195,9 +233,10 @@ def create_camera(camera_file: str, mediamtx_config_path: str, data: dict) -> di
         return {"error": err}
 
     items = load_cameras(camera_file)
-    if any(c["id"] == rec["id"] for c in items):
-        return {"error": f"通道编号已被使用: {rec['id']}"}
+    if _path_taken(items, rec["path"]):
+        return {"error": f"通道号已被使用: {rec['path']}"}
 
+    rec["id"] = _next_camera_id(items)
     items.append(rec)
     save_cameras(camera_file, items)
     mtx = sync_mediamtx_config(mediamtx_config_path, items)
@@ -210,7 +249,18 @@ def update_camera(camera_file: str, mediamtx_config_path: str, camera_id: str, d
     if idx < 0:
         return {"error": "未找到该摄像头"}
 
-    merged = {**items[idx], **data, "path": camera_id, "id": camera_id}
+    old = items[idx]
+    old_path = str(old.get("path") or camera_id).strip()
+    new_path = str((data or {}).get("path") or old_path).strip()
+    if _path_taken(items, new_path, except_id=camera_id):
+        return {"error": f"通道号已被使用: {new_path}"}
+
+    merged = {**old, **(data or {}), "id": camera_id, "path": new_path}
+    if _is_auto_playback_url(str(old.get("url") or ""), old_path):
+        incoming_url = str((data or {}).get("url") or "").strip()
+        if not incoming_url or incoming_url == build_playback_url(old_path):
+            merged["url"] = build_playback_url(new_path)
+
     rec, err = validate_camera_payload(merged, existing_id=camera_id)
     if err:
         return {"error": err}
@@ -221,7 +271,12 @@ def update_camera(camera_file: str, mediamtx_config_path: str, camera_id: str, d
     return {"status": "success", "camera": rec, "items": items, "mediamtx": mtx}
 
 
-def delete_camera(camera_file: str, mediamtx_config_path: str, camera_id: str) -> dict:
+def delete_camera(
+    camera_file: str,
+    mediamtx_config_path: str,
+    camera_id: str,
+    json_dir: str | None = None,
+) -> dict:
     from services.inference_container_service import stop_inference_container
 
     items = load_cameras(camera_file)
@@ -232,6 +287,10 @@ def delete_camera(camera_file: str, mediamtx_config_path: str, camera_id: str) -
     stop_inference_container(camera_id)
     save_cameras(camera_file, new_items)
     mtx = sync_mediamtx_config(mediamtx_config_path, new_items)
+    if json_dir:
+        from services.annotation_service import delete_camera_annotation
+
+        delete_camera_annotation(camera_id, json_dir)
     return {"status": "success", "items": new_items, "mediamtx": mtx}
 
 

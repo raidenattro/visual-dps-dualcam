@@ -3,6 +3,8 @@ import {
   CAMERA_SOURCE_TYPES,
   DEFAULT_SOURCE_TYPE,
   defaultPlaybackUrl,
+  isAutoPlaybackUrl,
+  sourceTypeFormPatch,
 } from '../lib/cameraStreamForm';
 
 /** 单路视频流字段：通道号、名称、上游 RTSP（摄像头 IP 入口）、本机播放地址 */
@@ -22,7 +24,14 @@ export default function CameraStreamFields({
         通道编号
         <input
           value={form.path}
-          onChange={(e) => onChange('path', e.target.value)}
+          onChange={(e) => {
+            const path = e.target.value;
+            if (sourceType !== 'external' && isAutoPlaybackUrl(form.url, form.path)) {
+              onChange({ path, url: defaultPlaybackUrl(path) });
+              return;
+            }
+            onChange('path', path);
+          }}
           placeholder="如 aisle-1-L"
           disabled={pathLocked}
           required
@@ -41,15 +50,7 @@ export default function CameraStreamFields({
         <select
           title={typeHint}
           value={sourceType}
-          onChange={(e) => {
-            const next = e.target.value;
-            onChange('source_type', next);
-            if (next === 'publisher') {
-              const play = defaultPlaybackUrl(form.path);
-              if (play && !form.url) onChange('url', play);
-            }
-            if (next === 'external') onChange('pull_url', '');
-          }}
+          onChange={(e) => onChange(sourceTypeFormPatch(form, e.target.value))}
         >
           {CAMERA_SOURCE_TYPES.map((t) => (
             <option key={t.value} value={t.value}>
@@ -75,7 +76,7 @@ export default function CameraStreamFields({
             <input
               value={form.url || ''}
               onChange={(e) => onChange('url', e.target.value)}
-              placeholder={defaultPlaybackUrl(form.path) || 'rtsp://127.0.0.1:8554/cam1'}
+              placeholder="输入通道编号后自动生成"
             />
           </label>
         </>
@@ -84,9 +85,9 @@ export default function CameraStreamFields({
         <label>
           本机播放地址
           <input
-            value={form.url || defaultPlaybackUrl(form.path)}
+            value={form.url || ''}
             onChange={(e) => onChange('url', e.target.value)}
-            placeholder={defaultPlaybackUrl(form.path) || 'rtsp://127.0.0.1:8554/cam1'}
+            placeholder="输入通道编号后自动生成"
           />
         </label>
       ) : null}

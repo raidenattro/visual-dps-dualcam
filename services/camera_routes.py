@@ -164,7 +164,7 @@ def register_camera_routes(
 
     @router.delete("/cameras/{camera_id}")
     async def delete_camera_api(camera_id: str, request: Request):
-        result = delete_camera(camera_ips_file, mediamtx_config_path, camera_id)
+        result = delete_camera(camera_ips_file, mediamtx_config_path, camera_id, json_dir=json_dir)
         audit_from_result(request, "camera.delete", "camera", camera_id, result)
         return _attach_list_items(result, probe=False)
 
@@ -396,7 +396,7 @@ def register_camera_routes(
             if c.get("url") == url:
                 cid = c["id"]
                 break
-        result = delete_camera(camera_ips_file, mediamtx_config_path, cid)
+        result = delete_camera(camera_ips_file, mediamtx_config_path, cid, json_dir=json_dir)
         audit_from_result(request, "camera.delete", "camera", cid, result)
         return result
 
