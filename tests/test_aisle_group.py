@@ -386,7 +386,7 @@ def test_rename_aisle_number_keeps_pk(tmp_path: Path, json_dir: str, monkeypatch
     assert camera_group(id_l, json_dir)["aisle_id"] == "aisle-new"
 
 
-def test_apply_capture_sizes_writes_pixels_and_invalidates_solve(json_dir: str):
+def test_apply_capture_sizes_writes_pixels_and_invalidates_solve_on_aspect_change(json_dir: str):
     from services.aisle_store import apply_capture_sizes, empty_aisle
 
     data = empty_aisle("aisle-sz")
@@ -394,7 +394,7 @@ def test_apply_capture_sizes_writes_pixels_and_invalidates_solve(json_dir: str):
     data["views"]["L"]["walls"][0]["quad"] = [
         [160.0, 0.0], [1120.0, 0.0], [1120.0, 720.0], [160.0, 720.0],
     ]
-    data["solved"] = {"ok": True, "cameras": {"L": {}, "R": {}}}
+    data["solved"] = {"ok": True, "cameras": {"L": {"f": 700.0, "cx": 640.0, "cy": 360.0}}}
     save_aisle(data, json_dir)
     out, changed = apply_capture_sizes(
         "aisle-sz",
@@ -405,3 +405,29 @@ def test_apply_capture_sizes_writes_pixels_and_invalidates_solve(json_dir: str):
     assert out["views"]["L"]["image_size"] == [960, 720]
     assert out["views"]["L"]["walls"][0]["quad"][0][0] == pytest.approx(0.0, abs=0.5)
     assert out["solved"].get("ok") is not True
+
+
+def test_apply_capture_sizes_keeps_solved_on_uniform_scale(json_dir: str):
+    from services.aisle_store import apply_capture_sizes, empty_aisle
+
+    data = empty_aisle("aisle-scale")
+    data["views"]["L"]["image_size"] = [1280, 720]
+    data["views"]["R"]["image_size"] = [1280, 720]
+    data["views"]["L"]["walls"][0]["quad"] = [[100.0, 50.0], [200.0, 50.0], [200.0, 150.0], [100.0, 150.0]]
+    data["solved"] = {
+        "ok": True,
+        "cameras": {
+            "L": {"f": 800.0, "cx": 640.0, "cy": 360.0},
+            "R": {"f": 760.0, "cx": 640.0, "cy": 360.0},
+        },
+    }
+    save_aisle(data, json_dir)
+    out, changed = apply_capture_sizes(
+        "aisle-scale",
+        {"L": {"width": 640, "height": 360}, "R": {"width": 640, "height": 360}},
+        json_dir,
+    )
+    assert changed is True
+    assert out["solved"]["ok"] is True
+    assert out["solved"]["cameras"]["L"]["f"] == pytest.approx(400.0)
+    assert out["solved"]["cameras"]["L"]["cx"] == pytest.approx(320.0)

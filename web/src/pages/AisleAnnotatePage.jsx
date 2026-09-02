@@ -191,14 +191,23 @@ function shelfCodeOf(aisle, wallId) {
   return String(wall?.shelf_code || meshForWall(aisle, wallId)?.shelf_code || '').trim();
 }
 
-function annotateSteps(aisle, { grouped, frameAt, camL, camR, dirty }) {
+/** 左右路是否已有静止帧（本地 frameAt 或摄像头 last_frame_at）。 */
+function hasGrabbedFrames(camL, camR, frameAt, cameras) {
+  if (!camL || !camR) return false;
+  if (frameAt[camL] && frameAt[camR]) return true;
+  const lCam = cameras.find((c) => c.id === camL);
+  const rCam = cameras.find((c) => c.id === camR);
+  return Boolean(lCam?.last_frame_at && rCam?.last_frame_at);
+}
+
+function annotateSteps(aisle, { grouped, frameAt, camL, camR, dirty, cameras = [] }) {
   const req = requiredWallIds(aisle);
   const quadsOk = req.every((id) => viewHasWallQuad(aisle, 'L', id) && viewHasWallQuad(aisle, 'R', id));
   const meshesOk = req.every((id) => meshForWall(aisle, id));
   const shelfOk = req.every((id) => shelfCodeOf(aisle, id));
   const items = [
     { key: 'bind', label: '左右路已绑定', done: grouped },
-    { key: 'grab', label: '抽帧', done: Boolean(camL && camR && frameAt[camL] && frameAt[camR]) },
+    { key: 'grab', label: '抽帧', done: hasGrabbedFrames(camL, camR, frameAt, cameras) },
     { key: 'quad', label: '左右路都标满四角', done: quadsOk },
     { key: 'solve', label: '反解并对齐', done: Boolean(aisle.solved?.ok) },
     { key: 'layer', label: '拖层线对齐层板', done: Boolean(aisle.solved?.ok && meshesOk) },
@@ -271,7 +280,7 @@ export default function AisleAnnotatePage() {
   const activeMesh = meshForWall(state, activeWallId);
   const { n_layers: nLayers, n_cols: nCols } = wallGrid(wallsL[activeWall], activeMesh);
   const curQuad = state.views?.[activeView]?.walls?.[activeWall]?.quad || [];
-  const steps = annotateSteps(state, { grouped, frameAt, camL, camR, dirty });
+  const steps = annotateSteps(state, { grouped, frameAt, camL, camR, dirty, cameras });
   const calibDone = Boolean(state.solved?.ok)
     && requiredWallIds(state).every((id) => meshForWall(state, id) && shelfCodeOf(state, id))
     && !dirty;
@@ -394,7 +403,12 @@ export default function AisleAnnotatePage() {
           const rsz = sized.aisle.views?.R?.image_size;
           const dim = (s) => (Array.isArray(s) ? `${s[0]}×${s[1]}` : '');
           if (sized.size_changed) {
-            showToast(`已按实际画面更新标定像素（左 ${dim(lsz)} · 右 ${dim(rsz)}）。若已反解请再点一次反解。`, 'ok');
+            showToast(
+              sized.aisle.solved?.ok
+                ? `已按实际画面更新标定像素（左 ${dim(lsz)} · 右 ${dim(rsz)}），反解已同步缩放。`
+                : `已按实际画面更新标定像素（左 ${dim(lsz)} · 右 ${dim(rsz)}）。若已反解请再点一次反解。`,
+              'ok',
+            );
           } else if (!errs.length) {
             setMsg(`已抽取静止画面（左 ${dim(lsz)} · 右 ${dim(rsz)}），可在图上标墙四角`);
           }
@@ -409,6 +423,19 @@ export default function AisleAnnotatePage() {
       setGrabbing(false);
     }
   };
+
+  const autoGrabKeyRef = useRef('');
+  useEffect(() => {
+    if (!grouped || !aisleId || grabbing) return;
+    const key = `${aisleId}:${camL}:${camR}`;
+    if (hasGrabbedFrames(camL, camR, frameAt, cameras)) {
+      autoGrabKeyRef.current = key;
+      return;
+    }
+    if (autoGrabKeyRef.current === key) return;
+    autoGrabKeyRef.current = key;
+    grabStills(camL, camR, stateRef.current);
+  }, [aisleId, camL, camR, grouped, grabbing, frameAt, cameras]);
 
   const loadAisle = async (id, { quiet = false } = {}) => {
     try {

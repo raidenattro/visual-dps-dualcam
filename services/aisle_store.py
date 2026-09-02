@@ -215,7 +215,7 @@ def apply_capture_sizes(
     views_overlay 可带上尚未保存的四角，避免只改了磁盘上的旧点。
     返回 (aisle, size_changed)。
     """
-    from services.dualcam_config import remap_view_image_size
+    from services.dualcam_config import calib_size_from_view, remap_view_image_size, uniform_pixel_scale, scale_solved_for_pixel_resize
 
     data = load_aisle(aisle_id, json_dir)
     if not data:
@@ -227,6 +227,8 @@ def apply_capture_sizes(
             if isinstance(overlay, dict):
                 views[role] = dict(overlay)
     changed = False
+    scales: list[float] = []
+    aspect_mismatch = False
     for role in ROLES:
         spec = sizes.get(role) if isinstance(sizes, dict) else None
         if not isinstance(spec, dict):
@@ -237,12 +239,29 @@ def apply_capture_sizes(
         except (TypeError, ValueError):
             continue
         view = dict(views.get(role) or {"name": role})
+        old_w, old_h = calib_size_from_view(view)
         if remap_view_image_size(view, width, height):
             changed = True
+            sc = uniform_pixel_scale(old_w, old_h, width, height)
+            if sc is None:
+                aspect_mismatch = True
+            else:
+                scales.append(sc)
         views[role] = view
+        if aspect_mismatch:
+            break
     data["views"] = views
     if changed:
-        data["solved"] = {"ok": False}
+        solved = data.get("solved")
+        same_scale = (
+            not aspect_mismatch
+            and scales
+            and len({round(s, 6) for s in scales}) == 1
+        )
+        if isinstance(solved, dict) and solved.get("ok") and same_scale:
+            data["solved"] = scale_solved_for_pixel_resize(solved, scales[0])
+        else:
+            data["solved"] = {"ok": False}
     return save_aisle(data, json_dir), changed
 
 

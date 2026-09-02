@@ -87,6 +87,30 @@ def test_remap_view_identity_when_size_matches():
     assert view["walls"][0]["quad"][0][0] == 100.0
 
 
+def test_uniform_pixel_scale_same_aspect():
+    from services.dualcam_config import uniform_pixel_scale
+
+    assert uniform_pixel_scale(1280, 720, 640, 360) == pytest.approx(0.5)
+    assert uniform_pixel_scale(1280, 720, 960, 720) is None
+
+
+def test_scale_solved_for_pixel_resize():
+    from services.dualcam_config import scale_solved_for_pixel_resize
+
+    solved = {
+        "ok": True,
+        "cameras": {
+            "L": {"f": 800.0, "cx": 640.0, "cy": 360.0, "camH": 2.9},
+            "R": {"f": 760.0, "cx": 640.0, "cy": 360.0},
+        },
+    }
+    out = scale_solved_for_pixel_resize(solved, 0.5)
+    assert out["ok"] is True
+    assert out["cameras"]["L"]["f"] == pytest.approx(400.0)
+    assert out["cameras"]["L"]["cx"] == pytest.approx(320.0)
+    assert out["cameras"]["L"]["camH"] == pytest.approx(2.9)
+
+
 def test_pair_window_follows_pose_interval(monkeypatch):
     from services.dualcam_config import DEFAULT_DUALCAM
 

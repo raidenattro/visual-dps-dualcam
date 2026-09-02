@@ -245,6 +245,59 @@ def remap_view_image_size(view: dict | None, new_w: int, new_h: int) -> bool:
     return True
 
 
+def uniform_pixel_scale(
+    old_w: int | float,
+    old_h: int | float,
+    new_w: int | float,
+    new_h: int | float,
+) -> float | None:
+    """同宽高比均匀缩放时返回 scale；纵横比变了则 None（需重新反解）。"""
+    ow = _as_int(old_w, 0)
+    oh = _as_int(old_h, 0)
+    nw = _as_int(new_w, 0)
+    nh = _as_int(new_h, 0)
+    if min(ow, oh, nw, nh) < 2:
+        return None
+    sx = float(nw) / float(ow)
+    sy = float(nh) / float(oh)
+    if abs(sx - sy) > 1e-4:
+        return None
+    return sx
+
+
+def _scale_pinhole_cam(cam: dict, scale: float) -> None:
+    if not isinstance(cam, dict) or scale <= 0:
+        return
+    for key in ("f", "cx", "cy"):
+        if key in cam and cam[key] is not None:
+            cam[key] = float(cam[key]) * scale
+
+
+def scale_solved_for_pixel_resize(solved: dict | None, scale: float) -> dict:
+    """标定像素均匀缩放时，同步缩放针孔内参，保留 3D 反解结果。"""
+    import copy
+
+    out = copy.deepcopy(solved) if isinstance(solved, dict) else {"ok": False}
+    if not out.get("ok") or scale <= 0:
+        return out
+    for bucket in (out.get("cameras") or {},):
+        if not isinstance(bucket, dict):
+            continue
+        for role in ("L", "R"):
+            _scale_pinhole_cam(bucket.get(role), scale)
+    per_view = out.get("per_view")
+    if isinstance(per_view, dict):
+        for role in ("L", "R"):
+            block = per_view.get(role)
+            if not isinstance(block, dict):
+                continue
+            inner = block.get("camera")
+            if isinstance(inner, dict):
+                # per_view 里没有 f/cx/cy，3D 位姿不变
+                pass
+    return out
+
+
 def scale_keypoints_to_calib(
     persons: list | None,
     infer_w: int,
