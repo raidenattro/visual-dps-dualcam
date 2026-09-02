@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from dualcam.skel3d_smooth import (
+    FOLLOW_SPEED_3D,
     LivePose2DSmoother,
     LivePose3DSmoother,
     _clamp_bone,
@@ -12,6 +13,9 @@ from dualcam.skel3d_smooth import (
     _gauss_smooth,
     _reject_speed,
     _restore_raw_bone_lengths,
+    _hold_low_conf_jumps,
+    _one_euro_series,
+    _speed_gated_blend,
     adapt_sigma,
     assign_tracks,
     copy_pose_pack,
@@ -344,3 +348,63 @@ def test_live_pose2d_cuts_wrist_jitter_at_sparse_dt():
     assert jump_sm < 0.85 * jump_raw
     assert out_u[-1] - out_u[8] > 40
     assert persons[0]["keypoints"][9][2] == 0.8
+
+
+def test_hold_low_conf_wrist_jump():
+    """低分腕点跳 40px 应钉在上一帧，高分伸手应放行。"""
+    vals = np.array([[100.0, 200.0], [140.0, 200.0]], float)
+    mask = np.array([True, True])
+    scores = np.array([0.80, 0.32])
+    _hold_low_conf_jumps(vals, mask, scores)
+    assert abs(vals[1, 0] - 100.0) < 1e-6
+    vals2 = np.array([[100.0, 200.0], [160.0, 200.0]], float)
+    _hold_low_conf_jumps(vals2, mask, np.array([0.80, 0.85]))
+    assert abs(vals2[1, 0] - 160.0) < 1e-6
+
+
+def test_one_euro_cuts_jitter_follows_reach():
+    """1-Euro：静止噪声下降，快速伸手仍能跟过去。"""
+    rng = np.random.default_rng(6)
+    t = np.arange(20, dtype=float) * 0.133
+    rest = np.column_stack([80.0 + rng.normal(0, 10, 20), np.full(20, 280.0)])
+    mk = np.ones(20, dtype=bool)
+    sm = rest.copy()
+    _one_euro_series(sm, mk, t)
+    assert float(np.max(np.abs(np.diff(sm[4:, 0])))) < 0.85 * float(np.max(np.abs(np.diff(rest[4:, 0]))))
+    reach = np.column_stack([80.0 + 25.0 * np.arange(20), np.full(20, 280.0)])
+    out = reach.copy()
+    _one_euro_series(out, mk, t)
+    assert out[-1, 0] - out[4, 0] > 250
+
+
+def test_speed_gated_follows_fast_keeps_slow():
+    """快动作跟本帧；慢抖才掺上一帧。"""
+    prev = np.array([0.0, 0.0, 0.0])
+    fast = np.array([0.20, 0.0, 0.0])  # 0.20/0.133 ≈ 1.5 m/s > 0.85
+    out = _speed_gated_blend(prev, fast, 0.133, FOLLOW_SPEED_3D)
+    assert float(np.linalg.norm(out - fast)) < 1e-9
+    slow = np.array([0.02, 0.0, 0.0])  # 0.15 m/s
+    out = _speed_gated_blend(prev, slow, 0.133, FOLLOW_SPEED_3D, 0.42)
+    assert 0.005 < float(out[0]) < 0.02
+
+
+def test_dense_causal_matches_dump_joint_window():
+    """15～25Hz 因果应走 dump 逐关节短窗，腕点抖应明显下降。"""
+    rng = np.random.default_rng(5)
+    frames = []
+    for i in range(40):
+        t = i * 0.04
+        base = np.array([0.2, 1.1, 0.4 + 0.12 * t])
+        wrist = base + np.array([0.25, 0.05, 0.0]) + rng.normal(0, 0.05, 3)
+        xyz = [None] * 17
+        xyz[5] = (base + [0.0, 0.35, 0.0]).tolist()
+        xyz[6] = (base + [0.0, 0.35, 0.15]).tolist()
+        xyz[7] = (base + [0.12, 0.15, 0.0]).tolist()
+        xyz[9] = wrist.tolist()
+        xyz[11] = (base + [0.0, -0.05, 0.0]).tolist()
+        xyz[12] = (base + [0.0, -0.05, 0.15]).tolist()
+        frames.append({"t": t, "persons": [{"xyz": xyz, "vis": [1] * 17}]})
+    before = wrist_jump_stats(frames, 9)
+    smooth_frames(frames, causal=True, drop_short=False)
+    after = wrist_jump_stats(frames, 9)
+    assert after["p90"] < 0.80 * before["p90"]

@@ -28,7 +28,7 @@ from services.dualcam_config import (
     get_dualcam_section,
     scale_keypoints_to_calib,
 )
-from dualcam.skel3d_smooth import LivePose2DSmoother, LivePose3DSmoother, pose_time
+from dualcam.skel3d_smooth import HOLD_SEC, LivePose2DSmoother, LivePose3DSmoother, pose_time
 
 
 def _kpt_uv_score(k: np.ndarray, s: np.ndarray, idx: int) -> tuple[np.ndarray, float]:
@@ -37,8 +37,7 @@ def _kpt_uv_score(k: np.ndarray, s: np.ndarray, idx: int) -> tuple[np.ndarray, f
 
 # 单路预览不抬五官：贴墙射线会把鼻子/眼睛拉到货架平面，骨线变成「长射线」
 FACE_JOINTS = frozenset({0, 1, 2, 3, 4})
-# 与 pick-state dump_skel3d 一致：单路/检测闪断沿用上一帧 3D，满 8 帧再丢
-HOLD_FRAMES = 8
+# dump_skel3d 是 8 帧@25fps=0.32s；直播按 HOLD_SEC，不能照搬 8 个 pose 周期
 HOLD_MATCH_M = 0.55
 TORSO_JOINTS = (5, 6, 11, 12)
 LSHO, RSHO = 5, 6
@@ -113,7 +112,7 @@ class DualcamProcessor:
         self._prev_xyz: dict[tuple, np.ndarray] = {}
         self._new_prev: dict[tuple, np.ndarray] = {}
         self._prefer: list[tuple[np.ndarray, np.ndarray]] = []
-        self._holds: list[tuple[dict, int, np.ndarray]] = []
+        self._holds: list[tuple[dict, float, np.ndarray]] = []
         self._last_skel_l: list[dict[str, Any]] = []
         self._last_skel_r: list[dict[str, Any]] = []
         self._sm2d = {"L": LivePose2DSmoother(), "R": LivePose2DSmoother()}
@@ -340,13 +339,14 @@ class DualcamProcessor:
         self._sm2d["R"].reset()
         self._sm3d.reset()
 
-    def _apply_hold(self, people: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """续帧匹配：对不上时沿用上一帧 3D，最多 HOLD_FRAMES 帧（与 dump_skel3d 相同）。"""
+    def _apply_hold(self, people: list[dict[str, Any]], t: float = 0.0) -> list[dict[str, Any]]:
+        """配不上时沿用上一帧 3D，最长 HOLD_SEC（dump 8 帧@25fps=0.32s）。"""
+        now = float(t)
         out = list(people or [])
         cents = [_torso_centroid(p.get("xyz") or []) for p in out]
         used: set[int] = set()
-        new_holds: list[tuple[dict, int, np.ndarray]] = []
-        for prev, miss, pt in self._holds:
+        new_holds: list[tuple[dict, float, np.ndarray]] = []
+        for prev, last_t, pt in self._holds:
             best, best_d = None, HOLD_MATCH_M
             for ci, c in enumerate(cents):
                 if ci in used or c is None:
@@ -356,7 +356,7 @@ class DualcamProcessor:
                     best, best_d = ci, d
             if best is not None:
                 used.add(best)
-                new_holds.append((out[best], 0, cents[best]))
+                new_holds.append((out[best], now, cents[best]))
             elif (
                 len(out) == 1
                 and len(cents) == 1
@@ -365,21 +365,21 @@ class DualcamProcessor:
             ):
                 # 单人深度跟上后躯干可能跳过 HOLD_MATCH_M，仍视为同一人，避免冻帧+复制
                 used.add(0)
-                new_holds.append((out[0], 0, cents[0]))
-            elif miss + 1 <= HOLD_FRAMES:
+                new_holds.append((out[0], now, cents[0]))
+            elif now - float(last_t) <= HOLD_SEC + 1e-9:
                 held = copy.deepcopy(prev)
                 held["held"] = True
                 held["preview"] = True
                 held["wrist_alarm"] = {9: False, 10: False}
                 out.append(held)
-                new_holds.append((held, miss + 1, pt))
+                new_holds.append((held, float(last_t), pt))
         for ci, p in enumerate(out):
             if ci in used or p.get("held"):
                 continue
             c = cents[ci] if ci < len(cents) else _torso_centroid(p.get("xyz") or [])
             if c is None:
                 continue
-            new_holds.append((p, 0, c))
+            new_holds.append((p, now, c))
         self._holds = new_holds
         if not new_holds:
             self._prev_xyz = {}
@@ -418,7 +418,7 @@ class DualcamProcessor:
         if self.solved.get("ok") and role in self.cams:
             people, idx_l, idx_r = self._lift_follow(fl, fr)
             if apply_hold:
-                people = self._apply_hold(people)
+                people = self._apply_hold(people, pose_time(pose, frame_idx))
             if smooth_3d:
                 people = self._sm3d.update(pose_time(pose, frame_idx), people, self.plane)
             self._prev_xyz = self._new_prev
@@ -500,7 +500,7 @@ class DualcamProcessor:
         pairs = pick_pairs(fl, fr, self.cams, prefer=self._prefer, aabb=self.aabb)
         if not pairs:
             followed, idx_l, idx_r = self._lift_follow(fl, fr)
-            held = self._apply_hold(followed)
+            held = self._apply_hold(followed, t)
             held = self._sm3d.update(t, held, self.plane)
             self._prev_xyz = self._new_prev
             sk_l, sk_r = self._overlay_follow(
@@ -541,7 +541,7 @@ class DualcamProcessor:
 
         self._prefer = new_prefer
         self._prev_xyz = self._new_prev
-        persons_3d = self._sm3d.update(t, self._apply_hold(persons_3d), self.plane)
+        persons_3d = self._sm3d.update(t, self._apply_hold(persons_3d, t), self.plane)
         sk_l, sk_r = self._overlay_follow(
             pose_l, pose_r, [i for i, _, _ in pairs], [j for _, j, _ in pairs],
             have_l=True, have_r=True,

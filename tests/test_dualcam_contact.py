@@ -90,22 +90,36 @@ def test_process_pair_empty_without_prior_hold(calib):
 
 
 def test_hold_keeps_then_clears_like_dump_skel3d():
-    """闪断沿用 8 帧，第 9 帧空才丢掉（dump_skel3d.HOLD_FRAMES）。"""
+    """dump 25fps：闪断沿用 0.32s（8 帧），第 9 帧空才丢掉。"""
+    from dualcam.skel3d_smooth import DESIGN_DT, HOLD_SEC
+
     proc = DualcamProcessor({"aisle_id": "x", "solved": {"ok": False}, "cameras": {}})
     xyz = [[0.0, 1.0, 1.0] for _ in range(17)]
     person = {"xyz": xyz, "src": ["stereo"] * 17, "preview": False, "wrist_alarm": {9: False, 10: False}}
-    first = proc._apply_hold([person])
+    first = proc._apply_hold([person], 0.0)
     assert len(first) == 1
     assert not first[0].get("held")
-    for i in range(8):
-        held = proc._apply_hold([])
+    n_hold = int(round(HOLD_SEC / DESIGN_DT))
+    for i in range(n_hold):
+        held = proc._apply_hold([], (i + 1) * DESIGN_DT)
         assert len(held) == 1, f"empty frame {i + 1} should hold"
         assert held[0].get("held") is True
         assert held[0].get("preview") is True
-    assert proc._apply_hold([]) == []
+    assert proc._apply_hold([], (n_hold + 1) * DESIGN_DT) == []
     assert proc._holds == []
     assert proc._prev_xyz == {}
     assert proc._prefer == []
+
+
+def test_hold_expires_in_two_live_pose_periods():
+    """直播 ~7.5Hz：0.32s 只能续约 2 个 pose，不能冻满 8 帧。"""
+    proc = DualcamProcessor({"aisle_id": "x", "solved": {"ok": False}, "cameras": {}})
+    xyz = [[0.0, 1.0, 1.0] for _ in range(17)]
+    person = {"xyz": xyz, "src": ["stereo"] * 17, "preview": False, "wrist_alarm": {9: False, 10: False}}
+    proc._apply_hold([person], 0.0)
+    assert len(proc._apply_hold([], 0.133)) == 1
+    assert len(proc._apply_hold([], 0.266)) == 1
+    assert proc._apply_hold([], 0.399) == []
 
 
 def test_contact_src_excludes_mono():
@@ -139,7 +153,7 @@ def test_process_single_follows_2d_with_hold_depth(calib):
         "src": ["stereo"] * 17,
         "preview": False,
         "wrist_alarm": {9: False, 10: False},
-    }])
+    }], 4.0)
     kpts = [[640.0, 360.0, 0.95] for _ in range(17)]
     pose = {
         "frame_idx": 4,
@@ -173,7 +187,7 @@ def test_process_single_with_prefer_does_not_crash_on_numpy_pack(calib):
         "src": ["stereo"] * 17,
         "preview": False,
         "wrist_alarm": {9: False, 10: False},
-    }])
+    }], 5.0)
     out = proc.process_single("L", pose)
     assert len(out.get("skeletons_l") or []) >= 1
     assert len(out.get("persons_3d") or []) >= 1
@@ -200,7 +214,7 @@ def test_unpaired_holds_one_person_not_l_and_r_mono(calib):
         "src": ["stereo"] * 17,
         "preview": False,
         "wrist_alarm": {9: False, 10: False},
-    }])
+    }], 3.0)
     out = proc.process_pair(_weak_pose(3), _weak_pose(3))
     assert len(out["persons_3d"]) == 1
     assert out["persons_3d"][0].get("held") is True

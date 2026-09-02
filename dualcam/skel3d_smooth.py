@@ -1,13 +1,20 @@
 """骨架时序平滑（对齐 visual-dps-pick-state/scripts/skel3d_smooth.py）。
 
 先滤左右路 2D（短窗），再三角化；3D 滤波 + 飞骨裁到合法区间。分数不平滑。
-dump（密采样）仍对各关节轻滤波。直播 ~7.5Hz 不能对各关节加宽高斯：跨帧插值会把
-骨头拉成橡皮泥。因果 3D 只平滑躯干质心，本帧相对质心的形状原样贴回。
+
+pick-state dump 按 25fps（DESIGN_DT=40ms）写 σ：高斯窗是「几十毫秒的检测噪声」，
+不是「几帧姿势」。本仓直播相机 15fps × interval=2 ≈ 7.5Hz，同一套时间 σ 几乎
+看不见上一帧；若按帧数加宽，两帧真动作会被插成橡皮泥。
+
+因此因果路径按 pose 周期分流：
+- 密（dt≤DENSE_DT，约 ≥15Hz）：复现 dump 的逐关节因果高斯 + 骨长中位；
+- 稀（约 7.5Hz）：只滑躯干质心，形状贴本帧，再用速度门压慢抖（快动作不掺）。
 """
 
 from __future__ import annotations
 
 import copy
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -53,11 +60,27 @@ TRACK_MAX_GAP_S = 0.48
 BONE_TOL = 0.12  # 相对中位，超出才拉回
 BONE_MIN_SAMPLES = 16
 BONE_MIN_SAMPLES_LIVE = 4
-# dump 设计周期 40ms。2D 放大封顶 2×；3D 因果窗至少盖住约 2.5 个 pose 周期。
+# dump 设计周期 40ms。σ 是时间常数，不要按直播帧数加宽到「几帧姿势」。
 DESIGN_DT = 0.04
 LIVE_KEEP_S = 2.4
 LIVE_3D_SPAN_FRAMES = 2.5
 EVENT_SKELETON_STALE_S = 0.40
+# dump hold 8 帧 @25fps = 0.32s；直播按墙钟对齐，7.5Hz 只能续约 2 帧。
+HOLD_SEC = 8 * DESIGN_DT
+# 因果 3D：周期接近 dump 走逐关节短窗；更稀则质心 + 速度门。
+DENSE_DT = 0.075
+# 超过则认定是真动作，不和上一帧姿势掺（m/s、px/s）
+FOLLOW_SPEED_3D = 0.85
+EMA_ALPHA_SLOW = 0.42
+# 因果 2D：3σ 最多刚盖住约 2 个 pose，不再 2× 加宽糊 400ms
+LIVE_2D_SPAN_FRAMES = 2.0
+# 低置信度腕/肘大跳视为误检，钉在上一帧像素（不进三角化）
+CONF_HOLD_SCORE = 0.45
+CONF_HOLD_PX = 22.0
+# 1-Euro（像素）：静止压抖，伸手跟手。beta 单位 1/(px/s)
+EURO_MINCUTOFF = 1.05
+EURO_BETA = 0.012
+EURO_DCUTOFF = 1.0
 
 
 def signed_x(p: np.ndarray, plane: dict) -> float:
@@ -86,12 +109,113 @@ def adapt_sigma(sigma_s: float, dt: float | None, cap: float | None = 2.0) -> fl
 
 
 def live_adapt_sigma(sigma_s: float, dt: float | None) -> float:
-    """3D 直播：按 pose 周期放大，且 3σ 半径至少盖住 LIVE_3D_SPAN_FRAMES 帧。"""
+    """质心窗：按 pose 周期放大，且 3σ 至少盖住 LIVE_3D_SPAN_FRAMES 帧。不对各关节用。"""
     base = adapt_sigma(sigma_s, dt, cap=None)
     if not dt or dt <= 0:
         return base
     need = LIVE_3D_SPAN_FRAMES * float(dt) / 3.0
     return float(max(base, need))
+
+
+def _smoothing_factor(dt: float, cutoff: float) -> float:
+    r = 2.0 * math.pi * float(cutoff) * float(dt)
+    return r / (r + 1.0)
+
+
+def _hold_low_conf_jumps(
+    vals: np.ndarray,
+    mask: np.ndarray,
+    scores: np.ndarray,
+    *,
+    min_score: float = CONF_HOLD_SCORE,
+    max_jump_px: float = CONF_HOLD_PX,
+) -> None:
+    """分数偏低且像素跳过大：用上一帧坐标，避免误检腕点抽进 3D。"""
+    last = -1
+    for i in range(len(mask)):
+        if not mask[i]:
+            continue
+        if last >= 0 and float(scores[i]) < min_score:
+            if float(np.linalg.norm(vals[i] - vals[last])) > max_jump_px:
+                vals[i] = vals[last]
+        last = i
+
+
+def _one_euro_series(
+    values: np.ndarray,
+    mask: np.ndarray,
+    times: np.ndarray,
+    *,
+    mincutoff: float = EURO_MINCUTOFF,
+    beta: float = EURO_BETA,
+    dcutoff: float = EURO_DCUTOFF,
+) -> None:
+    """就地 1-Euro（One Euro Filter）：慢动截止低、快动截止高，不会像速度门那样回弹。"""
+    hatx: np.ndarray | None = None
+    hatdx: np.ndarray | None = None
+    last_t: float | None = None
+    for i in range(len(mask)):
+        if not mask[i]:
+            hatx = None
+            hatdx = None
+            last_t = None
+            continue
+        x = np.asarray(values[i], dtype=np.float64)
+        t = float(times[i])
+        if hatx is None or hatdx is None or last_t is None:
+            hatx = x.copy()
+            hatdx = np.zeros_like(x)
+            last_t = t
+            values[i] = hatx
+            continue
+        dt = t - last_t
+        if dt <= 1e-6:
+            values[i] = hatx
+            continue
+        dx = (x - hatx) / dt
+        ad = _smoothing_factor(dt, dcutoff)
+        hatdx = ad * dx + (1.0 - ad) * hatdx
+        cutoff = mincutoff + beta * float(np.linalg.norm(hatdx))
+        a = _smoothing_factor(dt, cutoff)
+        hatx = a * x + (1.0 - a) * hatx
+        last_t = t
+        values[i] = hatx
+
+
+def _speed_gated_blend(
+    prev: np.ndarray,
+    cur: np.ndarray,
+    dt: float,
+    follow_speed: float,
+    alpha_slow: float = EMA_ALPHA_SLOW,
+) -> np.ndarray:
+    """慢抖掺上一帧；位移速度过快则跟本帧，避免两帧姿势插成橡皮泥。"""
+    if dt <= 1e-6:
+        return np.asarray(cur, dtype=np.float64)
+    prev = np.asarray(prev, dtype=np.float64)
+    cur = np.asarray(cur, dtype=np.float64)
+    spd = float(np.linalg.norm(cur - prev) / dt)
+    if spd >= follow_speed:
+        return cur
+    a = float(alpha_slow)
+    return a * cur + (1.0 - a) * prev
+
+
+def _apply_speed_gated_series(
+    series: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]],
+    follow_speed: float,
+    alpha_slow: float = EMA_ALPHA_SLOW,
+) -> None:
+    """就地按关节做速度门。"""
+    for sm, mk, times in series.values():
+        last = -1
+        for i in range(len(mk)):
+            if not mk[i]:
+                continue
+            if last >= 0:
+                dt = float(times[i] - times[last])
+                sm[i] = _speed_gated_blend(sm[last], sm[i], dt, follow_speed, alpha_slow)
+            last = i
 
 
 def _as3(p) -> np.ndarray | None:
@@ -318,6 +442,7 @@ def smooth_pose2d(pack: list[dict], views: tuple[str, ...] = ("L", "R"), *, caus
             times = np.array([float(pack[fi]["t"]) for fi, _ in members], dtype=np.float64)
             for j in range(N_JOINTS):
                 vals = np.zeros((len(members), 2), dtype=np.float64)
+                scores = np.zeros(len(members), dtype=np.float64)
                 mask = np.zeros(len(members), dtype=bool)
                 for i, (fi, di) in enumerate(members):
                     k = pack[fi][view]["k"][di]
@@ -328,15 +453,24 @@ def smooth_pose2d(pack: list[dict], views: tuple[str, ...] = ("L", "R"), *, caus
                     if uv.size < 2 or not np.all(np.isfinite(uv[:2])):
                         continue
                     vals[i] = uv[:2]
+                    scores[i] = float(s[j])
                     mask[i] = True
                 if j in (LWRIST, RWRIST):
                     n_in += int(mask.sum())
                 _reject_speed(vals, mask, times, VMAX_2D_PX)
+                if causal and j in (LWRIST, RWRIST, LELB, RELB):
+                    _hold_low_conf_jumps(vals, mask, scores)
+                # dump 用设计 σ。直播只把窗扩到「刚看见上一两帧」，避免 2× 糊整段动作。
+                if causal and dt > DENSE_DT:
+                    need = LIVE_2D_SPAN_FRAMES * float(dt) / 3.0
+                    sig2d = max(joint_sigma_2d(j), need)
+                else:
+                    sig2d = joint_sigma_2d(j)
                 sm, sm_mask = _gauss_smooth(
-                    vals, mask, times,
-                    adapt_sigma(joint_sigma_2d(j), dt) if causal else joint_sigma_2d(j),
-                    causal=causal,
+                    vals, mask, times, sig2d, causal=causal,
                 )
+                if causal and dt > DENSE_DT and j in (LWRIST, RWRIST, LELB, RELB):
+                    _one_euro_series(sm, sm_mask, times)
                 if j in (LWRIST, RWRIST):
                     n_out += int(sm_mask.sum())
                 for i, (fi, di) in enumerate(members):
@@ -706,7 +840,7 @@ def smooth_frames(
     tracks = _tracks_from_ids(frames)
     n_wrist_in = n_wrist_out = 0
     dt = median_dt([float(fr.get("t") or 0.0) for fr in frames]) if causal else DESIGN_DT
-    bone_min = BONE_MIN_SAMPLES_LIVE if causal else BONE_MIN_SAMPLES
+    bone_min = BONE_MIN_SAMPLES if (not causal or dt <= DENSE_DT) else BONE_MIN_SAMPLES_LIVE
     for tid, members in tracks.items():
         if len(members) < 2:
             continue
@@ -720,27 +854,32 @@ def smooth_frames(
                 n_wrist_in += int(mask.sum())
             _reject_speed(vals, mask, times, joint_vmax(j))
             raw[j] = (vals.copy(), mask.copy())
-            if causal:
+            if causal and dt > DENSE_DT:
+                # 稀采样：先留本帧形状，后面只滑质心 + 速度门
                 series[j] = (vals.copy(), mask.copy(), times)
                 continue
-            sm, sm_mask = _gauss_smooth(vals, mask, times, joint_sigma(j), causal=False)
+            sm, sm_mask = _gauss_smooth(
+                vals, mask, times, joint_sigma(j), causal=causal,
+            )
             series[j] = (sm, sm_mask, times)
-        if causal and times_ref is not None:
-            # 7.5Hz：只滑质心。对各关节加宽高斯会在两帧姿势间插值，骨头变成橡皮泥。
+        if causal and dt > DENSE_DT and times_ref is not None:
+            # 7.5Hz：只滑质心，再对慢抖做速度门。加宽逐关节高斯会插成橡皮泥。
             _apply_rigid_com_smooth(
                 series, raw, times_ref, live_adapt_sigma(SIGMA_BODY, dt), causal=True,
             )
-        else:
+            _apply_speed_gated_series(series, FOLLOW_SPEED_3D)
+        elif not causal:
             _restore_raw_bone_lengths(
                 {j: (series[j][0], series[j][1]) for j in series},
                 raw,
             )
+        use_median = (not causal) or (causal and dt <= DENSE_DT)
         for a, b in LIMB_BONES:
             sa, ma, _ = series[a]
             sb, mb, _ = series[b]
             lo, hi = BONE_LEN_RANGE[(a, b)]
             _clamp_bones_causal(
-                sa, sb, ma, mb, lo, hi, min_samples=bone_min, use_median=not causal,
+                sa, sb, ma, mb, lo, hi, min_samples=bone_min, use_median=use_median,
             )
         for j in range(N_JOINTS):
             sm, sm_mask, _ = series[j]
@@ -892,7 +1031,7 @@ class LivePose2DSmoother:
 
 
 class LivePose3DSmoother:
-    """3D 因果滤波 + 骨长。直播按 pose 周期加宽窗，避免 7.5Hz 时只看见当前点。"""
+    """3D 因果滤波 + 骨长。密采样复现 dump；稀采样只滑质心再加速度门。"""
 
     def __init__(self, keep_s: float = LIVE_KEEP_S):
         self.keep_s = float(keep_s)
