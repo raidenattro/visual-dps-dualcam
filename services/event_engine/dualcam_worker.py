@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import time
+from collections import defaultdict
+from typing import Any
 
 from services.aisle_store import grouped_cameras, load_aisle
+from services.box_identity import parse_collision_token
 from services.dualcam_config import pair_window_sec
+from services.event_bus import publish_event_frame
 from services.event_engine.dualcam_processor import DualcamProcessor
 from services.event_engine.sharding import owns_aisle
 from services.event_engine.worker import EventRedisWorker
+from services.pipeline_log import log_pipeline_stage
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +31,7 @@ class DualcamRedisWorker(EventRedisWorker):
         self._pending: dict[str, dict[str, tuple[float, dict]]] = {}
         self._last_role_mono: dict[str, dict[str, float]] = {}
         self._pair_window = pair_window_sec(app_config)
+        self._pair_window_mono = 0.0
         self._last_drop_log: dict[str, float] = {}
         logger.info("dualcam pair_window=%.3fs", self._pair_window)
 
@@ -35,6 +43,10 @@ class DualcamRedisWorker(EventRedisWorker):
         return None
 
     def _refresh_pair_window(self) -> float:
+        now = time.monotonic()
+        if now - self._pair_window_mono < 2.0:
+            return self._pair_window
+        self._pair_window_mono = now
         try:
             self._pair_window = pair_window_sec(self.app_config)
         except Exception:
@@ -67,30 +79,16 @@ class DualcamRedisWorker(EventRedisWorker):
         self._last_drop_log[key] = now
         logger.warning(msg, *args)
 
-    async def _handle_pose_payload(self, payload: str) -> None:
-        import asyncio
-        import json
-
-        from services.box_identity import parse_collision_token
-        from services.event_bus import publish_event_frame
-        from services.pipeline_log import log_pipeline_stage
-
-        try:
-            pose = json.loads(payload)
-        except json.JSONDecodeError:
-            return
-        if not isinstance(pose, dict) or pose.get("kind") != "pose":
-            return
-
+    def _ingest_pose(self, pose: dict) -> dict[str, Any] | None:
+        """更新配对桶。返回待处理 job，或 None（等待对侧 / 丢弃）。"""
         camera_id = str(pose.get("camera_id") or "").strip()
         if not camera_id:
-            return
-
+            return None
         groups = grouped_cameras(self._json_root())
         g = groups.get(camera_id)
         if not g:
             self._note(f"ungrouped:{camera_id}", "dualcam worker: 未成组相机丢弃 pose camera=%s", camera_id)
-            return
+            return None
         aisle_id = g["aisle_id"]
         role = g["role"]
         if not self._owns_aisle(aisle_id):
@@ -100,7 +98,7 @@ class DualcamRedisWorker(EventRedisWorker):
                 camera_id,
                 aisle_id,
             )
-            return
+            return None
 
         window = self._refresh_pair_window()
         now = float(pose.get("ts") or time.time())
@@ -115,38 +113,12 @@ class DualcamRedisWorker(EventRedisWorker):
             bucket.pop(k, None)
 
         proc = self._aisle_processor(aisle_id)
-
-        async def _publish(result: dict) -> None:
-            if proc is None:
-                return
-            frame_idx = int(result.get("frame_idx") or 0)
-            collisions = result.get("collisions") or []
-            alarm_collisions = result.get("alarm_collisions") or []
-            skel_map = {
-                proc.cam_l: result.get("skeletons_l"),
-                proc.cam_r: result.get("skeletons_r"),
-            }
-            people = result.get("persons_3d") or []
-            for cid in (proc.cam_l, proc.cam_r):
-                if not cid:
-                    continue
-                await asyncio.to_thread(
-                    publish_event_frame,
-                    cid,
-                    frame_idx=frame_idx,
-                    collisions=collisions,
-                    alarm_collisions=alarm_collisions,
-                    skeletons=skel_map.get(cid),
-                    persons_3d=people,
-                )
-
         if "L" not in bucket or "R" not in bucket:
             missing = "R" if "L" in bucket else "L"
             other_last = seen.get(missing)
             wait_s = max(window * 2.0, 0.25)
-            # 对侧刚还在出帧：等配对。立刻 process_single 会用 hold 把立体骨架冻住。
             if other_last is not None and (now_mono - other_last) <= wait_s:
-                return
+                return None
             self._note(
                 f"wait:{aisle_id}:{missing}",
                 "dualcam worker: 巷道 %s 只收到 %s，等待对侧 %s 已 %.2fs（窗=%.3fs）。单路 3D 预览仍推送。",
@@ -156,10 +128,10 @@ class DualcamRedisWorker(EventRedisWorker):
                 now_mono - (other_last or now_mono),
                 window,
             )
-            if proc is not None and proc.ready():
-                preview = await asyncio.to_thread(proc.process_single, role, pose)
-                await _publish(preview)
-            return
+            if proc is None or not proc.ready():
+                return None
+            return {"kind": "single", "aisle_id": aisle_id, "role": role, "pose": pose, "proc": proc}
+
         t_l, pose_l = bucket["L"]
         t_r, pose_r = bucket["R"]
         if abs(t_l - t_r) > window:
@@ -170,40 +142,66 @@ class DualcamRedisWorker(EventRedisWorker):
                 abs(t_l - t_r),
                 window,
             )
-            if proc is not None and proc.ready():
-                preview = await asyncio.to_thread(proc.process_single, role, pose)
-                await _publish(preview)
-            # 丢掉更旧的一路，避免桶里永远对不齐、一直单路冻帧
             if t_l <= t_r:
                 bucket.pop("L", None)
             else:
                 bucket.pop("R", None)
-            return
+            if proc is None or not proc.ready():
+                return None
+            return {"kind": "single", "aisle_id": aisle_id, "role": role, "pose": pose, "proc": proc}
 
         bucket.pop("L", None)
         bucket.pop("R", None)
-
         if proc is None or not proc.ready():
             reason = proc.not_ready_reason() if proc else f"巷道 {aisle_id} 标定文件读失败"
             self._note(f"ready:{aisle_id}", "dualcam worker: %s，丢弃配对帧", reason)
-            return
+            return None
+        return {
+            "kind": "pair",
+            "aisle_id": aisle_id,
+            "pose_l": pose_l,
+            "pose_r": pose_r,
+            "proc": proc,
+        }
 
+    def _publish_overlay(self, proc: DualcamProcessor, result: dict) -> None:
+        frame_idx = int(result.get("frame_idx") or 0)
+        collisions = result.get("collisions") or []
+        alarm_collisions = result.get("alarm_collisions") or []
+        skel_map = {
+            proc.cam_l: result.get("skeletons_l"),
+            proc.cam_r: result.get("skeletons_r"),
+        }
+        people = result.get("persons_3d") or []
+        for cid in (proc.cam_l, proc.cam_r):
+            if not cid:
+                continue
+            publish_event_frame(
+                cid,
+                frame_idx=frame_idx,
+                collisions=collisions,
+                alarm_collisions=alarm_collisions,
+                skeletons=skel_map.get(cid),
+                persons_3d=people,
+            )
+
+    def _execute_job(self, job: dict[str, Any]) -> tuple[DualcamProcessor, dict] | None:
+        proc: DualcamProcessor = job["proc"]
+        if job["kind"] == "single":
+            return proc, proc.process_single(job["role"], job["pose"])
         started = time.monotonic()
-        result = await asyncio.to_thread(proc.process_pair, pose_l, pose_r)
+        result = proc.process_pair(job["pose_l"], job["pose_r"])
         worker_ms = round((time.monotonic() - started) * 1000.0, 1)
         collisions = result.get("collisions") or []
         alarm_collisions = result.get("alarm_collisions") or []
-
         log_pipeline_stage(
             "worker_done",
-            camera_id=aisle_id,
+            camera_id=job["aisle_id"],
             frame_idx=int(result.get("frame_idx") or 0),
             worker_ms=worker_ms,
             hits=len(collisions),
             alarms=len(alarm_collisions),
         )
-
-        await _publish(result)
         if self.callback_reporter and alarm_collisions and proc.cam_l:
             upload_tag = f"infer_{proc.cam_l}"
             video_time_sec = int(result.get("frame_idx") or 0) / max(self._video_fps, 1.0)
@@ -218,3 +216,36 @@ class DualcamRedisWorker(EventRedisWorker):
                     upload_tag=upload_tag,
                     shelf_code=shelf_code or None,
                 )
+        return proc, result
+
+    def _run_aisle_jobs_sync(self, jobs: list[dict[str, Any]]) -> None:
+        """同一巷道串行（processor 有状态）；不同巷道由 gather 进不同线程。"""
+        for job in jobs:
+            out = self._execute_job(job)
+            if out is None:
+                continue
+            proc, result = out
+            self._publish_overlay(proc, result)
+
+    async def _handle_pose_batch(self, batch: list[tuple[str, str, str | None]]) -> None:
+        by_aisle: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for _stream, _msg_id, payload in batch:
+            if not payload:
+                continue
+            try:
+                pose = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(pose, dict) or pose.get("kind") != "pose":
+                continue
+            job = self._ingest_pose(pose)
+            if job is not None:
+                by_aisle[job["aisle_id"]].append(job)
+        if not by_aisle:
+            return
+        await asyncio.gather(
+            *[asyncio.to_thread(self._run_aisle_jobs_sync, jobs) for jobs in by_aisle.values()]
+        )
+
+    async def _handle_pose_payload(self, payload: str) -> None:
+        await self._handle_pose_batch([("", "", payload)])

@@ -12,6 +12,7 @@ from services.aisle_store import (
     camera_group,
     create_aisle_with_cameras,
     empty_aisle,
+    grouped_cameras,
     load_aisle,
     require_grouped,
     save_aisle,
@@ -42,6 +43,17 @@ def test_bind_group_and_lookup(json_dir: str):
     ok, err = require_grouped("cam-l", json_dir)
     assert err is None
     assert ok["L"] == "cam-l" and ok["R"] == "cam-r"
+
+
+def test_grouped_cameras_cache_invalidates_on_unbind(json_dir: str):
+    bind_group("aisle-13", "cam-l", "cam-r", json_dir)
+    g1 = grouped_cameras(json_dir)
+    assert g1["cam-l"]["role"] == "L"
+    g2 = grouped_cameras(json_dir)
+    assert g2 is g1
+    unbind_group("aisle-13", json_dir)
+    g3 = grouped_cameras(json_dir)
+    assert "cam-l" not in g3
 
 
 def test_ungrouped_cannot_infer(json_dir: str):

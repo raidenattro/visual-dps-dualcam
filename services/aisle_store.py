@@ -9,6 +9,8 @@ from typing import Any
 
 _AISLE_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 ROLES = ("L", "R")
+# json_dir → (stamp, camera_id→{aisle_id, role})
+_GROUPED_CACHE: dict[str, tuple[tuple, dict[str, dict]]] = {}
 
 
 def _json_dir(json_dir: str | None = None) -> str:
@@ -345,8 +347,31 @@ def camera_group(camera_id: str, json_dir: str | None = None) -> dict | None:
     return None
 
 
+def _aisles_stamp(json_dir: str | None = None) -> tuple:
+    """巷道目录内容指纹：文件名 + mtime + size。用来让 grouped_cameras 热路径免读盘。"""
+    d = aisles_dir(json_dir)
+    try:
+        names = tuple(sorted(n for n in os.listdir(d) if n.endswith(".json")))
+    except OSError:
+        return (d, ())
+    parts: list[tuple[str, int, int]] = []
+    for name in names:
+        path = os.path.join(d, name)
+        try:
+            st = os.stat(path)
+            parts.append((name, int(st.st_mtime_ns), int(st.st_size)))
+        except OSError:
+            parts.append((name, 0, 0))
+    return (d, tuple(parts))
+
+
 def grouped_cameras(json_dir: str | None = None) -> dict[str, dict]:
-    """camera_id → {aisle_id, role}。"""
+    """camera_id → {aisle_id, role}。按巷道 JSON mtime 缓存，worker 每条 pose 都要查。"""
+    root = _json_dir(json_dir)
+    stamp = _aisles_stamp(json_dir)
+    hit = _GROUPED_CACHE.get(root)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
     out: dict[str, dict] = {}
     for item in list_aisles(json_dir, bound_only=False):
         data = load_aisle(item["aisle_id"], json_dir)
@@ -357,6 +382,7 @@ def grouped_cameras(json_dir: str | None = None) -> dict[str, dict]:
             cid = str((cams.get(role) or {}).get("camera_id") or "").strip()
             if cid:
                 out[cid] = {"aisle_id": item["aisle_id"], "role": role}
+    _GROUPED_CACHE[root] = (stamp, out)
     return out
 
 

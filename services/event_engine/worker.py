@@ -33,10 +33,13 @@ from services.pipeline_log import (
 from services.pose_bus import (
     POSE_CHANNEL_PREFIX,
     POSE_STREAM_GROUP,
+    ack_own_pending,
     default_consumer_name,
     ensure_pose_stream_groups,
     pose_delivery_mode,
+    purge_stale_consumers,
     redis_url,
+    trim_idle_pose_streams,
 )
 from services.runtime_config_service import (
     DEFAULT_PATH,
@@ -320,6 +323,10 @@ class EventRedisWorker:
 
     async def _stream_loop(self) -> None:
         block_ms = max(500, int(os.environ.get("POSE_STREAM_BLOCK_MS", "2000")))
+        try:
+            read_count = max(1, int(os.environ.get("POSE_STREAM_READ_COUNT", "16") or "16"))
+        except ValueError:
+            read_count = 16
         stream_keys = self._owned_stream_keys
         if not stream_keys:
             logger.error("EventRedisWorker: no owned pose streams configured")
@@ -327,12 +334,25 @@ class EventRedisWorker:
         while True:
             try:
                 await asyncio.to_thread(ensure_pose_stream_groups, stream_keys)
+                await asyncio.to_thread(
+                    purge_stale_consumers,
+                    stream_keys,
+                    keep={self._consumer_name},
+                )
+                await asyncio.to_thread(trim_idle_pose_streams, stream_keys)
+                await asyncio.to_thread(
+                    ack_own_pending,
+                    stream_keys,
+                    consumer=self._consumer_name,
+                )
                 self._redis = aioredis.from_url(redis_url(), decode_responses=True)
+                await self._ack_own_pending()
                 logger.info(
-                    "EventRedisWorker stream consumer=%s group=%s streams=%s (%s)",
+                    "EventRedisWorker stream consumer=%s group=%s streams=%s count=%s (%s)",
                     self._consumer_name,
                     POSE_STREAM_GROUP,
                     stream_keys,
+                    read_count,
                     shard_label(),
                 )
                 read_streams = {key: ">" for key in stream_keys}
@@ -341,17 +361,19 @@ class EventRedisWorker:
                         POSE_STREAM_GROUP,
                         self._consumer_name,
                         read_streams,
-                        count=1,
+                        count=read_count,
                         block=block_ms,
                     )
                     if not messages:
                         continue
+                    batch: list[tuple[str, str, str | None]] = []
                     for stream_name, items in messages:
                         for msg_id, fields in items:
                             payload = fields.get("payload") if isinstance(fields, dict) else None
-                            if payload:
-                                await self._handle_pose_payload(payload)
-                            await self._redis.xack(stream_name, POSE_STREAM_GROUP, msg_id)
+                            batch.append((str(stream_name), str(msg_id), payload))
+                    await self._handle_pose_batch(batch)
+                    for stream_name, msg_id, _payload in batch:
+                        await self._redis.xack(stream_name, POSE_STREAM_GROUP, msg_id)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -401,6 +423,43 @@ class EventRedisWorker:
                     except Exception:
                         pass
                     self._redis = None
+
+    async def _ack_own_pending(self) -> None:
+        """连接后丢掉本 consumer 残留 PEL，避免上次异常后 `>` 读新消息、旧 pending 永远占着。"""
+        if self._redis is None:
+            return
+        for key in self._owned_stream_keys:
+            start = "0-0"
+            while True:
+                try:
+                    claimed = await self._redis.xautoclaim(
+                        key,
+                        POSE_STREAM_GROUP,
+                        self._consumer_name,
+                        min_idle_time=0,
+                        start_id=start,
+                        count=200,
+                    )
+                except Exception:
+                    break
+                if not isinstance(claimed, (list, tuple)) or not claimed:
+                    break
+                nxt = claimed[0]
+                items = claimed[1] if len(claimed) > 1 else []
+                ids = [mid for mid, _fields in (items or [])]
+                if ids:
+                    await self._redis.xack(key, POSE_STREAM_GROUP, *ids)
+                if not items:
+                    break
+                if not nxt or str(nxt) == str(start):
+                    break
+                start = str(nxt)
+
+    async def _handle_pose_batch(self, batch: list[tuple[str, str, str | None]]) -> None:
+        """一批 stream 消息。双路 worker 可按巷道并行覆盖本方法。"""
+        for _stream, _msg_id, payload in batch:
+            if payload:
+                await self._handle_pose_payload(payload)
 
     async def _handle_pose_payload(self, payload: str) -> None:
         try:

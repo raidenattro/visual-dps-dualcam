@@ -419,8 +419,9 @@ class DualcamProcessor:
         pose: dict,
         *,
         apply_hold: bool = True,
-        smooth_2d: bool = True,
-        smooth_3d: bool = True,
+        # 0902：直播关掉 2D/3D 窗平滑换吞吐。贴墙仍用当帧抬点。
+        smooth_2d: bool = False,
+        smooth_3d: bool = False,
     ) -> dict[str, Any]:
         """对侧未到时：2D 跟着当前检测走；3D 用上一帧深度沿射线跟上，不冻帧。"""
         role = str(role or "").strip().upper() or "L"
@@ -494,12 +495,20 @@ class DualcamProcessor:
             return f"巷道 {self.aisle_id} 的{walls}未填写货架号"
         return ""
 
-    def process_pair(self, pose_l: dict, pose_r: dict) -> dict[str, Any]:
+    def process_pair(
+        self,
+        pose_l: dict,
+        pose_r: dict,
+        *,
+        smooth_2d: bool = False,
+        smooth_3d: bool = False,
+    ) -> dict[str, Any]:
         """两路 PoseFrame → 贴墙 token。无立体则空报警。"""
         frame_idx = int(pose_l.get("frame_idx") or pose_r.get("frame_idx") or 0)
         t = pose_time(pose_l, frame_idx) or pose_time(pose_r, frame_idx)
-        pose_l = self._smooth_pose("L", pose_l)
-        pose_r = self._smooth_pose("R", pose_r)
+        if smooth_2d:
+            pose_l = self._smooth_pose("L", pose_l)
+            pose_r = self._smooth_pose("R", pose_r)
         pose_ls, meta_l = _scale_pose(pose_l, *self.calib_l)
         pose_rs, meta_r = _scale_pose(pose_r, *self.calib_r)
         if not self.ready():
@@ -521,7 +530,8 @@ class DualcamProcessor:
         if not pairs:
             followed, idx_l, idx_r = self._lift_follow(fl, fr)
             held = self._apply_hold(followed, t)
-            held = self._sm3d.update(t, held, self.plane)
+            if smooth_3d:
+                held = self._sm3d.update(t, held, self.plane)
             self._prev_xyz = self._new_prev
             sk_l, sk_r = self._overlay_follow(
                 pose_l, pose_r, idx_l, idx_r, have_l=True, have_r=True,
@@ -561,7 +571,9 @@ class DualcamProcessor:
 
         self._prefer = new_prefer
         self._prev_xyz = self._new_prev
-        persons_3d = self._sm3d.update(t, self._apply_hold(persons_3d, t), self.plane)
+        persons_3d = self._apply_hold(persons_3d, t)
+        if smooth_3d:
+            persons_3d = self._sm3d.update(t, persons_3d, self.plane)
         sk_l, sk_r = self._overlay_follow(
             pose_l, pose_r, [i for i, _, _ in pairs], [j for _, j, _ in pairs],
             have_l=True, have_r=True,

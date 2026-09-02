@@ -16,6 +16,7 @@ EVENT_CHANNEL_PREFIX = "event:live:"
 EVENT_SNAPSHOT_PREFIX = "event:snapshot:"
 EVENT_SCHEMA_VERSION = 1
 SNAPSHOT_TTL_SEC = max(3, int(os.environ.get("LIVE_SNAPSHOT_TTL_SEC", "10")))
+_POOL: sync_redis.ConnectionPool | None = None
 
 
 def redis_url() -> str:
@@ -30,6 +31,14 @@ def channel_for(camera_id: str) -> str:
 
 def snapshot_key_for(camera_id: str) -> str:
     return f"{EVENT_SNAPSHOT_PREFIX}{camera_id}"
+
+
+def _sync_redis() -> sync_redis.Redis:
+    """复用连接池。worker 每帧 L/R 各 publish 一次，禁止每次 from_url+close。"""
+    global _POOL
+    if _POOL is None:
+        _POOL = sync_redis.ConnectionPool.from_url(redis_url(), decode_responses=True)
+    return sync_redis.Redis(connection_pool=_POOL)
 
 
 def _camera_id_from_channel(channel: str) -> str:
@@ -85,15 +94,16 @@ def publish_event_frame(
     )
     payload = json.dumps(frame, ensure_ascii=False, separators=(",", ":"))
     try:
-        client = sync_redis.from_url(redis_url(), decode_responses=True)
+        client = _sync_redis()
         pipe = client.pipeline(transaction=False)
         pipe.set(snapshot_key_for(cid), payload, ex=SNAPSHOT_TTL_SEC)
         pipe.publish(channel_for(cid), payload)
         pipe.execute()
-        client.close()
         return True
     except Exception as exc:
         logger.warning("Redis publish_event_frame failed camera=%s: %s", cid, exc)
+        global _POOL
+        _POOL = None
         return False
 
 
@@ -102,9 +112,8 @@ def get_event_snapshot(camera_id: str) -> dict[str, Any] | None:
     if not cid:
         return None
     try:
-        client = sync_redis.from_url(redis_url(), decode_responses=True)
+        client = _sync_redis()
         raw = client.get(snapshot_key_for(cid))
-        client.close()
         if not raw:
             return None
         data = json.loads(raw)

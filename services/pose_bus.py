@@ -122,6 +122,149 @@ def ensure_pose_stream_groups(
             client.close()
 
 
+def _stream_last_age_sec(client: sync_redis.Redis, stream_key: str) -> float | None:
+    """最新一条的年龄（秒）。空流返回 None。"""
+    rows = client.xrevrange(stream_key, count=1)
+    if not rows:
+        return None
+    sid = str(rows[0][0] or "")
+    if "-" not in sid:
+        return None
+    try:
+        ts_ms = int(sid.split("-", 1)[0])
+    except ValueError:
+        return None
+    return max(0.0, time.time() - ts_ms / 1000.0)
+
+
+def purge_stale_consumers(
+    stream_keys: list[str] | None = None,
+    *,
+    keep: set[str] | None = None,
+    min_idle_ms: int = 60_000,
+    client: sync_redis.Redis | None = None,
+) -> dict[str, int]:
+    """删掉消费组里长期 idle 的旧 consumer（worker 重启留下的 uuid 名）。"""
+    keys = stream_keys if stream_keys is not None else all_pose_stream_keys()
+    keep_names = {str(x) for x in (keep or ()) if str(x).strip()}
+    own = client is None
+    if own:
+        client = sync_redis.from_url(redis_url(), decode_responses=True)
+    removed = 0
+    scanned = 0
+    try:
+        for key in keys:
+            try:
+                consumers = client.xinfo_consumers(key, POSE_STREAM_GROUP)
+            except sync_redis.ResponseError:
+                continue
+            scanned += 1
+            for info in consumers or []:
+                name = str(info.get("name") or "")
+                if not name or name in keep_names:
+                    continue
+                idle = int(info.get("idle") or 0)
+                if idle < max(0, int(min_idle_ms)):
+                    continue
+                try:
+                    client.xgroup_delconsumer(key, POSE_STREAM_GROUP, name)
+                    removed += 1
+                except sync_redis.ResponseError:
+                    continue
+    finally:
+        if own and client is not None:
+            client.close()
+    if removed:
+        logger.info(
+            "purged %s stale pose consumers (streams=%s keep=%s)",
+            removed,
+            scanned,
+            sorted(keep_names),
+        )
+    return {"streams": scanned, "removed": removed}
+
+
+def trim_idle_pose_streams(
+    stream_keys: list[str] | None = None,
+    *,
+    min_idle_sec: float = 120.0,
+    client: sync_redis.Redis | None = None,
+) -> dict[str, int]:
+    """推理停了仍占满 MAXLEN 的 shard：XTRIM 到空，保留 group。正在写的流不动。"""
+    keys = stream_keys if stream_keys is not None else all_pose_stream_keys()
+    own = client is None
+    if own:
+        client = sync_redis.from_url(redis_url(), decode_responses=True)
+    trimmed = 0
+    kept = 0
+    try:
+        for key in keys:
+            age = _stream_last_age_sec(client, key)
+            if age is None:
+                continue
+            if age < max(1.0, float(min_idle_sec)):
+                kept += 1
+                continue
+            n = int(client.xlen(key) or 0)
+            if n <= 0:
+                continue
+            client.xtrim(key, maxlen=0, approximate=False)
+            trimmed += 1
+            logger.info("trimmed idle pose stream %s xlen=%s idle=%.0fs", key, n, age)
+    finally:
+        if own and client is not None:
+            client.close()
+    return {"trimmed": trimmed, "active": kept}
+
+
+def ack_own_pending(
+    stream_keys: list[str] | None = None,
+    *,
+    consumer: str,
+    client: sync_redis.Redis | None = None,
+) -> int:
+    """丢掉本 consumer 的 PEL。重启后 XREADGROUP '>' 不会重放 pending，卡着会 lag 顶满。"""
+    keys = stream_keys if stream_keys is not None else worker_owned_stream_keys()
+    name = str(consumer or "").strip()
+    if not name:
+        return 0
+    own = client is None
+    if own:
+        client = sync_redis.from_url(redis_url(), decode_responses=True)
+    acked = 0
+    try:
+        for key in keys:
+            start = "0-0"
+            while True:
+                try:
+                    res = client.xautoclaim(
+                        key,
+                        POSE_STREAM_GROUP,
+                        name,
+                        min_idle_time=0,
+                        start_id=start,
+                        count=200,
+                    )
+                except sync_redis.ResponseError:
+                    break
+                next_id = res[0]
+                messages = res[1] if len(res) > 1 else []
+                if not messages:
+                    break
+                ids = [mid for mid, _fields in messages]
+                if ids:
+                    acked += int(client.xack(key, POSE_STREAM_GROUP, *ids) or 0)
+                start = next_id or "0-0"
+                if not messages or start == "0-0":
+                    break
+    finally:
+        if own and client is not None:
+            client.close()
+    if acked:
+        logger.info("acked %s stale pending pose messages consumer=%s", acked, name)
+    return acked
+
+
 def publish_pose_frame(
     camera_id: str,
     *,
