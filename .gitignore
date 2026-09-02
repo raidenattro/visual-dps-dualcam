@@ -39,3 +39,4 @@ deploy-bundle/docker-images/
 deploy-bundle/weights/
 .env.xugang.local
 *.tar
+web/.tmp/
