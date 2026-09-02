@@ -13,6 +13,9 @@ import numpy as np
 LWRIST, RWRIST = 9, 10
 KPT_MIN = 0.3
 CONF_MARGIN = 0.12
+# 交会点按 s^power 加权；power>1 时低分路拉力下降（0.40 对 0.90：线性 31% → 平方 16%）
+CONF_POWER = 2.0
+WRIST_CONF_POWER = 2.5
 PAIR_GAP_MAX = 0.18
 JOINT_GAP_MAX = 0.20
 _PAIR_TORSO = (5, 6, 11, 12)
@@ -119,6 +122,14 @@ def ray_plane(uv: np.ndarray, cam: dict, plane: dict) -> np.ndarray | None:
     return c + t * d
 
 
+def conf_weights(s_l: float, s_r: float, power: float = CONF_POWER) -> tuple[float, float]:
+    """两路交会权重。power>1 削弱低分；两路同分仍各 1/2。"""
+    pwr = max(1.0, float(power))
+    wl = max(float(s_l), 1e-6) ** pwr
+    wr = max(float(s_r), 1e-6) ** pwr
+    return wl, wr
+
+
 def lift_point(
     uv_l,
     s_l: float,
@@ -127,13 +138,16 @@ def lift_point(
     cams: dict,
     plane: dict | None,
     prev: np.ndarray | None = None,
+    *,
+    conf_power: float = CONF_POWER,
 ) -> tuple[np.ndarray | None, float | None, str | None]:
     sl, sr = float(s_l), float(s_r)
     ok_l, ok_r = sl >= KPT_MIN, sr >= KPT_MIN
     if ok_l and ok_r:
         p1, p2, g = triangulate_ends(uv_l, uv_r, cams)
         if g <= JOINT_GAP_MAX:
-            p = (sl * p1 + sr * p2) / (sl + sr)
+            wl, wr = conf_weights(sl, sr, conf_power)
+            p = (wl * p1 + wr * p2) / (wl + wr)
             if abs(sl - sr) < CONF_MARGIN:
                 return p, g, "stereo"
             return p, g, "L" if sl >= sr else "R"

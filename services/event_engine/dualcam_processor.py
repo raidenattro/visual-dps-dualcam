@@ -9,10 +9,12 @@ import numpy as np
 
 from dualcam.geom import DEFAULT_CONTACT_M, contact_slots
 from dualcam.lift import (
+    CONF_POWER,
     CONTACT_SRC,
     LWRIST,
     PREFER_PX,
     RWRIST,
+    WRIST_CONF_POWER,
     _torso_xy,
     keypoints_to_ks,
     lift_point,
@@ -154,7 +156,10 @@ class DualcamProcessor:
                 prev = np.asarray(prev_xyz[ji][:3], float)
             if prev is None:
                 prev = self._prev_xyz.get((*prev_key, ji))
-            p, _g, src = lift_point(uv_l, sc_l, uv_r, sc_r, self.cams, self.plane, prev)
+            power = WRIST_CONF_POWER if ji in (LWRIST, RWRIST) else CONF_POWER
+            p, _g, src = lift_point(
+                uv_l, sc_l, uv_r, sc_r, self.cams, self.plane, prev, conf_power=power,
+            )
             srcs[ji] = src
             if p is None:
                 continue

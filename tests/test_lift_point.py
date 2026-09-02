@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from dualcam.lift import KPT_MIN, lift_point, point_on_ray, ray, triangulate_ends
+from dualcam.lift import CONF_POWER, KPT_MIN, conf_weights, lift_point, point_on_ray, ray, triangulate_ends
 
 CALIB = ROOT / "fixtures/dual_1-3.json"
 
@@ -89,3 +89,13 @@ def test_close_scores_weight_blend_not_midpoint():
     p_r, _, src_r = lift_point(uv_l, 0.40, uv_r, 0.90, cams, plane, None)
     assert src_r == "R"
     assert float(np.linalg.norm(p_r - p2)) < float(np.linalg.norm(p_r - p1))
+    linear = (0.90 * p1 + 0.40 * p2) / 1.30
+    assert float(np.linalg.norm(p_l - p1)) < float(np.linalg.norm(linear - p1)) - 1e-9
+
+
+def test_conf_weights_square_weakens_low_score():
+    """0.40 对 0.90：线性约 31%，平方约 16%。"""
+    wl, wr = conf_weights(0.90, 0.40, CONF_POWER)
+    assert wr / (wl + wr) < 0.40 / 1.30 - 0.05
+    w_eq_l, w_eq_r = conf_weights(0.70, 0.70, CONF_POWER)
+    assert abs(w_eq_l - w_eq_r) < 1e-12
