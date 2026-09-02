@@ -10,7 +10,19 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from dualcam.lift import CONF_POWER, KPT_MIN, conf_weights, lift_point, point_on_ray, ray, triangulate_ends
+from dualcam.lift import (
+    ARM_CONF_JOINTS,
+    ARM_CONF_POWER,
+    CONF_POWER,
+    KPT_MIN,
+    LELB,
+    RELB,
+    conf_weights,
+    lift_point,
+    point_on_ray,
+    ray,
+    triangulate_ends,
+)
 
 CALIB = ROOT / "fixtures/dual_1-3.json"
 
@@ -99,3 +111,5 @@ def test_conf_weights_square_weakens_low_score():
     assert wr / (wl + wr) < 0.40 / 1.30 - 0.05
     w_eq_l, w_eq_r = conf_weights(0.70, 0.70, CONF_POWER)
     assert abs(w_eq_l - w_eq_r) < 1e-12
+    assert ARM_CONF_POWER == 2.5
+    assert {LELB, RELB} <= ARM_CONF_JOINTS

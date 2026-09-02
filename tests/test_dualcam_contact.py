@@ -244,3 +244,16 @@ def test_flying_wrist_clamped_when_far_from_shoulder():
     sh = np.asarray(xyz[5], float)
     assert abs(float(np.linalg.norm(w - sh)) - 0.85) < 1e-6
     assert toks[9] == []
+
+
+def test_flying_elbow_clamped_when_far_from_shoulder():
+    proc = DualcamProcessor({"aisle_id": "x", "solved": {"ok": False}, "cameras": {}})
+    xyz = [None] * 17
+    xyz[5] = [0.0, 1.4, 0.5]
+    xyz[7] = [1.0, 1.4, 0.5]
+    srcs = [None] * 17
+    toks = {9: [], 10: []}
+    proc._clamp_flying_wrists(xyz, srcs, toks)
+    e = np.asarray(xyz[7], float)
+    sh = np.asarray(xyz[5], float)
+    assert abs(float(np.linalg.norm(e - sh)) - 0.42) < 1e-6

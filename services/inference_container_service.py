@@ -185,6 +185,11 @@ def _compose_inference_status(
             }
         )
         worker_state = str(worker.get("state") or "").strip()
+        # 已写「手动停止」后容器还在拆除：不要报 error / starting
+        if worker_state == "stopped" and mapped != "running":
+            base["status"] = "stopped"
+            base["message"] = worker.get("message") or "已手动停止"
+            return base
         if mapped == "running" and worker_state == "running":
             base["message"] = worker.get("message") or "推理运行中"
         elif mapped == "running" and worker_state == "starting":
@@ -531,31 +536,41 @@ def start_inference_container(camera: dict, request=None) -> dict:
     }
 
 
+def _mark_worker_stopped(camera_id: str) -> None:
+    """先落盘再拆容器，避免拆除过程被映射成 starting / error。"""
+    status_path = _status_file(camera_id)
+    data: dict = {}
+    if os.path.exists(status_path):
+        try:
+            data = json.loads(open(status_path, "r", encoding="utf-8").read())
+        except (json.JSONDecodeError, OSError):
+            data = {}
+    data["camera_id"] = camera_id
+    data["state"] = "stopped"
+    data["message"] = "已手动停止"
+    data["updated_at"] = time.time()
+    try:
+        os.makedirs(os.path.dirname(status_path), exist_ok=True)
+        with open(status_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+
+
 def stop_inference_container(camera_id: str, request=None) -> dict:
     import docker
 
     name = container_name(camera_id)
     client = _docker_client()
+    _mark_worker_stopped(camera_id)
     try:
         container = client.containers.get(name)
         container.stop(timeout=15)
         container.remove()
     except docker.errors.NotFound:
         pass
-    except Exception as exc:
+    except Exception:
         return {"error": "停止检测失败，请稍后重试"}
-
-    status_path = _status_file(camera_id)
-    if os.path.exists(status_path):
-        try:
-            data = json.loads(open(status_path, "r", encoding="utf-8").read())
-            data["state"] = "stopped"
-            data["message"] = "已手动停止"
-            data["updated_at"] = time.time()
-            with open(status_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except OSError:
-            pass
 
     from services.event_service import record_event
 

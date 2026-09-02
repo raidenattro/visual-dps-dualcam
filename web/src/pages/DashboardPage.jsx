@@ -40,6 +40,7 @@ export default function DashboardPage() {
   const [msgErr, setMsgErr] = useState(false);
   const [refreshingId, setRefreshingId] = useState(null);
   const [inferLoadingId, setInferLoadingId] = useState(null);
+  const [inferLoadingAction, setInferLoadingAction] = useState(null);
   const [batchInferAction, setBatchInferAction] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState('edit');
@@ -409,6 +410,7 @@ export default function DashboardPage() {
 
   const toggleAisleInference = async (aisle, turnOn) => {
     setInferLoadingId(aisle.aisle_id);
+    setInferLoadingAction(turnOn ? 'start' : 'stop');
     if (turnOn) {
       setMsg('骨架推理启动中');
       setMsgErr(false);
@@ -426,6 +428,7 @@ export default function DashboardPage() {
       alert(formatUserError(e.message) || (turnOn ? '启动失败' : '停止失败'));
     } finally {
       setInferLoadingId(null);
+      setInferLoadingAction(null);
     }
   };
 
@@ -595,8 +598,10 @@ export default function DashboardPage() {
                 const thumb = (left?.has_thumbnail && left) || (right?.has_thumbnail && right) || left || right;
                 const on = aisleInferOn(left, right);
                 const inferSt = aisleInferStatus(left, right);
-                const inferText = inferLoadingId === aisle.aisle_id && !on
-                  ? AISLE_INFER_LABEL.starting
+                const inferText = inferLoadingId === aisle.aisle_id
+                  ? (inferLoadingAction === 'stop'
+                    ? AISLE_INFER_LABEL.stopped
+                    : AISLE_INFER_LABEL.starting)
                   : (AISLE_INFER_LABEL[inferSt] || AISLE_INFER_LABEL.stopped);
                 const online = Boolean(left?.online || right?.online);
                 const activity = Math.max(Number(left?._displayActivity) || 0, Number(right?._displayActivity) || 0);

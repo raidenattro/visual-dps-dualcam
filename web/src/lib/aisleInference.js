@@ -32,19 +32,32 @@ export async function stopAisleInference(camL, camR) {
   return { ok: !error, error, results };
 }
 
+function inferStatusOf(cam) {
+  return cam?.inference?.status || 'stopped';
+}
+
+function isManualStop(cam) {
+  const msg = String(cam?.inference?.message || '');
+  return inferStatusOf(cam) === 'stopped' || msg === '已手动停止' || msg === '已停止';
+}
+
 export function aisleInferOn(camL, camR) {
-  const running = (c) => c?.inference?.status === 'running' || c?.inference?.status === 'starting';
+  const running = (c) => {
+    const st = inferStatusOf(c);
+    return st === 'running' || st === 'starting';
+  };
   return running(camL) || running(camR);
 }
 
-/** 巷道两路合成状态：一路还在加载模型时整巷道算 starting */
+/** 巷道两路合成状态。关容器时一路先停不当 starting，拆除中的 error 不当异常。 */
 export function aisleInferStatus(camL, camR) {
-  const a = camL?.inference?.status || 'stopped';
-  const b = camR?.inference?.status || 'stopped';
+  const rawA = inferStatusOf(camL);
+  const rawB = inferStatusOf(camR);
+  const a = rawA === 'error' && isManualStop(camL) ? 'stopped' : rawA;
+  const b = rawB === 'error' && isManualStop(camR) ? 'stopped' : rawB;
   if (a === 'error' || b === 'error') return 'error';
   if (a === 'starting' || b === 'starting') return 'starting';
-  if (a === 'running' && b === 'running') return 'running';
-  if (a === 'running' || b === 'running') return 'starting';
+  if (a === 'running' || b === 'running') return 'running';
   return 'stopped';
 }
 

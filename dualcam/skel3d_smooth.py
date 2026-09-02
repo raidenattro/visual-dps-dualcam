@@ -74,9 +74,6 @@ FOLLOW_SPEED_3D = 0.85
 EMA_ALPHA_SLOW = 0.42
 # 因果 2D：3σ 最多刚盖住约 2 个 pose，不再 2× 加宽糊 400ms
 LIVE_2D_SPAN_FRAMES = 2.0
-# 低置信度腕/肘大跳视为误检，钉在上一帧像素（不进三角化）
-CONF_HOLD_SCORE = 0.45
-CONF_HOLD_PX = 22.0
 # 1-Euro（像素）：静止压抖，伸手跟手。beta 单位 1/(px/s)
 EURO_MINCUTOFF = 1.05
 EURO_BETA = 0.012
@@ -120,25 +117,6 @@ def live_adapt_sigma(sigma_s: float, dt: float | None) -> float:
 def _smoothing_factor(dt: float, cutoff: float) -> float:
     r = 2.0 * math.pi * float(cutoff) * float(dt)
     return r / (r + 1.0)
-
-
-def _hold_low_conf_jumps(
-    vals: np.ndarray,
-    mask: np.ndarray,
-    scores: np.ndarray,
-    *,
-    min_score: float = CONF_HOLD_SCORE,
-    max_jump_px: float = CONF_HOLD_PX,
-) -> None:
-    """分数偏低且像素跳过大：用上一帧坐标，避免误检腕点抽进 3D。"""
-    last = -1
-    for i in range(len(mask)):
-        if not mask[i]:
-            continue
-        if last >= 0 and float(scores[i]) < min_score:
-            if float(np.linalg.norm(vals[i] - vals[last])) > max_jump_px:
-                vals[i] = vals[last]
-        last = i
 
 
 def _one_euro_series(
@@ -442,7 +420,6 @@ def smooth_pose2d(pack: list[dict], views: tuple[str, ...] = ("L", "R"), *, caus
             times = np.array([float(pack[fi]["t"]) for fi, _ in members], dtype=np.float64)
             for j in range(N_JOINTS):
                 vals = np.zeros((len(members), 2), dtype=np.float64)
-                scores = np.zeros(len(members), dtype=np.float64)
                 mask = np.zeros(len(members), dtype=bool)
                 for i, (fi, di) in enumerate(members):
                     k = pack[fi][view]["k"][di]
@@ -453,13 +430,10 @@ def smooth_pose2d(pack: list[dict], views: tuple[str, ...] = ("L", "R"), *, caus
                     if uv.size < 2 or not np.all(np.isfinite(uv[:2])):
                         continue
                     vals[i] = uv[:2]
-                    scores[i] = float(s[j])
                     mask[i] = True
                 if j in (LWRIST, RWRIST):
                     n_in += int(mask.sum())
                 _reject_speed(vals, mask, times, VMAX_2D_PX)
-                if causal and j in (LWRIST, RWRIST, LELB, RELB):
-                    _hold_low_conf_jumps(vals, mask, scores)
                 # dump 用设计 σ。直播只把窗扩到「刚看见上一两帧」，避免 2× 糊整段动作。
                 if causal and dt > DENSE_DT:
                     need = LIVE_2D_SPAN_FRAMES * float(dt) / 3.0

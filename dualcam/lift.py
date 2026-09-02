@@ -10,12 +10,16 @@ from typing import Any
 
 import numpy as np
 
+LELB, RELB = 7, 8
 LWRIST, RWRIST = 9, 10
 KPT_MIN = 0.3
 CONF_MARGIN = 0.12
 # 交会点按 s^power 加权；power>1 时低分路拉力下降（0.40 对 0.90：线性 31% → 平方 16%）
 CONF_POWER = 2.0
 WRIST_CONF_POWER = 2.5
+# 腕/肘同一套幂次，低分路更弱
+ARM_CONF_POWER = WRIST_CONF_POWER
+ARM_CONF_JOINTS = frozenset({LELB, RELB, LWRIST, RWRIST})
 PAIR_GAP_MAX = 0.18
 JOINT_GAP_MAX = 0.20
 _PAIR_TORSO = (5, 6, 11, 12)

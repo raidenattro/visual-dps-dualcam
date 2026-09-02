@@ -9,12 +9,15 @@ import numpy as np
 
 from dualcam.geom import DEFAULT_CONTACT_M, contact_slots
 from dualcam.lift import (
+    ARM_CONF_JOINTS,
+    ARM_CONF_POWER,
     CONF_POWER,
     CONTACT_SRC,
+    LELB,
     LWRIST,
     PREFER_PX,
+    RELB,
     RWRIST,
-    WRIST_CONF_POWER,
     _torso_xy,
     keypoints_to_ks,
     lift_point,
@@ -45,6 +48,8 @@ TORSO_JOINTS = (5, 6, 11, 12)
 LSHO, RSHO = 5, 6
 # 超过则腕点几何不可信，不报贴墙（dump_skel3d.SHOULDER_WRIST_MAX）
 SHOULDER_WRIST_MAX = 0.85
+# 上臂合法上限，与 BONE_LEN_RANGE[(肩,肘)] 一致
+SHOULDER_ELBOW_MAX = 0.42
 
 
 def _scale_pose(pose: dict, calib_w: int, calib_h: int) -> tuple[dict, dict]:
@@ -156,7 +161,7 @@ class DualcamProcessor:
                 prev = np.asarray(prev_xyz[ji][:3], float)
             if prev is None:
                 prev = self._prev_xyz.get((*prev_key, ji))
-            power = WRIST_CONF_POWER if ji in (LWRIST, RWRIST) else CONF_POWER
+            power = ARM_CONF_POWER if ji in ARM_CONF_JOINTS else CONF_POWER
             p, _g, src = lift_point(
                 uv_l, sc_l, uv_r, sc_r, self.cams, self.plane, prev, conf_power=power,
             )
@@ -192,7 +197,17 @@ class DualcamProcessor:
         srcs: list,
         wrist_tokens: dict[int, list[str]],
     ) -> None:
-        """肩-腕过长则收到上限上，不删点（删了会闪断、骨线抽搐）。"""
+        """肩-肘、肩-腕过长则收到上限上，不删点（删了会闪断、骨线抽搐）。先肘后腕。"""
+        for ei, shi in ((LELB, LSHO), (RELB, RSHO)):
+            e, sh = xyz[ei] if ei < len(xyz) else None, xyz[shi] if shi < len(xyz) else None
+            if not e or not sh:
+                continue
+            ev = np.asarray(e[:3], float)
+            sv = np.asarray(sh[:3], float)
+            d = float(np.linalg.norm(ev - sv))
+            if d <= SHOULDER_ELBOW_MAX or d < 1e-6:
+                continue
+            xyz[ei] = (sv + (ev - sv) * (SHOULDER_ELBOW_MAX / d)).tolist()
         for wi, shi in ((LWRIST, LSHO), (RWRIST, RSHO)):
             w, sh = xyz[wi] if wi < len(xyz) else None, xyz[shi] if shi < len(xyz) else None
             if not w or not sh:

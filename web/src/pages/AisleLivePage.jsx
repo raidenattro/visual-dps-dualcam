@@ -166,6 +166,7 @@ export default function AisleLivePage() {
   const [cameras, setCameras] = useState([]);
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [overlayL, setOverlayL] = useState(emptyOverlay);
   const [overlayR, setOverlayR] = useState(emptyOverlay);
   const [playbackById, setPlaybackById] = useState({});
@@ -293,6 +294,7 @@ export default function AisleLivePage() {
       return;
     }
     setBusy(true);
+    setStopping(!on);
     if (on) setMsg('骨架推理启动中');
     try {
       const r = on ? await startAisleInference(idL, idR) : await stopAisleInference(idL, idR);
@@ -303,6 +305,7 @@ export default function AisleLivePage() {
       setMsg(formatUserError(e.message));
     } finally {
       setBusy(false);
+      setStopping(false);
     }
   };
 
@@ -315,12 +318,14 @@ export default function AisleLivePage() {
     );
   }
 
-  const btnBusy = busy || (inferStatus === 'starting' && !hasLiveSkel);
-  const btnText = btnBusy
-    ? '骨架推理启动中'
-    : inferOn
-      ? '停止本巷道检测'
-      : '启动本巷道检测';
+  const startBusy = !stopping && (busy || (inferStatus === 'starting' && !hasLiveSkel));
+  const btnText = stopping
+    ? '正在停止检测'
+    : startBusy
+      ? '骨架推理启动中'
+      : inferOn
+        ? '停止本巷道检测'
+        : '启动本巷道检测';
   const modelL = resolveCameraModelLabel(camL);
   const modelR = resolveCameraModelLabel(camR);
   const modelHint = camL || camR
@@ -375,7 +380,7 @@ export default function AisleLivePage() {
               {hudText}
             </div>
           ) : null}
-          {inferStatus === 'starting' && !persons3d.length && !hasLiveSkel ? (
+          {!stopping && inferStatus === 'starting' && !persons3d.length && !hasLiveSkel ? (
             <div className="aisle-live-banner">骨架推理启动中</div>
           ) : null}
           {aisle?.solved?.ok ? (

@@ -13,7 +13,6 @@ from dualcam.skel3d_smooth import (
     _gauss_smooth,
     _reject_speed,
     _restore_raw_bone_lengths,
-    _hold_low_conf_jumps,
     _one_euro_series,
     _speed_gated_blend,
     adapt_sigma,
@@ -348,18 +347,6 @@ def test_live_pose2d_cuts_wrist_jitter_at_sparse_dt():
     assert jump_sm < 0.85 * jump_raw
     assert out_u[-1] - out_u[8] > 40
     assert persons[0]["keypoints"][9][2] == 0.8
-
-
-def test_hold_low_conf_wrist_jump():
-    """低分腕点跳 40px 应钉在上一帧，高分伸手应放行。"""
-    vals = np.array([[100.0, 200.0], [140.0, 200.0]], float)
-    mask = np.array([True, True])
-    scores = np.array([0.80, 0.32])
-    _hold_low_conf_jumps(vals, mask, scores)
-    assert abs(vals[1, 0] - 100.0) < 1e-6
-    vals2 = np.array([[100.0, 200.0], [160.0, 200.0]], float)
-    _hold_low_conf_jumps(vals2, mask, np.array([0.80, 0.85]))
-    assert abs(vals2[1, 0] - 160.0) < 1e-6
 
 
 def test_one_euro_cuts_jitter_follows_reach():
