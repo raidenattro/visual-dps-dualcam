@@ -8,10 +8,13 @@ from core.config import load_app_config
 from services.callback_reporter import CollisionCallbackReporter
 from services.event_engine.dualcam_worker import DualcamRedisWorker
 from services.event_engine.sharding import shard_label
+from services.pipeline_log import configure_process_logging
 
 
 async def _run():
     app_config = load_app_config()
+    log_role = os.environ.get("EVENT_WORKER_CONSUMER_NAME", "event-worker").strip() or "event-worker"
+    configure_process_logging(role=log_role, app_config=app_config)
 
     enable_cb = os.environ.get("EVENT_WORKER_ENABLE_CALLBACKS", "1").strip() not in (
         "0",

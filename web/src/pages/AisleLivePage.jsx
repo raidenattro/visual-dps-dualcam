@@ -152,6 +152,25 @@ function mergeAisleOverlay(prev, data) {
   };
 }
 
+/** 3D 窗只画立体可信骨架；2D 叠层仍用原始 SSE。 */
+function scene3dOverlay(overlayL, overlayR) {
+  const hasSkelL = (overlayL.skeletons?.length || 0) > 0;
+  const hasSkelR = (overlayR.skeletons?.length || 0) > 0;
+  const src = newerOverlay(overlayL, overlayR);
+  if (!hasSkelL || !hasSkelR) {
+    return { persons3d: [], collisions: [], alarms: [] };
+  }
+  const persons3d = (src.persons3d || []).filter((p) => !p.preview);
+  if (!persons3d.length) {
+    return { persons3d: [], collisions: [], alarms: [] };
+  }
+  return {
+    persons3d,
+    collisions: src.collisions || [],
+    alarms: src.alarms || [],
+  };
+}
+
 function aisleFingerprint(a) {
   if (!a) return '';
   const meshes = a.slot_meshes || [];
@@ -275,15 +294,14 @@ export default function AisleLivePage() {
 
   const hasLiveSkel = (overlayL.skeletons?.length || 0) + (overlayR.skeletons?.length || 0) > 0;
   const src3d = newerOverlay(overlayL, overlayR);
-  const persons3d = src3d.persons3d || [];
-  const collisions = src3d.collisions || [];
-  const alarms = src3d.alarms || [];
+  const persons3dRaw = src3d.persons3d || [];
+  const scene3d = scene3dOverlay(overlayL, overlayR);
   const inferStatus = hasLiveSkel && inferStatusRaw === 'starting' ? 'running' : inferStatusRaw;
   const inferLabelUi = AISLE_INFER_LABEL[inferStatus] || inferLabel;
-  const hudText = (alarms || []).length
-    ? `告警 ${alarms.join(' · ')}`
-    : persons3d.length
-      ? (persons3d.some((p) => p.preview) ? '单路预览 · 等待对侧配对成立体' : '立体骨架')
+  const hudText = (scene3d.alarms || []).length
+    ? `告警 ${scene3d.alarms.join(' · ')}`
+    : persons3dRaw.length
+      ? (persons3dRaw.some((p) => p.preview) ? '单路预览 · 等待对侧配对成立体' : '立体骨架')
       : inferStatus === 'running'
         ? '等待 3D 姿态…'
         : '';
@@ -376,19 +394,26 @@ export default function AisleLivePage() {
         <div className="aisle-live-3d">
           <span className="aisle-live-tag">巷道 3D · 拖拽旋转</span>
           {hudText ? (
-            <div className={`aisle-live-hud${(alarms || []).length ? ' alarm' : persons3d.some((p) => p.preview) ? ' preview' : ''}`}>
+            <div className={`aisle-live-hud${
+              (scene3d.alarms || []).length
+                ? ' alarm'
+                : persons3dRaw.some((p) => p.preview)
+                  ? ' preview'
+                  : ''
+            }`}
+            >
               {hudText}
             </div>
           ) : null}
-          {!stopping && inferStatus === 'starting' && !persons3d.length && !hasLiveSkel ? (
+          {!stopping && inferStatus === 'starting' && !persons3dRaw.length && !hasLiveSkel ? (
             <div className="aisle-live-banner">骨架推理启动中</div>
           ) : null}
           {aisle?.solved?.ok ? (
             <AisleScene3D
               aisle={aisle}
-              persons3d={persons3d}
-              collisions={collisions}
-              alarms={alarms}
+              persons3d={scene3d.persons3d}
+              collisions={scene3d.collisions}
+              alarms={scene3d.alarms}
             />
           ) : (
             <div className="aisle-live-empty">尚未反解。请先到标注页完成四角与反解。</div>

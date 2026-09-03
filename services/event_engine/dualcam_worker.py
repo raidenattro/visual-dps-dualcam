@@ -185,23 +185,47 @@ class DualcamRedisWorker(EventRedisWorker):
                 persons_3d=people,
             )
 
-    def _execute_job(self, job: dict[str, Any]) -> tuple[DualcamProcessor, dict] | None:
-        proc: DualcamProcessor = job["proc"]
-        if job["kind"] == "single":
-            return proc, proc.process_single(job["role"], job["pose"])
-        started = time.monotonic()
-        result = proc.process_pair(job["pose_l"], job["pose_r"])
-        worker_ms = round((time.monotonic() - started) * 1000.0, 1)
-        collisions = result.get("collisions") or []
-        alarm_collisions = result.get("alarm_collisions") or []
+    def _log_worker_done(
+        self,
+        job: dict[str, Any],
+        proc: DualcamProcessor,
+        result: dict,
+        worker_ms: float,
+    ) -> None:
+        """有命中/告警时强制落盘并带上货位 token，便于按 frame 统计误报。"""
+        collisions = list(result.get("collisions") or [])
+        alarm_collisions = list(result.get("alarm_collisions") or [])
+        fields: dict[str, Any] = {
+            "worker_ms": worker_ms,
+            "hits": len(collisions),
+            "alarms": len(alarm_collisions),
+            "kind": job.get("kind"),
+            "aisle_id": job.get("aisle_id"),
+        }
+        if collisions:
+            fields["hit_tokens"] = collisions
+        if alarm_collisions:
+            fields["alarm_tokens"] = alarm_collisions
+        # pipeline 按 infer 相机过滤；aisle_id 写入 fields 便于 rg aisle11
+        log_camera = proc.cam_l or proc.cam_r or ""
         log_pipeline_stage(
             "worker_done",
-            camera_id=job["aisle_id"],
+            camera_id=log_camera,
             frame_idx=int(result.get("frame_idx") or 0),
-            worker_ms=worker_ms,
-            hits=len(collisions),
-            alarms=len(alarm_collisions),
+            sample=not (collisions or alarm_collisions),
+            **fields,
         )
+
+    def _execute_job(self, job: dict[str, Any]) -> tuple[DualcamProcessor, dict] | None:
+        proc: DualcamProcessor = job["proc"]
+        started = time.monotonic()
+        if job["kind"] == "single":
+            result = proc.process_single(job["role"], job["pose"])
+        else:
+            result = proc.process_pair(job["pose_l"], job["pose_r"])
+        worker_ms = round((time.monotonic() - started) * 1000.0, 1)
+        self._log_worker_done(job, proc, result, worker_ms)
+        alarm_collisions = result.get("alarm_collisions") or []
         if self.callback_reporter and alarm_collisions and proc.cam_l:
             upload_tag = f"infer_{proc.cam_l}"
             video_time_sec = int(result.get("frame_idx") or 0) / max(self._video_fps, 1.0)

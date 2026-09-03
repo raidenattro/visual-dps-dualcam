@@ -503,14 +503,22 @@ class EventRedisWorker:
         prefilter_logs = result.get("prefilter_logs") or []
         skeletons = result.get("skeletons")
 
+        worker_done_fields: dict[str, Any] = {
+            "run_id": run_id or None,
+            "worker_ms": worker_ms,
+            "hits": len(collisions),
+            "alarms": len(alarm_collisions),
+        }
+        if collisions:
+            worker_done_fields["hit_tokens"] = list(collisions)
+        if alarm_collisions:
+            worker_done_fields["alarm_tokens"] = list(alarm_collisions)
         log_pipeline_stage(
             "worker_done",
             camera_id=camera_id,
             frame_idx=frame_idx,
-            run_id=run_id or None,
-            worker_ms=worker_ms,
-            hits=len(collisions),
-            alarms=len(alarm_collisions),
+            sample=not (collisions or alarm_collisions),
+            **worker_done_fields,
         )
 
         self._log_event_frame(pose, collisions, alarm_collisions, prefilter_logs)
