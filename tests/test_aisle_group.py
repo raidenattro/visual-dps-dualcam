@@ -463,6 +463,29 @@ def test_required_wall_ids_fallback_and_explicit():
     assert required_wall_ids({"required_wall_ids": [1, 2, 9]}) == [1, 2]
 
 
+def test_save_prunes_unrequired_wall_mesh_and_quad(tmp_path, monkeypatch):
+    d = tmp_path / "json"
+    (d / "aisles").mkdir(parents=True)
+    monkeypatch.setenv("JSON_DIR", str(d))
+    bind_group("aisle-one", "cam-l", "cam-r", str(d))
+    data = load_aisle("aisle-one", str(d))
+    data["required_wall_ids"] = [2]
+    data["views"]["L"]["walls"][0]["quad"] = [[1, 1], [2, 1], [2, 2], [1, 2]]
+    data["views"]["L"]["walls"][1]["quad"] = [[10, 1], [20, 1], [20, 2], [10, 2]]
+    data["views"]["R"]["walls"][0]["quad"] = [[3, 3], [4, 3], [4, 4], [3, 4]]
+    data["views"]["R"]["walls"][1]["quad"] = [[30, 3], [40, 3], [40, 4], [30, 4]]
+    data["slot_meshes"] = [
+        {"wall_id": 1, "rows": 4, "cols": 4, "vertices": [[0, 0, 0]], "shelf_code": "old1"},
+        {"wall_id": 2, "rows": 4, "cols": 4, "vertices": [[1, 0, 0]], "shelf_code": "keep2"},
+    ]
+    saved = save_aisle(data, str(d))
+    assert [m["wall_id"] for m in saved["slot_meshes"]] == [2]
+    assert saved["views"]["L"]["walls"][0]["quad"] == []
+    assert saved["views"]["R"]["walls"][0]["quad"] == []
+    assert len(saved["views"]["L"]["walls"][1]["quad"]) == 4
+    assert saved["slot_meshes"][0]["shelf_code"] == "keep2"
+
+
 def test_views_for_solve_drops_unchecked_wall():
     data = empty_aisle("aisle-one")
     data["required_wall_ids"] = [1]

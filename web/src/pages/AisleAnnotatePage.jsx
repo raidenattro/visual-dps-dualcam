@@ -996,7 +996,19 @@ export default function AisleAnnotatePage() {
       setMsg('至少勾选一面拣货墙。现场只有一面货架时取消另一面即可。');
       return;
     }
-    const next = { ...state, required_wall_ids: nextIds };
+    const next = structuredClone(state);
+    next.required_wall_ids = nextIds;
+    if (!on) {
+      next.slot_meshes = (next.slot_meshes || []).filter((m) => Number(m.wall_id) !== Number(wallId));
+      ['L', 'R'].forEach((role) => {
+        (next.views?.[role]?.walls || []).forEach((w) => {
+          if (Number(w.wall_id) === Number(wallId)) w.quad = [];
+        });
+      });
+      if (next.solved?.ok && (next.solved.walls || []).some((w) => Number(w.wall_id) === Number(wallId))) {
+        next.solved = { ...next.solved, ok: false };
+      }
+    }
     if (!nextIds.includes(activeWallId)) {
       const idx = wallsL.findIndex((w) => nextIds.includes(w.wall_id));
       if (idx >= 0) setActiveWall(idx);

@@ -25,10 +25,22 @@ function edgeCorners(c) {
 }
 
 function slotMeshesOf(aisle) {
-  const meshes = aisle?.slot_meshes || [];
+  const need = new Set(requiredWallIds(aisle));
+  const meshes = (aisle?.slot_meshes || []).filter((m) => need.has(Number(m.wall_id)));
   if (meshes.length) return meshes;
-  const walls = aisle?.solved?.walls || [];
+  const walls = (aisle?.solved?.walls || []).filter((w) => need.has(Number(w.wall_id)));
   return walls.map((w) => makeLayerMesh(w.wall_id, w.corners, DEFAULT_LAYER_PITCH, 4, 4));
+}
+
+function requiredWallIds(aisle) {
+  const raw = aisle?.required_wall_ids;
+  if (Array.isArray(raw) && raw.length) {
+    return [...new Set(raw.map(Number).filter((n) => n === 1 || n === 2))];
+  }
+  const fromMesh = [
+    ...new Set((aisle?.slot_meshes || []).map((m) => Number(m.wall_id)).filter((n) => n === 1 || n === 2)),
+  ];
+  return fromMesh.length ? fromMesh : [1, 2];
 }
 
 function aisleGeomKey(aisle) {
@@ -37,7 +49,8 @@ function aisleGeomKey(aisle) {
   const walls = aisle.solved?.walls || [];
   const meshSig = meshes.map((m) => `${m.wall_id}:${m.rows}:${m.cols}`).join(',');
   const wallSig = walls.map((w) => w.wall_id).join(',');
-  return `${aisle.aisle_id}|${wallSig}|${meshSig}|${meshes.length}`;
+  const reqSig = requiredWallIds(aisle).join(',');
+  return `${aisle.aisle_id}|${reqSig}|${wallSig}|${meshSig}|${meshes.length}`;
 }
 
 function slotTokens(mesh, cell) {
@@ -145,7 +158,8 @@ function buildStatic(scene, aisle) {
   const group = new THREE.Group();
   group.name = 'aisle-static';
   const solved = aisle?.solved?.ok ? aisle.solved : null;
-  const walls = solved?.walls || [];
+  const need = new Set(requiredWallIds(aisle));
+  const walls = (solved?.walls || []).filter((w) => need.has(Number(w.wall_id)));
   walls.forEach((w) => {
     const c = w.corners;
     if (!c || c.length < 4) return;

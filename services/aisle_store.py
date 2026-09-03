@@ -123,6 +123,47 @@ def required_wall_ids(aisle: dict | None) -> list[int]:
     return from_mesh or list(DEFAULT_REQUIRED_WALL_IDS)
 
 
+def prune_unrequired_walls(data: dict | None) -> dict:
+    """去掉未勾选拣货墙的层线和四角，避免先标墙1再改标墙2时两套叠在一起。"""
+    out = dict(data) if isinstance(data, dict) else {}
+    need = set(required_wall_ids(out))
+    meshes: list[dict] = []
+    for mesh in out.get("slot_meshes") or []:
+        if not isinstance(mesh, dict):
+            continue
+        try:
+            wid = int(mesh.get("wall_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if wid in need:
+            meshes.append(mesh)
+    out["slot_meshes"] = meshes
+    views = out.get("views") if isinstance(out.get("views"), dict) else {}
+    next_views: dict[str, Any] = dict(views)
+    for role in ROLES:
+        raw = views.get(role)
+        if not isinstance(raw, dict):
+            continue
+        view = dict(raw)
+        walls: list[dict] = []
+        for wall in view.get("walls") or []:
+            if not isinstance(wall, dict):
+                continue
+            w = dict(wall)
+            try:
+                wid = int(w.get("wall_id") or 0)
+            except (TypeError, ValueError):
+                walls.append(w)
+                continue
+            if wid not in need:
+                w["quad"] = []
+            walls.append(w)
+        view["walls"] = walls
+        next_views[role] = view
+    out["views"] = next_views
+    return out
+
+
 def views_for_solve(aisle: dict | None) -> list[dict]:
     """反解只吃勾选拣货墙；未勾选的墙即使有四角也不送进求解器。"""
     data = aisle if isinstance(aisle, dict) else {}
@@ -328,6 +369,7 @@ def save_aisle(data: dict, json_dir: str | None = None) -> dict:
     data = dict(data)
     data["aisle_id"] = aid
     data["required_wall_ids"] = required_wall_ids(data)
+    data = prune_unrequired_walls(data)
     meshes = data.get("slot_meshes")
     if isinstance(meshes, list):
         synced = []
