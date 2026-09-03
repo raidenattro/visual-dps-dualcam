@@ -60,11 +60,26 @@ def _project(pts: np.ndarray, z: np.ndarray, cx: float, cy: float) -> np.ndarray
     return np.column_stack([cx + f * (v @ right) / zc, cy + f * (v @ down) / zc])
 
 
-def _bounds(n: int, img_w: int):
+def _camx_half_limit(aisle: float) -> float:
+    """单墙允许的 |camX| 上限：必须严格停在两拣货面之间，留一点贴墙余量。"""
+    return max(0.2, float(aisle) / 2.0 - 0.15)
+
+
+def _camera_in_aisle(cam_x: float, aisle: float) -> bool:
+    """相机横向位置必须在巷道内（两拣货面 x=±aisle/2 之间）。"""
+    half = float(aisle) / 2.0
+    return abs(float(cam_x)) < half - 1e-3
+
+
+def _bounds(n: int, img_w: int, *, aisle: float | None = None, single_wall: bool = False):
     lo = np.full(n, -12.0)
     hi = np.full(n, 12.0)
     lo[0], hi[0] = img_w * 0.25, img_w * 4.0
     lo[1], hi[1] = -2.0, 2.0
+    # 单墙 4 点分不清正反，会把相机解到墙外侧；双墙 8 点已钉住巷道，不收紧。
+    if single_wall and aisle is not None and float(aisle) > 0:
+        half = _camx_half_limit(aisle)
+        lo[1], hi[1] = -half, half
     lo[2], hi[2] = 1.2, 6.5
     lo[3], hi[3] = -12.0, 3.0
     lo[4], hi[4] = math.radians(-5), math.radians(89)
@@ -84,8 +99,9 @@ def solve(calib: dict, img_w: int, img_h: int) -> dict:
     cx, cy = img_w / 2.0, img_h / 2.0
     obs = np.array([p for w in walls for p in w["quad"]], float)
 
+    single_wall = len(walls) == 1
     sign_sets: list[list[int]]
-    if len(walls) == 1:
+    if single_wall:
         sign_sets = [[1], [-1]]
     else:
         sign_sets = [[1, -1], [-1, 1]]
@@ -123,15 +139,21 @@ def solve(calib: dict, img_w: int, img_h: int) -> dict:
                 try:
                     sol = least_squares(
                         make_resid(signs), z0, method="trf",
-                        bounds=_bounds(n, img_w), max_nfev=3000,
+                        bounds=_bounds(n, img_w, aisle=aisle, single_wall=single_wall),
+                        max_nfev=3000,
                     )
                 except Exception:
+                    continue
+                cam_x = float(sol.x[1])
+                if single_wall and not _camera_in_aisle(cam_x, aisle):
                     continue
                 r = np.array(sol.fun[: len(obs) * 2]).reshape(-1, 2)
                 rms = float(np.sqrt(np.mean(np.sum(r * r, axis=1))))
                 if best is None or rms < best["resid_px"]:
                     best = {"resid_px": rms, "z": sol.x.copy(), "signs": list(signs)}
     if best is None:
+        if single_wall:
+            return {"ok": False, "error": "单墙反解相机不在巷道内，请重标四角或改标两面墙"}
         return {"ok": False, "error": "求解未收敛"}
 
     z = best["z"]
