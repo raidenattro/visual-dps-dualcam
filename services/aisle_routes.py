@@ -16,6 +16,7 @@ from services.aisle_store import (
     load_aisle,
     missing_required_quads,
     save_aisle,
+    sync_slot_meshes_to_solved,
     unbind_group,
     update_aisle_cameras,
     views_for_solve,
@@ -191,6 +192,8 @@ def register_aisle_routes(
         }
         solved = solve_dual(dual_payload)
         data["solved"] = solved
+        if solved.get("ok"):
+            data = sync_slot_meshes_to_solved(data)
         save_aisle(data, json_dir)
         if not solved.get("ok"):
             return {"status": "error", "error": solved.get("error") or "反解失败", "aisle": data}

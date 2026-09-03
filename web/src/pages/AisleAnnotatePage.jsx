@@ -111,6 +111,17 @@ function meshForWall(aisle, wallId) {
   return (aisle?.slot_meshes || []).find((m) => Number(m.wall_id) === Number(wallId));
 }
 
+/** 层线 mesh 是否仍贴在当前反解墙面上（反解翻面后 x 会变）。 */
+function meshMatchesSolvedWall(mesh, aisle, wallId) {
+  if (!mesh?.vertices?.length) return false;
+  const wall = (aisle?.solved?.walls || []).find((w) => Number(w.wall_id) === Number(wallId));
+  const corners = wall?.corners || [];
+  if (corners.length < 1) return false;
+  const wx = Number(corners[0][0]);
+  const mx = Number(mesh.vertices[0][0]);
+  return Math.abs(wx - mx) <= 0.05;
+}
+
 /** 该路画面已标完四角的墙，才画对应货格。 */
 function viewHasWallQuad(aisle, role, wallId) {
   return Boolean(viewWallQuad(aisle, role, wallId));
@@ -505,7 +516,8 @@ export default function AisleAnnotatePage() {
     const same = Boolean(
       mesh
       && Number(mesh.n_layers || mesh.rows) === grid.n_layers
-      && Number(mesh.cols) === grid.n_cols,
+      && Number(mesh.cols) === grid.n_cols
+      && meshMatchesSolvedWall(mesh, aisle, wallId),
     );
     if (same) return aisle;
     const d = await apiPost(`/api/aisles/${encodeURIComponent(aisle.aisle_id || aisleId)}/mesh`, {

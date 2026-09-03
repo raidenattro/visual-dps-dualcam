@@ -503,3 +503,35 @@ def test_views_for_solve_drops_unchecked_wall():
     data["views"]["R"]["walls"][0]["quad"] = [[11, 11], [21, 11], [21, 21], [11, 21]]
     data["views"]["L"]["walls"][1]["quad"] = []
     assert "左路墙2" in missing_required_quads(data)
+
+
+def test_sync_slot_meshes_rebuilds_when_wall_plane_flips():
+    from services.aisle_store import mesh_matches_solved_wall, sync_slot_meshes_to_solved
+
+    corners_neg = [
+        [-1.0, 0.0, 0.0],
+        [-1.0, 2.0, 0.0],
+        [-1.0, 2.0, 2.2],
+        [-1.0, 0.0, 2.2],
+    ]
+    data = {
+        "required_wall_ids": [2],
+        "views": {
+            "L": {"walls": [{"wall_id": 2, "n_layers": 4, "n_cols": 4, "shelf_code": "S2"}]},
+            "R": {"walls": [{"wall_id": 2, "n_layers": 4, "n_cols": 4, "shelf_code": "S2"}]},
+        },
+        "solved": {"ok": True, "walls": [{"wall_id": 2, "sign": -1, "corners": corners_neg}]},
+        "slot_meshes": [{
+            "wall_id": 2,
+            "rows": 4,
+            "cols": 4,
+            "shelf_code": "S2",
+            "vertices": [[1.0, 0.0, 0.0], [1.0, 2.0, 0.0], [1.0, 2.0, 2.2], [1.0, 0.0, 2.2]],
+        }],
+    }
+    assert mesh_matches_solved_wall(data["slot_meshes"][0], data["solved"], 2) is False
+    synced = sync_slot_meshes_to_solved(data)
+    mesh = synced["slot_meshes"][0]
+    assert mesh["shelf_code"] == "S2"
+    assert float(mesh["vertices"][0][0]) == pytest.approx(-1.0)
+    assert mesh_matches_solved_wall(mesh, synced["solved"], 2) is True

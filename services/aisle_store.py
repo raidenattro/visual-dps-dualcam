@@ -164,6 +164,84 @@ def prune_unrequired_walls(data: dict | None) -> dict:
     return out
 
 
+def mesh_matches_solved_wall(mesh: dict, solved: dict, wall_id: int, tol: float = 0.05) -> bool:
+    """层线 mesh 是否仍贴在当前反解墙面上（反解翻面后 x 会变）。"""
+    from dualcam.geom import wall_by_id
+
+    wall = wall_by_id(solved, wall_id)
+    verts = mesh.get("vertices") or []
+    corners = (wall or {}).get("corners") or []
+    if not wall or len(verts) < 1 or len(corners) < 1:
+        return False
+    wx = float(corners[0][0])
+    mx = float(verts[0][0])
+    return abs(wx - mx) <= tol
+
+
+def _wall_grid_from_views(data: dict, wall_id: int, old: dict | None) -> tuple[int, int]:
+    for role in ROLES:
+        view = (data.get("views") or {}).get(role) or {}
+        for wall in view.get("walls") or []:
+            if not isinstance(wall, dict):
+                continue
+            try:
+                wid = int(wall.get("wall_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if wid != wall_id:
+                continue
+            nl = int(wall.get("n_layers") or 0)
+            nc = int(wall.get("n_cols") or 0)
+            if nl > 0 and nc > 0:
+                return min(8, max(1, nl)), min(8, max(1, nc))
+    if old:
+        return (
+            min(8, max(1, int(old.get("rows") or old.get("n_layers") or 4))),
+            min(8, max(1, int(old.get("cols") or 4))),
+        )
+    return 4, 4
+
+
+def sync_slot_meshes_to_solved(data: dict) -> dict:
+    """反解成功后，把仍停在旧墙面的 slot_meshes 按新墙角重建。"""
+    from dualcam.geom import make_layer_mesh, wall_by_id
+
+    out = dict(data)
+    solved = out.get("solved") or {}
+    if not solved.get("ok"):
+        return out
+    old_by_id: dict[int, dict] = {}
+    for mesh in out.get("slot_meshes") or []:
+        if not isinstance(mesh, dict):
+            continue
+        try:
+            old_by_id[int(mesh.get("wall_id") or 0)] = mesh
+        except (TypeError, ValueError):
+            continue
+    meshes: list[dict] = []
+    for wid in required_wall_ids(out):
+        old = old_by_id.get(wid)
+        if old and mesh_matches_solved_wall(old, solved, wid):
+            meshes.append(old)
+            continue
+        wall = wall_by_id(solved, wid)
+        if not wall:
+            continue
+        n_layers, n_cols = _wall_grid_from_views(out, wid, old)
+        mesh = make_layer_mesh(wid, wall["corners"], n_layers=n_layers, cols=n_cols)
+        sc = str((old or {}).get("shelf_code") or "").strip() or wall_shelf_code(out, wid)
+        if sc:
+            mesh["shelf_code"] = sc
+        if old:
+            if old.get("cell_ids"):
+                mesh["cell_ids"] = old["cell_ids"]
+            if old.get("deleted"):
+                mesh["deleted"] = old["deleted"]
+        meshes.append(mesh)
+    out["slot_meshes"] = meshes
+    return out
+
+
 def views_for_solve(aisle: dict | None) -> list[dict]:
     """反解只吃勾选拣货墙；未勾选的墙即使有四角也不送进求解器。"""
     data = aisle if isinstance(aisle, dict) else {}
