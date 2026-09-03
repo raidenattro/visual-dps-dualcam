@@ -110,6 +110,7 @@ def _collect_resource_debug_line(device_name: str) -> str:
 
 
 def _compute_infer_resolution(source_w: int, source_h: int, target_height: int):
+    """按源图高度对齐推理尺寸：只缩小、不放大，宽随比例走。"""
     target_h = max(120, int(target_height))
     if source_h <= target_h:
         infer_w = source_w
@@ -122,6 +123,25 @@ def _compute_infer_resolution(source_w: int, source_h: int, target_height: int):
         infer_h = max(2, infer_h - (infer_h % 2))
         resize_needed = True
     return infer_w, infer_h, resize_needed
+
+
+def _sync_infer_size_from_frame(
+    frame,
+    stream_w: int,
+    stream_h: int,
+    target_height: int,
+    infer_w: int,
+    infer_h: int,
+    resize_needed: bool,
+):
+    """CAP_PROP / ffprobe 会在推流改分辨率后撒谎；以真实帧为准。"""
+    if frame is None or getattr(frame, "size", 0) <= 0:
+        return stream_w, stream_h, infer_w, infer_h, resize_needed, False
+    src_h, src_w = int(frame.shape[0]), int(frame.shape[1])
+    if src_w <= 0 or src_h <= 0 or (src_w == stream_w and src_h == stream_h):
+        return stream_w, stream_h, infer_w, infer_h, resize_needed, False
+    new_w, new_h, new_resize = _compute_infer_resolution(src_w, src_h, target_height)
+    return src_w, src_h, new_w, new_h, new_resize, True
 
 
 class InferenceService:
@@ -255,10 +275,11 @@ class InferenceService:
             return
 
         infer_cfg = get_merged_inference_section(self.app_config, self._runtime_config_path)
+        target_height = int(infer_cfg.get("height", 480) or 480)
         infer_w, infer_h, resize_needed = _compute_infer_resolution(
             stream_w,
             stream_h,
-            int(infer_cfg.get("height", 480) or 480),
+            target_height,
         )
 
         frame_rate = float(infer_cfg.get("frame_rate", 15) or 15)
@@ -336,6 +357,23 @@ class InferenceService:
                     infer_log.info("✅ 视频推理完成，停止当前会话")
                     self.state.is_inferencing = False
                     break
+
+                stream_w, stream_h, infer_w, infer_h, resize_needed, size_changed = (
+                    _sync_infer_size_from_frame(
+                        frame,
+                        stream_w,
+                        stream_h,
+                        target_height,
+                        infer_w,
+                        infer_h,
+                        resize_needed,
+                    )
+                )
+                if size_changed:
+                    infer_log.warning(
+                        f"⚠️ 源帧分辨率与启动探测不一致: frame={stream_w}x{stream_h} "
+                        f"→ infer {infer_w}x{infer_h} resize={'on' if resize_needed else 'off'}"
+                    )
 
                 frame_count += 1
                 if frame_count == 1 or frame_count % 300 == 0 or (time.monotonic() - last_config_check_at) >= 30.0:

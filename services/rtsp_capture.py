@@ -18,6 +18,19 @@ from services.pipeline_log import get_inference_logger
 _DEFAULT_FFMPEG_OPTS = "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|max_delay;0"
 _LOW_LATENCY_FFMPEG_OPTS = os.environ.get("OPENCV_FFMPEG_CAPTURE_OPTIONS", _DEFAULT_FFMPEG_OPTS)
 _DRAIN_MAX = max(2, int(os.environ.get("RTSP_DRAIN_MAX", "12")))
+
+
+def vf_with_fixed_scale(base_vf: str, width: int, height: int) -> str:
+    """rawvideo 管道按探测宽高读字节；源流改分辨率时必须 scale 到该尺寸，否则会错位。"""
+    w = max(2, int(width))
+    h = max(2, int(height))
+    scale = f"scale={w}:{h}"
+    vf = (base_vf or "").strip() or "format=bgr24"
+    if "scale=" in vf:
+        return vf
+    return f"{vf},{scale}"
+
+
 _RTSP_RECONNECT_FAIL_STREAK = max(
     30, int(os.environ.get("RTSP_RECONNECT_FAIL_STREAK", "90"))
 )
@@ -110,7 +123,15 @@ class _FfmpegRtspCapture:
         cmd.extend(self._profile.input_args)
         if self._profile.video_codec:
             cmd.extend(["-c:v", self._profile.video_codec])
-        cmd.extend(["-i", self.url, "-an", "-vf", self._profile.output_vf])
+        cmd.extend(
+            [
+                "-i",
+                self.url,
+                "-an",
+                "-vf",
+                vf_with_fixed_scale(self._profile.output_vf, self._width, self._height),
+            ]
+        )
         cmd.extend(
             [
                 "-f",
