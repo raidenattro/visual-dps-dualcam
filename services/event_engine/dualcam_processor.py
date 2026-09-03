@@ -111,11 +111,28 @@ class DualcamProcessor:
         solved = aisle.get("solved") or {}
         self.solved = solved if solved.get("ok") else {}
         self.cams = (self.solved.get("cameras") or {}) if self.solved else {}
-        self.meshes = list(aisle.get("slot_meshes") or [])
+        self.required_walls = required_wall_ids(aisle)
+        need = set(self.required_walls)
+        meshes: list[dict[str, Any]] = []
+        for mesh in aisle.get("slot_meshes") or []:
+            if not isinstance(mesh, dict):
+                continue
+            try:
+                wid = int(mesh.get("wall_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if wid in need:
+                meshes.append(mesh)
+        self.meshes = meshes
         self.contact_m = float(
             aisle.get("contact_m", self.section.get("contact_m", DEFAULT_CONTACT_M)) or 0.0
         )
-        self.plane = wall_plane_from_solved(self.solved, 1) if self.solved else None
+        self.plane = None
+        if self.solved:
+            for wid in list(self.required_walls) + [1, 2]:
+                self.plane = wall_plane_from_solved(self.solved, wid)
+                if self.plane:
+                    break
         self._prev_xyz: dict[tuple, np.ndarray] = {}
         self._new_prev: dict[tuple, np.ndarray] = {}
         self._prefer: list[tuple[np.ndarray, np.ndarray]] = []
@@ -127,7 +144,6 @@ class DualcamProcessor:
         cams = aisle.get("cameras") or {}
         self.cam_l = str((cams.get("L") or {}).get("camera_id") or "")
         self.cam_r = str((cams.get("R") or {}).get("camera_id") or "")
-        self.required_walls = required_wall_ids(aisle)
         views = aisle.get("views") or {}
         self.calib_l = calib_size_from_view(views.get("L") if isinstance(views, dict) else None, self.section)
         self.calib_r = calib_size_from_view(views.get("R") if isinstance(views, dict) else None, self.section)

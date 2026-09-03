@@ -9,6 +9,9 @@ from typing import Any
 
 _AISLE_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 ROLES = ("L", "R")
+# 巷道只有墙1/墙2；新巷道默认两面都参与拣货。
+ALLOWED_WALL_IDS = (1, 2)
+DEFAULT_REQUIRED_WALL_IDS = [1, 2]
 # json_dir → (stamp, camera_id→{aisle_id, role})
 _GROUPED_CACHE: dict[str, tuple[tuple, dict[str, dict]]] = {}
 
@@ -75,7 +78,7 @@ def empty_aisle(aisle_id: str) -> dict[str, Any]:
             },
         },
         "slot_meshes": [],
-        "required_wall_ids": [1],
+        "required_wall_ids": list(DEFAULT_REQUIRED_WALL_IDS),
         "solved": {"ok": False},
     }
 
@@ -96,7 +99,7 @@ def parse_wall_ids(raw: Any) -> list[int]:
             wid = int(item)
         except (TypeError, ValueError):
             continue
-        if wid >= 1 and wid not in out:
+        if wid in ALLOWED_WALL_IDS and wid not in out:
             out.append(wid)
     return out
 
@@ -115,9 +118,60 @@ def required_wall_ids(aisle: dict | None) -> list[int]:
             wid = int(mesh.get("wall_id"))
         except (TypeError, ValueError):
             continue
-        if wid >= 1 and wid not in from_mesh:
+        if wid in ALLOWED_WALL_IDS and wid not in from_mesh:
             from_mesh.append(wid)
-    return from_mesh or [1]
+    return from_mesh or list(DEFAULT_REQUIRED_WALL_IDS)
+
+
+def views_for_solve(aisle: dict | None) -> list[dict]:
+    """反解只吃勾选拣货墙；未勾选的墙即使有四角也不送进求解器。"""
+    data = aisle if isinstance(aisle, dict) else {}
+    need = set(required_wall_ids(data))
+    views = data.get("views") if isinstance(data.get("views"), dict) else {}
+    out: list[dict] = []
+    for role in ROLES:
+        raw = views.get(role)
+        view = dict(raw) if isinstance(raw, dict) else {"name": role}
+        view["name"] = role
+        walls: list[dict] = []
+        for wall in view.get("walls") or []:
+            if not isinstance(wall, dict):
+                continue
+            try:
+                wid = int(wall.get("wall_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if wid in need:
+                walls.append(wall)
+        view["walls"] = walls
+        out.append(view)
+    return out
+
+
+def missing_required_quads(aisle: dict | None) -> list[str]:
+    """勾选墙在左右路是否都标满四角。返回如「左路墙1」。"""
+    data = aisle if isinstance(aisle, dict) else {}
+    need = required_wall_ids(data)
+    views = data.get("views") if isinstance(data.get("views"), dict) else {}
+    role_label = {"L": "左路", "R": "右路"}
+    missing: list[str] = []
+    for role in ROLES:
+        raw = views.get(role)
+        walls = raw.get("walls") if isinstance(raw, dict) else []
+        by_id: dict[int, dict] = {}
+        for wall in walls or []:
+            if not isinstance(wall, dict):
+                continue
+            try:
+                wid = int(wall.get("wall_id") or 0)
+            except (TypeError, ValueError):
+                continue
+            by_id[wid] = wall
+        for wid in need:
+            quad = (by_id.get(wid) or {}).get("quad") or []
+            if not isinstance(quad, list) or len(quad) < 4:
+                missing.append(f"{role_label[role]}墙{wid}")
+    return missing
 
 
 def wall_shelf_code(aisle: dict | None, wall_id: int) -> str:

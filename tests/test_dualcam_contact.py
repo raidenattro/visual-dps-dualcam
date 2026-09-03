@@ -82,6 +82,18 @@ def _ready_aisle(calib):
     }
 
 
+def test_processor_drops_unchecked_wall_mesh(calib):
+    aisle = _ready_aisle(calib)
+    extra = dict((aisle["slot_meshes"] or [{}])[0] or {"wall_id": 2, "vertices": []})
+    extra["wall_id"] = 2
+    extra["shelf_code"] = "ignore-me"
+    aisle["slot_meshes"] = list(aisle["slot_meshes"] or []) + [extra]
+    aisle["required_wall_ids"] = [1]
+    proc = DualcamProcessor(aisle)
+    assert proc.required_walls == [1]
+    assert all(int(m.get("wall_id") or 0) == 1 for m in proc.meshes)
+
+
 def test_process_pair_empty_without_prior_hold(calib):
     proc = DualcamProcessor(_ready_aisle(calib))
     out = proc.process_pair({"frame_idx": 2, "persons": []}, {"frame_idx": 2, "persons": []})

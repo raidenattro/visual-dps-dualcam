@@ -12,11 +12,13 @@ from services.aisle_store import (
     camera_group,
     create_aisle_with_cameras,
     delete_aisle_with_cameras,
-    update_aisle_cameras,
     list_aisles,
     load_aisle,
+    missing_required_quads,
     save_aisle,
     unbind_group,
+    update_aisle_cameras,
+    views_for_solve,
     wall_shelf_code,
 )
 from services.dualcam_overlay import overlay_for_role
@@ -175,16 +177,18 @@ def register_aisle_routes(
     async def api_solve_aisle(aisle_id: str, payload: dict | None = None):
         data = dict(payload or load_aisle(aisle_id, json_dir) or {})
         data["aisle_id"] = aisle_id
-        views = data.get("views") or {}
+        missing = missing_required_quads(data)
+        if missing:
+            return {
+                "status": "error",
+                "error": f"请先标齐{'、'.join(missing)}。未勾选「参与拣货」的墙不用标。",
+                "aisle": data,
+            }
         dual_payload = {
             "aisle": data.get("aisle", 2.0),
             "prior": data.get("prior") or {},
-            "views": [views.get("L") or {}, views.get("R") or {}],
+            "views": views_for_solve(data),
         }
-        if dual_payload["views"][0]:
-            dual_payload["views"][0]["name"] = "L"
-        if dual_payload["views"][1]:
-            dual_payload["views"][1]["name"] = "R"
         solved = solve_dual(dual_payload)
         data["solved"] = solved
         save_aisle(data, json_dir)

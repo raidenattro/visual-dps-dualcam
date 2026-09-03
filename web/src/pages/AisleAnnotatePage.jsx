@@ -57,7 +57,9 @@ function drawSolvedCornerHints(c, role, layout, aisle) {
   const cam = sol.cameras?.[role];
   if (!cam?.C || !cam?.fwd) return;
   const order = role === 'R' ? OPP_CORNER : [0, 1, 2, 3];
+  const req = new Set(requiredWallIds(aisle));
   for (const w of sol.walls || []) {
+    if (!req.has(Number(w.wall_id))) continue;
     const pal = wallPalette(w.wall_id);
     order.forEach((ci, i) => {
       const p = (w.corners || [])[ci];
@@ -205,10 +207,13 @@ function annotateSteps(aisle, { grouped, frameAt, camL, camR, dirty, cameras = [
   const quadsOk = req.every((id) => viewHasWallQuad(aisle, 'L', id) && viewHasWallQuad(aisle, 'R', id));
   const meshesOk = req.every((id) => meshForWall(aisle, id));
   const shelfOk = req.every((id) => shelfCodeOf(aisle, id));
+  const quadLabel = req.length === 2
+    ? '左右路两面墙都标满四角'
+    : `左右路墙${req[0]}标满四角`;
   const items = [
     { key: 'bind', label: '左右路已绑定', done: grouped },
     { key: 'grab', label: '抽帧', done: hasGrabbedFrames(camL, camR, frameAt, cameras) },
-    { key: 'quad', label: '左右路都标满四角', done: quadsOk },
+    { key: 'quad', label: quadLabel, done: quadsOk },
     { key: 'solve', label: '反解并对齐', done: Boolean(aisle.solved?.ok) },
     { key: 'layer', label: '拖层线对齐层板', done: Boolean(aisle.solved?.ok && meshesOk) },
     { key: 'commit', label: '保存墙标定', done: Boolean(aisle.solved?.ok && meshesOk && !dirty) },
@@ -230,7 +235,7 @@ function emptyAisle(id) {
       R: { name: 'R', image_size: [FALLBACK_W, FALLBACK_H], prior: { camH: 2.84, camDist: 1.56, pitch: 45, yaw: 0 }, walls: emptyWalls() },
     },
     slot_meshes: [],
-    required_wall_ids: [1],
+    required_wall_ids: [1, 2],
     solved: { ok: false },
   };
 }
@@ -238,12 +243,12 @@ function emptyAisle(id) {
 function requiredWallIds(state) {
   const raw = state?.required_wall_ids;
   if (Array.isArray(raw) && raw.length) {
-    return [...new Set(raw.map(Number).filter((n) => n >= 1))];
+    return [...new Set(raw.map(Number).filter((n) => n === 1 || n === 2))];
   }
   const fromMesh = [
-    ...new Set((state?.slot_meshes || []).map((m) => Number(m.wall_id)).filter((n) => n >= 1)),
+    ...new Set((state?.slot_meshes || []).map((m) => Number(m.wall_id)).filter((n) => n === 1 || n === 2)),
   ];
-  return fromMesh.length ? fromMesh : [1];
+  return fromMesh.length ? fromMesh : [1, 2];
 }
 
 export default function AisleAnnotatePage() {
@@ -276,11 +281,13 @@ export default function AisleAnnotatePage() {
   const grouped = Boolean(camL && camR && camL !== camR);
   const wallsL = state.views?.L?.walls || emptyWalls();
   const wallsR = state.views?.R?.walls || emptyWalls();
+  const reqIds = requiredWallIds(state);
   const activeWallId = wallsL[activeWall]?.wall_id || 1;
   const activeMesh = meshForWall(state, activeWallId);
   const { n_layers: nLayers, n_cols: nCols } = wallGrid(wallsL[activeWall], activeMesh);
   const curQuad = state.views?.[activeView]?.walls?.[activeWall]?.quad || [];
   const steps = annotateSteps(state, { grouped, frameAt, camL, camR, dirty, cameras });
+  const reqQuadsOk = reqIds.every((id) => viewHasWallQuad(state, 'L', id) && viewHasWallQuad(state, 'R', id));
   const calibDone = Boolean(state.solved?.ok)
     && requiredWallIds(state).every((id) => meshForWall(state, id) && shelfCodeOf(state, id))
     && !dirty;
@@ -316,6 +323,13 @@ export default function AisleAnnotatePage() {
     const R = aisle.cameras?.R?.camera_id || '';
     setCamL(L);
     setCamR(R);
+    const req = requiredWallIds(aisle);
+    const walls = aisle.views?.L?.walls || emptyWalls();
+    setActiveWall((prev) => {
+      if (req.includes(walls[prev]?.wall_id)) return prev;
+      const idx = walls.findIndex((w) => req.includes(w.wall_id));
+      return idx >= 0 ? idx : 0;
+    });
   };
 
   useEffect(() => {
@@ -573,7 +587,9 @@ export default function AisleAnnotatePage() {
       const c = canvas.getContext('2d');
       c.clearRect(0, 0, layout.dw, layout.dh);
       const walls = (state.views?.[v]?.walls || []);
+      const drawReq = new Set(requiredWallIds(state));
       walls.forEach((wall, wi) => {
+        if (!drawReq.has(Number(wall.wall_id))) return;
         if (!wall.quad?.length) return;
         const pal = wallPalette(wall.wall_id);
         const on = v === activeView && wi === activeWall;
@@ -615,6 +631,7 @@ export default function AisleAnnotatePage() {
       const cam = camOf(state, v);
       if (state.solved?.ok && cam) {
         for (const mesh of state.slot_meshes || []) {
+          if (!drawReq.has(Number(mesh.wall_id))) continue;
           const pal = wallPalette(mesh.wall_id);
           const onWall = Number(mesh.wall_id) === Number(state.views?.L?.walls?.[activeWall]?.wall_id);
           const rows = Number(mesh.rows) || 0;
@@ -736,7 +753,9 @@ export default function AisleAnnotatePage() {
     const mx = (e.clientX - rect.left) * (layout.dw / Math.max(rect.width, 1e-6));
     const my = (e.clientY - rect.top) * (layout.dh / Math.max(rect.height, 1e-6));
     let best = null;
+    const hitReq = new Set(requiredWallIds(aisle));
     (aisle.views?.[v]?.walls || []).forEach((w, wi) => {
+      if (!hitReq.has(Number(w.wall_id))) return;
       (w.quad || []).forEach((p, i) => {
         const xy = mapCalibToCanvas(p, layout);
         if (!xy) return;
@@ -778,6 +797,7 @@ export default function AisleAnnotatePage() {
     const aisle = stateRef.current;
     const walls = aisle.views[v].walls;
     const w = walls[activeWall];
+    if (!requiredWallIds(aisle).includes(Number(w?.wall_id))) return;
     if (w.quad.length < 4) {
       const [u, vv] = evtToImg(e, v, aisle);
       const next = structuredClone(aisle);
@@ -970,13 +990,17 @@ export default function AisleAnnotatePage() {
   const toggleRequiredWall = (wallId, on) => {
     const cur = requiredWallIds(state);
     const nextIds = on
-      ? [...new Set([...cur, wallId])]
+      ? [...new Set([...cur, wallId])].filter((id) => id === 1 || id === 2)
       : cur.filter((id) => id !== wallId);
     if (!nextIds.length) {
-      setMsg('至少勾选一面拣货墙。现场只有一面货架时只勾那一面即可。');
+      setMsg('至少勾选一面拣货墙。现场只有一面货架时取消另一面即可。');
       return;
     }
     const next = { ...state, required_wall_ids: nextIds };
+    if (!nextIds.includes(activeWallId)) {
+      const idx = wallsL.findIndex((w) => nextIds.includes(w.wall_id));
+      if (idx >= 0) setActiveWall(idx);
+    }
     markDirty(next);
     save(next);
   };
@@ -1002,7 +1026,7 @@ export default function AisleAnnotatePage() {
             {steps.next.key === 'shelf' && '填写货架号，再点底部「保存墙标定」'}
             {steps.next.key === 'bind' && '请到总览「添加巷道」同时配置左右路摄像头'}
             {steps.next.key === 'grab' && '点「抽帧」取左右路静止画面'}
-            {steps.next.key === 'quad' && `在${activeView === 'L' ? '左路' : '右路'}按 1顶远→2顶近→3底近→4底远 点四角`}
+            {steps.next.key === 'quad' && `在${activeView === 'L' ? '左路' : '右路'}墙${activeWallId}按 1顶远→2顶近→3底近→4底远 点四角`}
           </p>
         )}
         <div className="aisle-field">
@@ -1043,8 +1067,9 @@ export default function AisleAnnotatePage() {
         <section className="aisle-section">
         <p className="group-title">当前墙</p>
         <p className="muted">左右路画面里，橙色=墙1，青色=墙2；同色就是同一面货架。</p>
-        <div className="aisle-wall-tabs">
+        <div className={`aisle-wall-tabs${reqIds.length === 1 ? ' single' : ''}`}>
           {wallsL.map((w, i) => (
+            reqIds.includes(w.wall_id) ? (
             <button
               key={w.wall_id}
               type="button"
@@ -1053,6 +1078,7 @@ export default function AisleAnnotatePage() {
             >
               墙{w.wall_id} · {wallPalette(w.wall_id).name} · L {wallsL[i].quad.length}/4 · R {wallsR[i].quad.length}/4
             </button>
+            ) : null
           ))}
         </div>
         <label className="aisle-field">
@@ -1205,18 +1231,23 @@ export default function AisleAnnotatePage() {
       <div className="aisle-dock">
         <div className="aisle-dock-block">
           <p className="group-title">拣货墙面</p>
-          <p className="muted">现场只有一面货架时只勾那一面。点表格行可切换当前墙。</p>
-          {wallsL.map((w) => (
-            <label key={`req-${w.wall_id}`} className="aisle-check">
+          <p className="muted">默认两面都拣货。现场只有一面货架时取消另一面；左右路只需标剩下那一面墙。至少保留一面。</p>
+          {wallsL.map((w) => {
+            const checked = reqIds.includes(w.wall_id);
+            const lastOn = checked && reqIds.length === 1;
+            return (
+            <label key={`req-${w.wall_id}`} className={`aisle-check${lastOn ? ' locked' : ''}`}>
               <input
                 type="checkbox"
-                checked={requiredWallIds(state).includes(w.wall_id)}
+                checked={checked}
+                disabled={lastOn}
                 onChange={(e) => toggleRequiredWall(w.wall_id, e.target.checked)}
               />
               墙{w.wall_id} 参与拣货
               <span className={`aisle-wall-dot wall-${w.wall_id}`} />
             </label>
-          ))}
+            );
+          })}
           <table>
             <thead>
               <tr>
@@ -1230,10 +1261,16 @@ export default function AisleAnnotatePage() {
             </thead>
             <tbody>
               {wallsL.map((w, i) => (
-                <tr key={w.wall_id} className={i === activeWall ? 'active' : ''} onClick={() => setActiveWall(i)}>
+                <tr
+                  key={w.wall_id}
+                  className={`${i === activeWall ? 'active' : ''}${reqIds.includes(w.wall_id) ? '' : ' off'}`}
+                  onClick={() => {
+                    if (reqIds.includes(w.wall_id)) setActiveWall(i);
+                  }}
+                >
                   <td>
                     <span className={`aisle-wall-dot wall-${w.wall_id}`} />
-                    墙{w.wall_id}
+                    墙{w.wall_id}{reqIds.includes(w.wall_id) ? '' : ' · 不拣货'}
                   </td>
                   <td>
                     <input type="number" step="0.01" value={w.width} onChange={(e) => setWallField(i, 'width', Number(e.target.value))} />
@@ -1350,10 +1387,12 @@ export default function AisleAnnotatePage() {
           <p className="hint">
             {state.solved?.ok
               ? '空心圈=反解墙角投回画面（墙色）；实心点=你标的。模型按面宽×面高的竖直面拟合，残差十几像素套不进圈是正常的，不用死磕。层线画在四角内，按住分层线对齐后再保存。'
-              : '左右路四角都齐后点此。成功后会画出空心圈提示反投影，并自动生成层线。'}
+              : reqIds.length === 2
+                ? '左右路两面墙四角都齐后点此。成功后会画出空心圈提示反投影，并自动生成层线。'
+                : `左右路墙${reqIds[0]}四角都齐后点此。未勾选的墙不用标。`}
           </p>
           <div className="btns">
-            <button type="button" className="pri" onClick={solve} disabled={!grouped}>
+            <button type="button" className="pri" onClick={solve} disabled={!grouped || !reqQuadsOk}>
               反解并对齐
             </button>
           </div>

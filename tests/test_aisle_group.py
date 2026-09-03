@@ -14,9 +14,12 @@ from services.aisle_store import (
     empty_aisle,
     grouped_cameras,
     load_aisle,
+    missing_required_quads,
     require_grouped,
+    required_wall_ids,
     save_aisle,
     unbind_group,
+    views_for_solve,
 )
 
 
@@ -443,3 +446,37 @@ def test_apply_capture_sizes_keeps_solved_on_uniform_scale(json_dir: str):
     assert out["solved"]["ok"] is True
     assert out["solved"]["cameras"]["L"]["f"] == pytest.approx(400.0)
     assert out["solved"]["cameras"]["L"]["cx"] == pytest.approx(320.0)
+
+
+def test_empty_aisle_defaults_both_walls():
+    data = empty_aisle("aisle-both")
+    assert data["required_wall_ids"] == [1, 2]
+    assert required_wall_ids(data) == [1, 2]
+
+
+def test_required_wall_ids_fallback_and_explicit():
+    assert required_wall_ids({}) == [1, 2]
+    assert required_wall_ids({"required_wall_ids": [1]}) == [1]
+    assert required_wall_ids({"required_wall_ids": [2]}) == [2]
+    assert required_wall_ids({"required_wall_ids": []}) == [1, 2]
+    assert required_wall_ids({"slot_meshes": [{"wall_id": 2}]}) == [2]
+    assert required_wall_ids({"required_wall_ids": [1, 2, 9]}) == [1, 2]
+
+
+def test_views_for_solve_drops_unchecked_wall():
+    data = empty_aisle("aisle-one")
+    data["required_wall_ids"] = [1]
+    data["views"]["L"]["walls"][0]["quad"] = [[10, 10], [20, 10], [20, 20], [10, 20]]
+    data["views"]["L"]["walls"][1]["quad"] = [[80, 10], [90, 10], [90, 20], [80, 20]]
+    data["views"]["R"]["walls"][0]["quad"] = [[11, 11], [21, 11], [21, 21], [11, 21]]
+    data["views"]["R"]["walls"][1]["quad"] = [[81, 11], [91, 11], [91, 21], [81, 21]]
+    views = views_for_solve(data)
+    assert [w["wall_id"] for w in views[0]["walls"]] == [1]
+    assert [w["wall_id"] for w in views[1]["walls"]] == [1]
+    assert missing_required_quads(data) == []
+    data["views"]["R"]["walls"][0]["quad"] = []
+    assert missing_required_quads(data) == ["右路墙1"]
+    data["required_wall_ids"] = [1, 2]
+    data["views"]["R"]["walls"][0]["quad"] = [[11, 11], [21, 11], [21, 21], [11, 21]]
+    data["views"]["L"]["walls"][1]["quad"] = []
+    assert "左路墙2" in missing_required_quads(data)

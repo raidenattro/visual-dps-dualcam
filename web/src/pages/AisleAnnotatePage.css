@@ -110,6 +110,10 @@
   gap: 6px;
 }
 
+.aisle-wall-tabs.single {
+  grid-template-columns: 1fr;
+}
+
 .aisle-wall-tabs button {
   height: 32px;
 }
@@ -385,6 +389,11 @@ td .aisle-wall-dot {
   accent-color: var(--accent);
 }
 
+.aisle-check.locked {
+  opacity: 0.75;
+  cursor: default;
+}
+
 .aisle-page input[type='text'],
 .aisle-page input[type='number'],
 .aisle-page select {
@@ -432,6 +441,10 @@ td .aisle-wall-dot {
 
 .aisle-page tr.active td {
   background: rgba(0, 212, 170, 0.08);
+}
+
+.aisle-page tr.off td {
+  opacity: 0.45;
 }
 
 .aisle-page td {
