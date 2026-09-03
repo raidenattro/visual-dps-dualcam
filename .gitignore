@@ -10,6 +10,7 @@ localdata/auth_users.json
 localdata/auth_config.json
 localdata/runtime_config.json
 localdata/logs/
+logs/
 localdata/frames/
 localdata/inference/
 localdata/models/
