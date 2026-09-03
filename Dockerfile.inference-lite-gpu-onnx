@@ -2,7 +2,8 @@
 # 在 lite-gpu 上增量：单次 torch(cu121) + ORT + ultralytics(--no-deps)，pip 层可缓存
 # 构建: ./scripts/build-inference-lite-gpu-onnx-image.sh
 
-ARG BASE_IMAGE=visual-dps-inference-lite-gpu:latest
+# 与 .env VISUAL_DPS_IMAGE_TAG 一致，由 compose build.args.BASE_IMAGE 注入
+ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
 ARG PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple

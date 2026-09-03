@@ -206,7 +206,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.inference-lite-gpu-onnx
-      args: *china-build-args
+      args:
+        <<: *china-build-args
+        BASE_IMAGE: visual-dps-inference-lite-gpu:${VISUAL_DPS_IMAGE_TAG:?run via scripts/build-*.sh}
     image: visual-dps-inference-lite-gpu-onnx:${VISUAL_DPS_IMAGE_TAG:?run via scripts/build-*.sh}
     command: ["python", "inference_worker.py"]
 

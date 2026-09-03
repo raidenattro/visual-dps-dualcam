@@ -6,12 +6,14 @@ cd "$(dirname "$0")/.."
 source scripts/lib/docker-build.sh
 
 BASE_REPO="visual-dps-inference-lite-gpu"
-if ! docker image inspect "${BASE_REPO}:latest" >/dev/null 2>&1; then
-  if ! docker image inspect "$(docker images "${BASE_REPO}" -q | head -1)" >/dev/null 2>&1; then
-    echo "缺少基底镜像 ${BASE_REPO}，请先: ./scripts/build-inference-lite-gpu-image.sh"
-    exit 1
-  fi
+export VISUAL_DPS_IMAGE_TAG="${VISUAL_DPS_IMAGE_TAG:-$(visual_dps_image_tag)}"
+BASE_REF="$(visual_dps_tag_image "${BASE_REPO}" "${VISUAL_DPS_IMAGE_TAG}")"
+if ! docker image inspect "${BASE_REF}" >/dev/null 2>&1; then
+  echo "缺少基底镜像 ${BASE_REF}，请先: ./scripts/build-inference-lite-gpu-image.sh" >&2
+  echo "  （需与 .env VISUAL_DPS_IMAGE_TAG=${VISUAL_DPS_IMAGE_TAG} 一致）" >&2
+  exit 1
 fi
+echo "ONNX 基底: ${BASE_REF}"
 
 visual_dps_compose_build visual-dps-inference-lite-gpu-onnx visual-dps-inference-lite-gpu-onnx inference-lite
 
