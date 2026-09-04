@@ -7,7 +7,14 @@ from typing import Any
 
 import numpy as np
 
-from dualcam.geom import DEFAULT_CONTACT_M, contact_slots
+from dualcam.geom import (
+    DEFAULT_CONTACT_M,
+    _point_in_poly,
+    contact_slots,
+    mesh_cells,
+    signed_wall_dist,
+    wall_by_id,
+)
 from dualcam.lift import (
     ARM_CONF_JOINTS,
     ARM_CONF_POWER,
@@ -48,6 +55,8 @@ TORSO_JOINTS = (5, 6, 11, 12)
 LSHO, RSHO = 5, 6
 # 超过则腕点几何不可信，不报贴墙（dump_skel3d.SHOULDER_WRIST_MAX）
 SHOULDER_WRIST_MAX = 0.85
+# contact_m 配 0 时仍允许贴墙/近墙触发（d=0 不穿透也报）
+CONTACT_M_WHEN_ZERO = 0.03
 # 上臂合法上限，与 BONE_LEN_RANGE[(肩,肘)] 一致
 SHOULDER_ELBOW_MAX = 0.42
 
@@ -71,6 +80,108 @@ def _subset_persons(pose: dict | None, indices: list[int]) -> list[dict[str, Any
     for i in indices:
         if 0 <= i < len(people) and isinstance(people[i], dict):
             out.append(people[i])
+    return out
+
+
+def _person_preview_payload(
+    xyz: list,
+    srcs: list,
+    wrist_tok: dict[int, list[str]],
+) -> dict[str, Any]:
+    """preview 路径：保留 _lift_joints 已算的贴墙 token（仍受 CONTACT_SRC 约束）。"""
+    alarm9 = bool(wrist_tok.get(LWRIST))
+    alarm10 = bool(wrist_tok.get(RWRIST))
+    tokens: list[str] = []
+    for tok in (wrist_tok.get(LWRIST) or []) + (wrist_tok.get(RWRIST) or []):
+        if tok not in tokens:
+            tokens.append(tok)
+    return {
+        "xyz": xyz,
+        "src": srcs,
+        "preview": True,
+        "wrist_alarm": {9: alarm9, 10: alarm10},
+        "alarm_tokens": tokens,
+    }
+
+
+def probe_wrist_contacts(
+    xyz: list,
+    srcs: list,
+    wrist_alarm: dict,
+    meshes: list,
+    solved: dict,
+    contact_m: float,
+) -> list[dict[str, Any]]:
+    """诊断腕点贴墙：src / 最近墙 d / 命中 cell / wrist_alarm。"""
+    out: list[dict[str, Any]] = []
+    for ji, label in ((LWRIST, "L"), (RWRIST, "R")):
+        p = xyz[ji] if ji < len(xyz) else None
+        src = srcs[ji] if ji < len(srcs) else None
+        alarm = bool((wrist_alarm or {}).get(ji) or (wrist_alarm or {}).get(str(ji)))
+        entry: dict[str, Any] = {
+            "wrist": label,
+            "joint": ji,
+            "src": src,
+            "d": None,
+            "wall_id": None,
+            "cell": None,
+            "wrist_alarm": alarm,
+            "contact_m": round(float(contact_m), 4),
+        }
+        if not p or len(p) < 3:
+            entry["reason"] = "no_point"
+            out.append(entry)
+            continue
+        pv = np.asarray(p[:3], float)
+        closest_d: float | None = None
+        closest_wall: int | None = None
+        for mesh in meshes or []:
+            wall = wall_by_id(solved, mesh.get("wall_id"))
+            if not wall:
+                continue
+            d = float(signed_wall_dist(pv, wall))
+            wid = int(mesh.get("wall_id") or 0)
+            if closest_d is None or d < closest_d:
+                closest_d = d
+                closest_wall = wid
+        if closest_d is not None:
+            entry["d"] = round(closest_d, 4)
+            entry["wall_id"] = closest_wall
+        if src not in CONTACT_SRC:
+            entry["reason"] = "src_blocked"
+            out.append(entry)
+            continue
+        hit_cell: str | None = None
+        hit_wall: int | None = None
+        hit_d: float | None = None
+        for mesh in meshes or []:
+            wall = wall_by_id(solved, mesh.get("wall_id"))
+            if not wall:
+                continue
+            d = float(signed_wall_dist(pv, wall))
+            if d >= contact_m:
+                continue
+            yz = [float(pv[1]), float(pv[2])]
+            for cell in mesh_cells(mesh):
+                poly = [[c[1], c[2]] for c in cell["corners"]]
+                if _point_in_poly(yz, poly):
+                    shelf = str(mesh.get("shelf_code") or "").strip()
+                    box_id = str(cell.get("box_id") or "").strip()
+                    hit_cell = f"{shelf}:{box_id}" if shelf and box_id else box_id or None
+                    hit_wall = int(mesh.get("wall_id") or 0)
+                    hit_d = d
+                    break
+            if hit_cell:
+                break
+        if hit_cell:
+            entry["cell"] = hit_cell
+            entry["wall_id"] = hit_wall
+            entry["d"] = round(hit_d, 4) if hit_d is not None else entry["d"]
+        elif closest_d is not None and closest_d >= contact_m:
+            entry["reason"] = "d_far"
+        else:
+            entry["reason"] = "yz_miss"
+        out.append(entry)
     return out
 
 
@@ -124,9 +235,11 @@ class DualcamProcessor:
             if wid in need:
                 meshes.append(mesh)
         self.meshes = meshes
-        self.contact_m = float(
+        raw_contact_m = float(
             aisle.get("contact_m", self.section.get("contact_m", DEFAULT_CONTACT_M)) or 0.0
         )
+        # 配置 0 表示「贴墙/近墙」而非「必须伸进墙内 d<0」
+        self.contact_m = CONTACT_M_WHEN_ZERO if raw_contact_m <= 0.0 else raw_contact_m
         self.plane = None
         if self.solved:
             for wid in list(self.required_walls) + [1, 2]:
@@ -202,7 +315,7 @@ class DualcamProcessor:
                 )
                 box_id = str(hit.get("box_id") or "").strip()
                 tok = box_collision_token({"shelf_code": shelf, "box_id": box_id})
-                if tok and ":" in tok:
+                if tok:
                     toks.append(tok)
             wrist_tokens[ji] = toks
         return xyz, srcs, wrist_tokens
@@ -274,6 +387,45 @@ class DualcamProcessor:
             self._last_skel_r = _subset_persons(pose_r, idx)
         return list(self._last_skel_l), list(self._last_skel_r)
 
+    def _contact_probe_from_people(self, people: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        probes: list[dict[str, Any]] = []
+        for pi, person in enumerate(people or []):
+            if not isinstance(person, dict):
+                continue
+            for row in probe_wrist_contacts(
+                person.get("xyz") or [],
+                person.get("src") or [],
+                person.get("wrist_alarm") or {},
+                self.meshes,
+                self.solved,
+                self.contact_m,
+            ):
+                row = dict(row)
+                row["person"] = pi
+                row["held"] = bool(person.get("held"))
+                row["preview"] = bool(person.get("preview"))
+                probes.append(row)
+        return probes
+
+    def _result_with_probe(
+        self,
+        result: dict[str, Any],
+        people: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        result["contact_probe"] = self._contact_probe_from_people(people)
+        return result
+
+    def _collect_alarm_tokens(self, people: list[dict[str, Any]]) -> list[str]:
+        """汇总非 hold 帧的贴墙 token；held 续帧不参与告警。"""
+        tokens: list[str] = []
+        for p in people or []:
+            if p.get("held"):
+                continue
+            for tok in p.get("alarm_tokens") or []:
+                if tok not in tokens:
+                    tokens.append(tok)
+        return tokens
+
     def _hold_xyz_near(self, idx: int) -> list | None:
         if 0 <= idx < len(self._holds):
             return (self._holds[idx][0] or {}).get("xyz")
@@ -299,29 +451,24 @@ class DualcamProcessor:
             self._new_prev = dict(self._prev_xyz)
             prev_xyz = self._hold_xyz_near(0)
             if i is not None and j is not None:
-                xyz, srcs, _tok = self._lift_joints(
+                xyz, srcs, wrist_tok = self._lift_joints(
                     fl["k"][i], fl["s"][i], fr["k"][j], fr["s"][j], ("F", 0), prev_xyz=prev_xyz,
                 )
                 idx_l.append(i)
                 idx_r.append(j)
             elif i is not None:
-                xyz, srcs, _tok = self._lift_joints(
+                xyz, srcs, wrist_tok = self._lift_joints(
                     fl["k"][i], fl["s"][i], None, None, ("F", 0), prev_xyz=prev_xyz,
                 )
                 idx_l.append(i)
             else:
                 z = np.zeros_like(fr["k"][j])
                 zs = np.zeros_like(fr["s"][j])
-                xyz, srcs, _tok = self._lift_joints(
+                xyz, srcs, wrist_tok = self._lift_joints(
                     z, zs, fr["k"][j], fr["s"][j], ("F", 0), prev_xyz=prev_xyz,
                 )
                 idx_r.append(j)
-            people.append({
-                "xyz": xyz,
-                "src": srcs,
-                "preview": True,
-                "wrist_alarm": {9: False, 10: False},
-            })
+            people.append(_person_preview_payload(xyz, srcs, wrist_tok))
             return people, idx_l, idx_r
         if not prefer:
             return [], [], []
@@ -344,25 +491,20 @@ class DualcamProcessor:
                 continue
             prev_xyz = self._hold_xyz_near(pi)
             if i is not None and j is not None:
-                xyz, srcs, _tok = self._lift_joints(
+                xyz, srcs, wrist_tok = self._lift_joints(
                     fl["k"][i], fl["s"][i], fr["k"][j], fr["s"][j], ("F", pi), prev_xyz=prev_xyz,
                 )
             elif i is not None:
-                xyz, srcs, _tok = self._lift_joints(
+                xyz, srcs, wrist_tok = self._lift_joints(
                     fl["k"][i], fl["s"][i], None, None, ("F", pi), prev_xyz=prev_xyz,
                 )
             else:
                 z = np.zeros_like(fr["k"][j])
                 zs = np.zeros_like(fr["s"][j])
-                xyz, srcs, _tok = self._lift_joints(
+                xyz, srcs, wrist_tok = self._lift_joints(
                     z, zs, fr["k"][j], fr["s"][j], ("F", pi), prev_xyz=prev_xyz,
                 )
-            people.append({
-                "xyz": xyz,
-                "src": srcs,
-                "preview": True,
-                "wrist_alarm": {9: False, 10: False},
-            })
+            people.append(_person_preview_payload(xyz, srcs, wrist_tok))
         return people, idx_l, idx_r
 
     def _clear_hold(self) -> None:
@@ -407,6 +549,7 @@ class DualcamProcessor:
                 held["held"] = True
                 held["preview"] = True
                 held["wrist_alarm"] = {9: False, 10: False}
+                held["alarm_tokens"] = []
                 out.append(held)
                 new_holds.append((held, float(last_t), pt))
         for ci, p in enumerate(out):
@@ -467,17 +610,18 @@ class DualcamProcessor:
             have_l=(role == "L"),
             have_r=(role == "R"),
         )
-        return {
+        preview_tokens = self._collect_alarm_tokens(people)
+        return self._result_with_probe({
             "frame_idx": frame_idx,
-            "collisions": [],
-            "alarm_collisions": [],
+            "collisions": list(preview_tokens),
+            "alarm_collisions": list(preview_tokens),
             "skeletons_l": sk_l,
             "skeletons_r": sk_r,
             "persons_3d": people,
             "preview": True,
             "scale_l": meta if role == "L" else {},
             "scale_r": meta if role == "R" else {},
-        }
+        }, people)
 
     def ready(self) -> bool:
         return not bool(self.not_ready_reason())
@@ -529,7 +673,7 @@ class DualcamProcessor:
         pose_rs, meta_r = _scale_pose(pose_r, *self.calib_r)
         if not self.ready():
             self._clear_hold()
-            return {
+            return self._result_with_probe({
                 "frame_idx": frame_idx,
                 "collisions": [],
                 "alarm_collisions": [],
@@ -538,7 +682,7 @@ class DualcamProcessor:
                 "persons_3d": [],
                 "scale_l": meta_l,
                 "scale_r": meta_r,
-            }
+            }, [])
 
         fl = keypoints_to_ks(pose_ls.get("persons") or [])
         fr = keypoints_to_ks(pose_rs.get("persons") or [])
@@ -552,17 +696,18 @@ class DualcamProcessor:
             sk_l, sk_r = self._overlay_follow(
                 pose_l, pose_r, idx_l, idx_r, have_l=True, have_r=True,
             )
-            return {
+            preview_tokens = self._collect_alarm_tokens(held)
+            return self._result_with_probe({
                 "frame_idx": frame_idx,
-                "collisions": [],
-                "alarm_collisions": [],
+                "collisions": list(preview_tokens),
+                "alarm_collisions": list(preview_tokens),
                 "skeletons_l": sk_l,
                 "skeletons_r": sk_r,
                 "persons_3d": held,
                 "preview": True,
                 "scale_l": meta_l,
                 "scale_r": meta_r,
-            }
+            }, held)
         tokens: list[str] = []
         new_prefer: list[tuple[np.ndarray, np.ndarray]] = []
         persons_3d: list[dict[str, Any]] = []
@@ -578,11 +723,16 @@ class DualcamProcessor:
             for tok in (wrist_tok.get(LWRIST) or []) + (wrist_tok.get(RWRIST) or []):
                 if tok not in tokens:
                     tokens.append(tok)
+            pair_tokens: list[str] = []
+            for tok in (wrist_tok.get(LWRIST) or []) + (wrist_tok.get(RWRIST) or []):
+                if tok not in pair_tokens:
+                    pair_tokens.append(tok)
             persons_3d.append({
                 "xyz": xyz,
                 "src": srcs,
                 "preview": False,
                 "wrist_alarm": {9: alarm9, 10: alarm10},
+                "alarm_tokens": pair_tokens,
             })
 
         self._prefer = new_prefer
@@ -594,7 +744,7 @@ class DualcamProcessor:
             pose_l, pose_r, [i for i, _, _ in pairs], [j for _, j, _ in pairs],
             have_l=True, have_r=True,
         )
-        return {
+        return self._result_with_probe({
             "frame_idx": frame_idx,
             "collisions": list(tokens),
             "alarm_collisions": list(tokens),
@@ -604,4 +754,4 @@ class DualcamProcessor:
             "preview": False,
             "scale_l": meta_l,
             "scale_r": meta_r,
-        }
+        }, persons_3d)

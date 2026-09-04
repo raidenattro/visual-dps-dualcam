@@ -10,7 +10,7 @@ import pytest
 
 from dualcam.geom import contact_slots, make_layer_mesh, signed_wall_dist, wall_by_id
 from dualcam.lift import CONTACT_SRC
-from services.event_engine.dualcam_processor import DualcamProcessor
+from services.event_engine.dualcam_processor import DualcamProcessor, probe_wrist_contacts
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "dual_1-3.json"
 
@@ -269,3 +269,81 @@ def test_flying_elbow_clamped_when_far_from_shoulder():
     e = np.asarray(xyz[7], float)
     sh = np.asarray(xyz[5], float)
     assert abs(float(np.linalg.norm(e - sh)) - 0.42) < 1e-6
+
+
+def test_collect_alarm_tokens_skips_held():
+    proc = DualcamProcessor({"aisle_id": "x", "solved": {"ok": False}, "cameras": {}})
+    people = [
+        {"preview": True, "wrist_alarm": {9: True, 10: False}, "alarm_tokens": ["S1:1-1"]},
+        {"held": True, "preview": True, "wrist_alarm": {9: True}, "alarm_tokens": ["S2:2-2"]},
+    ]
+    assert proc._collect_alarm_tokens(people) == ["S1:1-1"]
+
+
+def test_contact_m_zero_uses_touch_tolerance(calib):
+    aisle = _ready_aisle(calib)
+    aisle["contact_m"] = 0
+    proc = DualcamProcessor(aisle)
+    assert proc.contact_m == 0.03
+
+
+def test_token_without_colon_is_kept(calib):
+    """无 shelf_code 时 contact_slots 仍能命中货格。"""
+    solved = calib["solved"]
+    wall = wall_by_id(solved, 1)
+    mesh = make_layer_mesh(1, wall["corners"], n_layers=4, cols=4)
+    mesh.pop("shelf_code", None)
+    p0 = np.array(wall["corners"][0], float)
+    inward = np.array([1.0 if int(wall["sign"]) < 0 else -1.0, 0.0, 0.0])
+    into = p0 - 0.05 * inward
+    into[1] = float(np.mean([c[1] for c in wall["corners"]]))
+    into[2] = float(np.mean([c[2] for c in wall["corners"]]))
+    hits = contact_slots(into, [mesh], solved, contact_m=0.03)
+    assert hits
+
+
+def test_probe_wrist_contacts_reports_src_d_cell(calib):
+    solved = calib["solved"]
+    wall = wall_by_id(solved, 1)
+    mesh = make_layer_mesh(1, wall["corners"], n_layers=4, cols=4)
+    mesh["shelf_code"] = "S1"
+    p0 = np.array(wall["corners"][0], float)
+    inward = np.array([1.0 if int(wall["sign"]) < 0 else -1.0, 0.0, 0.0])
+    into = p0 - 0.05 * inward
+    into[1] = float(np.mean([c[1] for c in wall["corners"]]))
+    into[2] = float(np.mean([c[2] for c in wall["corners"]]))
+    xyz = [None] * 17
+    srcs = [None] * 17
+    xyz[9] = into.tolist()
+    srcs[9] = "stereo"
+    probes = probe_wrist_contacts(
+        xyz, srcs, {9: True, 10: False}, [mesh], solved, contact_m=0.05,
+    )
+    lw = next(p for p in probes if p["wrist"] == "L")
+    assert lw["src"] == "stereo"
+    assert lw["d"] is not None and lw["d"] < 0.05
+    assert lw["cell"]
+    assert lw["wrist_alarm"] is True
+
+
+def test_process_pair_preview_emits_lift_follow_tokens(calib):
+    """pick_pairs 失败时，_lift_follow 已算的 token 应出现在 alarm_collisions。"""
+    proc = DualcamProcessor(_ready_aisle(calib))
+    xyz = [[0.2, 1.1, 0.8] for _ in range(17)]
+    proc._prefer = [(np.array([640.0, 360.0]), np.array([640.0, 360.0]))]
+    proc._apply_hold([{
+        "xyz": xyz,
+        "src": ["stereo"] * 17,
+        "preview": False,
+        "wrist_alarm": {9: False, 10: False},
+    }], 1.0)
+
+    def _fake_lift_joints(kl, sl, kr, sr, prev_key, prev_xyz=None):
+        wrist_tok = {9: ["WALL1:3-2"], 10: []}
+        return xyz, ["stereo"] * 17, wrist_tok
+
+    proc._lift_joints = _fake_lift_joints  # type: ignore[method-assign]
+    out = proc.process_pair(_weak_pose(2), _weak_pose(2))
+    assert out["preview"] is True
+    assert out["alarm_collisions"] == ["WALL1:3-2"]
+    assert out["persons_3d"][0]["wrist_alarm"][9] is True

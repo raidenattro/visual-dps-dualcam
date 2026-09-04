@@ -21,6 +21,28 @@ from services.pipeline_log import log_pipeline_stage
 logger = logging.getLogger(__name__)
 
 
+def _compact_contact_probe(probes: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for p in probes or []:
+        if not isinstance(p, dict):
+            continue
+        w = str(p.get("wrist") or "?")
+        src = str(p.get("src") or "-")
+        d = p.get("d")
+        d_s = "—" if d is None else f"{float(d):.3f}"
+        cell = str(p.get("cell") or "-")
+        alarm = "1" if p.get("wrist_alarm") else "0"
+        extra = ""
+        if p.get("reason"):
+            extra = f" reason={p['reason']}"
+        if p.get("held"):
+            extra += " held=1"
+        if p.get("preview"):
+            extra += " preview=1"
+        parts.append(f"{w}[src={src} d={d_s} cell={cell} alarm={alarm}{extra}]")
+    return " ".join(parts) if parts else "—"
+
+
 class DualcamRedisWorker(EventRedisWorker):
     """同一 aisle_id 的 L/R 必须落在本 worker 的 shard 上。"""
 
@@ -195,6 +217,7 @@ class DualcamRedisWorker(EventRedisWorker):
         """有命中/告警时强制落盘并带上货位 token，便于按 frame 统计误报。"""
         collisions = list(result.get("collisions") or [])
         alarm_collisions = list(result.get("alarm_collisions") or [])
+        contact_probe = list(result.get("contact_probe") or [])
         fields: dict[str, Any] = {
             "worker_ms": worker_ms,
             "hits": len(collisions),
@@ -206,13 +229,22 @@ class DualcamRedisWorker(EventRedisWorker):
             fields["hit_tokens"] = collisions
         if alarm_collisions:
             fields["alarm_tokens"] = alarm_collisions
+        if contact_probe:
+            fields["contact_probe"] = contact_probe
+            fields["contact"] = _compact_contact_probe(contact_probe)
+        near_wall = any(
+            isinstance(p.get("d"), (int, float)) and float(p["d"]) < float(proc.contact_m) * 2.0
+            for p in contact_probe
+        )
+        hold_src = any(str(p.get("src") or "") in ("Lhold", "Rhold", "Lmono", "Rmono") for p in contact_probe)
+        force_log = bool(collisions or alarm_collisions or near_wall or hold_src)
         # pipeline 按 infer 相机过滤；aisle_id 写入 fields 便于 rg aisle11
         log_camera = proc.cam_l or proc.cam_r or ""
         log_pipeline_stage(
             "worker_done",
             camera_id=log_camera,
             frame_idx=int(result.get("frame_idx") or 0),
-            sample=not (collisions or alarm_collisions),
+            sample=not force_log,
             **fields,
         )
 

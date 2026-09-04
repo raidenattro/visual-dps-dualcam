@@ -152,7 +152,28 @@ function mergeAisleOverlay(prev, data) {
   };
 }
 
-/** 3D 窗只画立体可信骨架；2D 叠层仍用原始 SSE。 */
+function wristAlarmOn(person) {
+  const wa = person?.wrist_alarm;
+  if (!wa || typeof wa !== 'object') return false;
+  return Boolean(wa[9] || wa[10] || wa['9'] || wa['10']);
+}
+
+function mergeAlarmTokens(alarms, persons) {
+  const out = [...(alarms || [])];
+  const seen = new Set(out.map(String));
+  for (const p of persons || []) {
+    for (const tok of p?.alarm_tokens || []) {
+      const t = String(tok || '').trim();
+      if (t && !seen.has(t)) {
+        seen.add(t);
+        out.push(t);
+      }
+    }
+  }
+  return out;
+}
+
+/** 3D 窗：立体优先；preview 有几何命中时也展示骨架与告警。 */
 function scene3dOverlay(overlayL, overlayR) {
   const hasSkelL = (overlayL.skeletons?.length || 0) > 0;
   const hasSkelR = (overlayR.skeletons?.length || 0) > 0;
@@ -160,15 +181,27 @@ function scene3dOverlay(overlayL, overlayR) {
   if (!hasSkelL || !hasSkelR) {
     return { persons3d: [], collisions: [], alarms: [] };
   }
-  const persons3d = (src.persons3d || []).filter((p) => !p.preview);
-  if (!persons3d.length) {
-    return { persons3d: [], collisions: [], alarms: [] };
+  const all = src.persons3d || [];
+  const stereo = all.filter((p) => !p.preview);
+  if (stereo.length) {
+    const alarms = mergeAlarmTokens(src.alarms, stereo);
+    return {
+      persons3d: stereo,
+      collisions: src.collisions?.length ? src.collisions : alarms,
+      alarms,
+    };
   }
-  return {
-    persons3d,
-    collisions: src.collisions || [],
-    alarms: src.alarms || [],
-  };
+  const preview = all.filter((p) => p.preview);
+  const alarms = mergeAlarmTokens(src.alarms, preview);
+  const hasHit = alarms.length > 0 || preview.some(wristAlarmOn);
+  if (preview.length && hasHit) {
+    return {
+      persons3d: preview,
+      collisions: src.collisions?.length ? src.collisions : alarms,
+      alarms,
+    };
+  }
+  return { persons3d: [], collisions: [], alarms: [] };
 }
 
 function aisleFingerprint(a) {
