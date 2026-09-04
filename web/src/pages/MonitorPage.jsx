@@ -7,6 +7,7 @@ import { overlayToAnnotation } from '../lib/annotation';
 import { getPerspectiveTransform, perspectiveTransform } from '../lib/geometry';
 import { apiGet, apiPost, cameraPlaybackUrl, openCameraLiveStream } from '../api/client';
 import { resolveCameraModelLabel } from '../lib/cameraSettings';
+import { aisleLivePath } from '../lib/aisleNavigation.js';
 import { formatInferenceMessage, formatStreamError, formatUserError } from '../lib/userFacingText';
 import './MonitorPage.css';
 
@@ -37,6 +38,7 @@ export default function MonitorPage() {
   const cameraId = searchParams.get('camera')?.trim() || '';
 
   const [monitorCamera, setMonitorCamera] = useState(null);
+  const [aisleLiveId, setAisleLiveId] = useState('');
   const [cameraLoadState, setCameraLoadState] = useState('loading');
   const [annotation, setAnnotation] = useState({
     boxes: [],
@@ -502,12 +504,14 @@ export default function MonitorPage() {
   useEffect(() => {
     if (!cameraId) {
       setMonitorCamera(null);
+      setAisleLiveId('');
       setCameraLoadState('loading');
       return undefined;
     }
 
     let cancelled = false;
     setMonitorCamera(null);
+    setAisleLiveId('');
     setCameraLoadState('loading');
 
     (async () => {
@@ -522,7 +526,13 @@ export default function MonitorPage() {
         if (data.error || !data.camera) {
           setUIStatus('未找到摄像头', formatUserError(data.error) || '请从总览重新进入', '#e74c3c');
           setMonitorCamera(null);
+          setAisleLiveId('');
           setCameraLoadState('error');
+          return;
+        }
+        const live = aisleLivePath(aisleRes?.aisle?.aisle_id);
+        if (live) {
+          setAisleLiveId(aisleRes.aisle.aisle_id);
           return;
         }
         setMonitorCamera(data.camera);
@@ -687,6 +697,11 @@ export default function MonitorPage() {
 
   if (!cameraId) {
     return <Navigate to="/" replace />;
+  }
+
+  const livePath = aisleLivePath(aisleLiveId);
+  if (livePath) {
+    return <Navigate to={livePath} replace />;
   }
 
   return (

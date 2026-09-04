@@ -3,6 +3,7 @@ import { AuthProvider } from './context/AuthContext';
 import PageTitle from './components/PageTitle';
 import AppLayout from './components/AppLayout';
 import RequireAuth from './components/RequireAuth';
+import CameraLiveRedirect from './components/CameraLiveRedirect.jsx';
 import DashboardPage from './pages/DashboardPage';
 import MonitorPage from './pages/MonitorPage';
 import AisleAnnotatePage from './pages/AisleAnnotatePage';
@@ -27,6 +28,7 @@ export default function App() {
         >
           <Route path="/" element={<DashboardPage />} />
           <Route path="/live/:aisleId" element={<AisleLivePage />} />
+          <Route path="/camera/:cameraId" element={<CameraLiveRedirect />} />
           <Route path="/matrix" element={<MatrixPage />} />
           <Route path="/topology" element={<TopologyPage />} />
           <Route path="/monitor" element={<MonitorPage />} />

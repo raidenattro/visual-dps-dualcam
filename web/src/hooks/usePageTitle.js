@@ -23,6 +23,10 @@ export function usePageTitle() {
       document.title = `巷道检测 - ${APP_NAME}`;
       return;
     }
+    if (pathname.startsWith('/camera/')) {
+      document.title = `巷道检测 - ${APP_NAME}`;
+      return;
+    }
     if (pathname === '/monitor' && search.includes('camera=')) {
       document.title = `检测监控 - ${APP_NAME}`;
       return;

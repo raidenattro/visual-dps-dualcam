@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { apiGet } from '../api/client';
+import { cameraMonitorPath } from '../lib/aisleNavigation.js';
 import { formatUserError } from '../lib/userFacingText';
 import './MatrixPage.css';
 
@@ -22,7 +23,7 @@ const INFER_LABEL = {
   paused: '暂停',
 };
 
-function ShelfMatrix({ shelf, cameraId }) {
+function ShelfMatrix({ shelf, cameraId, aisleId }) {
   const [rows, cols] = shelf.grid_shape?.length >= 2 ? shelf.grid_shape : [0, 0];
   const placed = (shelf.cells || []).filter((c) => !c.unplaced);
   const unplaced = (shelf.cells || []).filter((c) => c.unplaced);
@@ -37,7 +38,7 @@ function ShelfMatrix({ shelf, cameraId }) {
         </div>
         <div className="matrix-chip-row">
           {(shelf.cells || []).map((cell) => (
-            <MatrixCell key={cell.roi_key || cell.box_id} cell={cell} cameraId={cameraId} compact />
+            <MatrixCell key={cell.roi_key || cell.box_id} cell={cell} cameraId={cameraId} aisleId={aisleId} compact />
           ))}
         </div>
       </div>
@@ -64,6 +65,7 @@ function ShelfMatrix({ shelf, cameraId }) {
             key={`${cell.layer}-${cell.column}-${cell.roi_key}`}
             cell={cell}
             cameraId={cameraId}
+            aisleId={aisleId}
           />
         ))}
       </div>
@@ -72,7 +74,7 @@ function ShelfMatrix({ shelf, cameraId }) {
           <span className="matrix-unplaced-label">未编网格</span>
           <div className="matrix-chip-row">
             {unplaced.map((cell) => (
-              <MatrixCell key={cell.roi_key || cell.box_id} cell={cell} cameraId={cameraId} compact />
+              <MatrixCell key={cell.roi_key || cell.box_id} cell={cell} cameraId={cameraId} aisleId={aisleId} compact />
             ))}
           </div>
         </div>
@@ -81,7 +83,7 @@ function ShelfMatrix({ shelf, cameraId }) {
   );
 }
 
-function MatrixCell({ cell, cameraId, compact = false }) {
+function MatrixCell({ cell, cameraId, aisleId, compact = false }) {
   const meta = STATE_META[cell.state] || STATE_META.configured;
   const hasBox = cell.state !== 'empty' && (cell.box_id || cell.roi_key);
   const title = hasBox
@@ -90,6 +92,7 @@ function MatrixCell({ cell, cameraId, compact = false }) {
 
   const code = cell.box_id || cell.roi_key || null;
   const inner = code ? <span className="matrix-cell-id">{code}</span> : null;
+  const liveTo = cameraMonitorPath({ aisleId, cameraId });
 
   if (!hasBox) {
     return (
@@ -102,9 +105,22 @@ function MatrixCell({ cell, cameraId, compact = false }) {
     );
   }
 
+  if (!liveTo) {
+    return (
+      <div
+        className={`matrix-cell ${meta.className}${compact ? ' matrix-cell--compact' : ''}`}
+        title={title}
+        role="gridcell"
+        aria-label={title}
+      >
+        {inner}
+      </div>
+    );
+  }
+
   return (
     <Link
-      to={`/monitor?camera=${encodeURIComponent(cameraId)}`}
+      to={liveTo}
       className={`matrix-cell ${meta.className}${compact ? ' matrix-cell--compact' : ''}`}
       title={title}
       role="gridcell"
@@ -117,15 +133,23 @@ function MatrixCell({ cell, cameraId, compact = false }) {
 
 function CameraBlock({ cam }) {
   const infer = cam.inference?.status || 'stopped';
+  const liveTo = cameraMonitorPath({ aisleId: cam.aisle_id, cameraId: cam.id });
 
   return (
     <section className="matrix-camera" id={`camera-${cam.id}`}>
       <header className="matrix-camera-head">
         <div className="matrix-camera-title">
-          <Link to={`/monitor?camera=${encodeURIComponent(cam.id)}`} className="matrix-camera-link">
-            {cam.name || cam.id}
-          </Link>
+          {liveTo ? (
+            <Link to={liveTo} className="matrix-camera-link">
+              {cam.name || cam.id}
+            </Link>
+          ) : (
+            <span className="matrix-camera-link">{cam.name || cam.id}</span>
+          )}
           <code className="matrix-camera-id">{cam.id}</code>
+          {cam.aisle_id ? (
+            <span className="matrix-badge">{cam.aisle_id}{cam.aisle_role ? ` · ${cam.aisle_role}` : ''}</span>
+          ) : null}
         </div>
         <div className="matrix-camera-badges">
           <span
@@ -146,11 +170,11 @@ function CameraBlock({ cam }) {
       </header>
 
       {!cam.shelves?.length ? (
-        <p className="matrix-empty-shelf">暂无货架网格，请先在监控页完成标注。</p>
+        <p className="matrix-empty-shelf">暂无货架网格，请先到巷道标注页完成标注。</p>
       ) : (
         <div className="matrix-shelves">
           {cam.shelves.map((shelf) => (
-            <ShelfMatrix key={shelf.shelf_code} shelf={shelf} cameraId={cam.id} />
+            <ShelfMatrix key={shelf.shelf_code} shelf={shelf} cameraId={cam.id} aisleId={cam.aisle_id} />
           ))}
         </div>
       )}

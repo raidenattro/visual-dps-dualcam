@@ -11,6 +11,7 @@ import {
   formatUserError,
 } from '../lib/userFacingText';
 import { aisleInferOn, aisleInferStatus, AISLE_INFER_LABEL, startAisleInference, stopAisleInference } from '../lib/aisleInference';
+import { cameraMonitorPath } from '../lib/aisleNavigation.js';
 import { applyFormFields, cameraToForm, emptyAisleCreateForm, emptyCameraForm, formToCameraPayload } from '../lib/cameraStreamForm';
 import './DashboardPage.css';
 
@@ -594,11 +595,8 @@ export default function DashboardPage() {
 
   const openMonitor = (cam) => {
     const group = aisles.find((a) => a.camera_l === cam.id || a.camera_r === cam.id);
-    if (group?.aisle_id) {
-      navigate(`/live/${encodeURIComponent(group.aisle_id)}`);
-      return;
-    }
-    navigate(`/monitor?camera=${encodeURIComponent(cam.id)}`);
+    const to = cameraMonitorPath({ aisleId: group?.aisle_id, cameraId: cam.id });
+    if (to) navigate(to);
   };
 
   const groupedIds = new Set(

@@ -145,6 +145,8 @@ def build_matrix_overview(
 
         g = camera_group(cid, json_dir)
         overlay = None
+        aisle_id = g["aisle_id"] if g else ""
+        aisle_role = g["role"] if g else ""
         if g:
             aisle = load_aisle(g["aisle_id"], json_dir)
             if aisle:
@@ -173,6 +175,8 @@ def build_matrix_overview(
             {
                 "id": cid,
                 "name": str(cam.get("name") or cid),
+                "aisle_id": aisle_id,
+                "aisle_role": aisle_role,
                 "online": bool(cam.get("online")),
                 "inference": {
                     "status": infer_status,
