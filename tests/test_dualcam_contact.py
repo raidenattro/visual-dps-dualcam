@@ -251,11 +251,11 @@ def test_flying_wrist_clamped_when_far_from_shoulder():
     srcs = [None] * 17
     srcs[9] = "stereo"
     toks = {9: ["S:1"], 10: []}
-    proc._clamp_flying_wrists(xyz, srcs, toks)
+    proc._clamp_flying_wrists(xyz, srcs)
     w = np.asarray(xyz[9], float)
     sh = np.asarray(xyz[5], float)
     assert abs(float(np.linalg.norm(w - sh)) - 0.85) < 1e-6
-    assert toks[9] == []
+    assert toks[9] == ["S:1"]
 
 
 def test_flying_elbow_clamped_when_far_from_shoulder():
@@ -264,27 +264,60 @@ def test_flying_elbow_clamped_when_far_from_shoulder():
     xyz[5] = [0.0, 1.4, 0.5]
     xyz[7] = [1.0, 1.4, 0.5]
     srcs = [None] * 17
-    toks = {9: [], 10: []}
-    proc._clamp_flying_wrists(xyz, srcs, toks)
+    proc._clamp_flying_wrists(xyz, srcs)
     e = np.asarray(xyz[7], float)
     sh = np.asarray(xyz[5], float)
     assert abs(float(np.linalg.norm(e - sh)) - 0.42) < 1e-6
 
 
-def test_collect_alarm_tokens_skips_held():
+def test_collect_alarm_tokens_includes_held():
     proc = DualcamProcessor({"aisle_id": "x", "solved": {"ok": False}, "cameras": {}})
     people = [
         {"preview": True, "wrist_alarm": {9: True, 10: False}, "alarm_tokens": ["S1:1-1"]},
         {"held": True, "preview": True, "wrist_alarm": {9: True}, "alarm_tokens": ["S2:2-2"]},
     ]
-    assert proc._collect_alarm_tokens(people) == ["S1:1-1"]
+    assert proc._collect_alarm_tokens(people) == ["S1:1-1", "S2:2-2"]
 
 
-def test_contact_m_zero_uses_touch_tolerance(calib):
+def test_contact_m_zero_is_exact(calib):
     aisle = _ready_aisle(calib)
     aisle["contact_m"] = 0
     proc = DualcamProcessor(aisle)
-    assert proc.contact_m == 0.03
+    assert proc.contact_m == 0.0
+
+
+def test_contact_slots_nearest_cell_when_yz_miss(calib):
+    """Y/Z 略出格但 d < contact_m 时，用最近货格兜底。"""
+    solved = calib["solved"]
+    wall = wall_by_id(solved, 1)
+    mesh = make_layer_mesh(1, wall["corners"], n_layers=4, cols=4)
+    p0 = np.array(wall["corners"][0], float)
+    inward = np.array([1.0 if int(wall["sign"]) < 0 else -1.0, 0.0, 0.0])
+    into = p0 - 0.05 * inward
+    # 故意偏到格缝外
+    into[1] = float(np.mean([c[1] for c in wall["corners"]])) + 999.0
+    into[2] = float(np.mean([c[2] for c in wall["corners"]]))
+    hits = contact_slots(into, [mesh], solved, contact_m=0.05)
+    assert hits
+    assert hits[0].get("nearest") is True
+
+
+def test_hold_keeps_alarm_tokens():
+    proc = DualcamProcessor({"aisle_id": "x", "solved": {"ok": False}, "cameras": {}})
+    xyz = [[0.0, 1.0, 1.0] for _ in range(17)]
+    person = {
+        "xyz": xyz,
+        "src": ["stereo"] * 17,
+        "preview": False,
+        "wrist_alarm": {9: True, 10: False},
+        "alarm_tokens": ["S1:1-1"],
+    }
+    proc._apply_hold([person], 0.0)
+    held = proc._apply_hold([], 0.04)
+    assert len(held) == 1
+    assert held[0].get("held") is True
+    assert held[0].get("wrist_alarm", {}).get(9) is True
+    assert held[0].get("alarm_tokens") == ["S1:1-1"]
 
 
 def test_token_without_colon_is_kept(calib):
@@ -343,7 +376,16 @@ def test_process_pair_preview_emits_lift_follow_tokens(calib):
         return xyz, ["stereo"] * 17, wrist_tok
 
     proc._lift_joints = _fake_lift_joints  # type: ignore[method-assign]
-    out = proc.process_pair(_weak_pose(2), _weak_pose(2))
+    # 躯干落在 prefer 附近，确保 _lift_follow 会调用 mock
+    kpts = [[640.0, 360.0, 0.95] for _ in range(17)]
+    pose = {
+        "frame_idx": 2,
+        "ts": 2.0,
+        "persons": [{"keypoints": kpts}, {"keypoints": [[645.0, 365.0, 0.95] for _ in range(17)]}],
+        "infer_width": 1280,
+        "infer_height": 720,
+    }
+    out = proc.process_pair(pose, pose)
     assert out["preview"] is True
     assert out["alarm_collisions"] == ["WALL1:3-2"]
     assert out["persons_3d"][0]["wrist_alarm"][9] is True

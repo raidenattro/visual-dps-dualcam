@@ -9,9 +9,7 @@ import numpy as np
 
 from dualcam.geom import (
     DEFAULT_CONTACT_M,
-    _point_in_poly,
     contact_slots,
-    mesh_cells,
     signed_wall_dist,
     wall_by_id,
 )
@@ -19,7 +17,6 @@ from dualcam.lift import (
     ARM_CONF_JOINTS,
     ARM_CONF_POWER,
     CONF_POWER,
-    CONTACT_SRC,
     LELB,
     LWRIST,
     PREFER_PX,
@@ -55,8 +52,6 @@ TORSO_JOINTS = (5, 6, 11, 12)
 LSHO, RSHO = 5, 6
 # 超过则腕点几何不可信，不报贴墙（dump_skel3d.SHOULDER_WRIST_MAX）
 SHOULDER_WRIST_MAX = 0.85
-# contact_m 配 0 时仍允许贴墙/近墙触发（d=0 不穿透也报）
-CONTACT_M_WHEN_ZERO = 0.03
 # 上臂合法上限，与 BONE_LEN_RANGE[(肩,肘)] 一致
 SHOULDER_ELBOW_MAX = 0.42
 
@@ -88,7 +83,7 @@ def _person_preview_payload(
     srcs: list,
     wrist_tok: dict[int, list[str]],
 ) -> dict[str, Any]:
-    """preview 路径：保留 _lift_joints 已算的贴墙 token（仍受 CONTACT_SRC 约束）。"""
+    """preview 路径：保留 _lift_joints 已算的贴墙 token。"""
     alarm9 = bool(wrist_tok.get(LWRIST))
     alarm10 = bool(wrist_tok.get(RWRIST))
     tokens: list[str] = []
@@ -147,40 +142,20 @@ def probe_wrist_contacts(
         if closest_d is not None:
             entry["d"] = round(closest_d, 4)
             entry["wall_id"] = closest_wall
-        if src not in CONTACT_SRC:
-            entry["reason"] = "src_blocked"
-            out.append(entry)
-            continue
-        hit_cell: str | None = None
-        hit_wall: int | None = None
-        hit_d: float | None = None
-        for mesh in meshes or []:
-            wall = wall_by_id(solved, mesh.get("wall_id"))
-            if not wall:
-                continue
-            d = float(signed_wall_dist(pv, wall))
-            if d >= contact_m:
-                continue
-            yz = [float(pv[1]), float(pv[2])]
-            for cell in mesh_cells(mesh):
-                poly = [[c[1], c[2]] for c in cell["corners"]]
-                if _point_in_poly(yz, poly):
-                    shelf = str(mesh.get("shelf_code") or "").strip()
-                    box_id = str(cell.get("box_id") or "").strip()
-                    hit_cell = f"{shelf}:{box_id}" if shelf and box_id else box_id or None
-                    hit_wall = int(mesh.get("wall_id") or 0)
-                    hit_d = d
-                    break
-            if hit_cell:
-                break
-        if hit_cell:
-            entry["cell"] = hit_cell
-            entry["wall_id"] = hit_wall
-            entry["d"] = round(hit_d, 4) if hit_d is not None else entry["d"]
+        hits = contact_slots(pv, meshes, solved, contact_m)
+        if hits:
+            hit = hits[0]
+            shelf = str(hit.get("shelf_code") or "").strip()
+            box_id = str(hit.get("box_id") or "").strip()
+            entry["cell"] = f"{shelf}:{box_id}" if shelf and box_id else box_id or None
+            entry["wall_id"] = int(hit.get("wall_id") or entry.get("wall_id") or 0)
+            entry["d"] = round(float(hit.get("d") or entry.get("d") or 0), 4)
+            if hit.get("nearest"):
+                entry["reason"] = "nearest_cell"
         elif closest_d is not None and closest_d >= contact_m:
             entry["reason"] = "d_far"
         else:
-            entry["reason"] = "yz_miss"
+            entry["reason"] = "no_mesh"
         out.append(entry)
     return out
 
@@ -238,8 +213,7 @@ class DualcamProcessor:
         raw_contact_m = float(
             aisle.get("contact_m", self.section.get("contact_m", DEFAULT_CONTACT_M)) or 0.0
         )
-        # 配置 0 表示「贴墙/近墙」而非「必须伸进墙内 d<0」
-        self.contact_m = CONTACT_M_WHEN_ZERO if raw_contact_m <= 0.0 else raw_contact_m
+        self.contact_m = raw_contact_m
         self.plane = None
         if self.solved:
             for wid in list(self.required_walls) + [1, 2]:
@@ -298,16 +272,20 @@ class DualcamProcessor:
             if p is None:
                 continue
             xyz[ji] = [float(p[0]), float(p[1]), float(p[2])]
-        self._clamp_flying_wrists(xyz, srcs, wrist_tokens)
+        raw_wrist: dict[int, np.ndarray] = {}
+        for ji in (LWRIST, RWRIST):
+            p = xyz[ji] if ji < len(xyz) else None
+            if p:
+                raw_wrist[ji] = np.asarray(p[:3], float)
+        self._clamp_flying_wrists(xyz, srcs)
         for ji in range(17):
             if xyz[ji]:
                 self._new_prev[(*prev_key, ji)] = np.asarray(xyz[ji], float)
         for ji in (LWRIST, RWRIST):
-            p = xyz[ji] if ji < len(xyz) else None
-            src = srcs[ji] if ji < len(srcs) else None
-            if not p or src not in CONTACT_SRC:
+            p = raw_wrist.get(ji)
+            if p is None:
                 continue
-            hits = contact_slots(np.asarray(p[:3], float), self.meshes, self.solved, self.contact_m)
+            hits = contact_slots(p, self.meshes, self.solved, self.contact_m)
             toks: list[str] = []
             for hit in hits:
                 shelf = str(hit.get("shelf_code") or "").strip() or wall_shelf_code(
@@ -320,12 +298,7 @@ class DualcamProcessor:
             wrist_tokens[ji] = toks
         return xyz, srcs, wrist_tokens
 
-    def _clamp_flying_wrists(
-        self,
-        xyz: list,
-        srcs: list,
-        wrist_tokens: dict[int, list[str]],
-    ) -> None:
+    def _clamp_flying_wrists(self, xyz: list, srcs: list) -> None:
         """肩-肘、肩-腕过长则收到上限上，不删点（删了会闪断、骨线抽搐）。先肘后腕。"""
         for ei, shi in ((LELB, LSHO), (RELB, RSHO)):
             e, sh = xyz[ei] if ei < len(xyz) else None, xyz[shi] if shi < len(xyz) else None
@@ -347,7 +320,6 @@ class DualcamProcessor:
             if d <= SHOULDER_WRIST_MAX or d < 1e-6:
                 continue
             xyz[wi] = (sv + (wv - sv) * (SHOULDER_WRIST_MAX / d)).tolist()
-            wrist_tokens[wi] = []
 
     def _match_torso_idx(self, pack: dict, xy, used: set[int]) -> int | None:
         if xy is None:
@@ -416,11 +388,9 @@ class DualcamProcessor:
         return result
 
     def _collect_alarm_tokens(self, people: list[dict[str, Any]]) -> list[str]:
-        """汇总非 hold 帧的贴墙 token；held 续帧不参与告警。"""
+        """汇总所有人（含 hold 续帧）的贴墙 token。"""
         tokens: list[str] = []
         for p in people or []:
-            if p.get("held"):
-                continue
             for tok in p.get("alarm_tokens") or []:
                 if tok not in tokens:
                     tokens.append(tok)
@@ -548,8 +518,6 @@ class DualcamProcessor:
                 held = copy.deepcopy(prev)
                 held["held"] = True
                 held["preview"] = True
-                held["wrist_alarm"] = {9: False, 10: False}
-                held["alarm_tokens"] = []
                 out.append(held)
                 new_holds.append((held, float(last_t), pt))
         for ci, p in enumerate(out):

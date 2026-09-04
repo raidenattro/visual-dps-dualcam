@@ -173,35 +173,21 @@ function mergeAlarmTokens(alarms, persons) {
   return out;
 }
 
-/** 3D 窗：立体优先；preview 有几何命中时也展示骨架与告警。 */
+/** 3D 窗：双路 2D 骨架齐时展示 3D；告警始终透传（贴墙即报）。 */
 function scene3dOverlay(overlayL, overlayR) {
   const hasSkelL = (overlayL.skeletons?.length || 0) > 0;
   const hasSkelR = (overlayR.skeletons?.length || 0) > 0;
   const src = newerOverlay(overlayL, overlayR);
-  if (!hasSkelL || !hasSkelR) {
-    return { persons3d: [], collisions: [], alarms: [] };
-  }
   const all = src.persons3d || [];
-  const stereo = all.filter((p) => !p.preview);
-  if (stereo.length) {
-    const alarms = mergeAlarmTokens(src.alarms, stereo);
-    return {
-      persons3d: stereo,
-      collisions: src.collisions?.length ? src.collisions : alarms,
-      alarms,
-    };
+  const alarms = mergeAlarmTokens(src.alarms, all);
+  if (!hasSkelL || !hasSkelR) {
+    return { persons3d: [], collisions: [], alarms };
   }
-  const preview = all.filter((p) => p.preview);
-  const alarms = mergeAlarmTokens(src.alarms, preview);
-  const hasHit = alarms.length > 0 || preview.some(wristAlarmOn);
-  if (preview.length && hasHit) {
-    return {
-      persons3d: preview,
-      collisions: src.collisions?.length ? src.collisions : alarms,
-      alarms,
-    };
-  }
-  return { persons3d: [], collisions: [], alarms: [] };
+  return {
+    persons3d: all,
+    collisions: src.collisions?.length ? src.collisions : alarms,
+    alarms,
+  };
 }
 
 function aisleFingerprint(a) {

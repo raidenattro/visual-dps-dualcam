@@ -303,10 +303,29 @@ def signed_wall_dist(p: Any, wall: dict) -> float:
     return float((_v(p) - p0) @ inward)
 
 
+def _cell_yz_centroid(cell: dict) -> tuple[float, float]:
+    poly = [[c[1], c[2]] for c in cell["corners"]]
+    ys = [pt[0] for pt in poly]
+    zs = [pt[1] for pt in poly]
+    return float(sum(ys) / len(ys)), float(sum(zs) / len(zs))
+
+
+def _nearest_cell_yz(mesh: dict, yz: list[float]) -> dict | None:
+    best: dict | None = None
+    best_d = float("inf")
+    for cell in mesh_cells(mesh):
+        cy, cz = _cell_yz_centroid(cell)
+        dist = float(np.hypot(yz[0] - cy, yz[1] - cz))
+        if dist < best_d:
+            best_d = dist
+            best = cell
+    return best
+
+
 def contact_slots(
     p: Any, meshes: list[dict], solved: dict, contact_m: float = DEFAULT_CONTACT_M,
 ) -> list[dict]:
-    """腕点伸进墙面（有向距离 < contact_m，默认 0）且落在货格 (Y,Z) 内 → 报警。"""
+    """腕点有向距离 d < contact_m 即报警；Y/Z 未落格时用最近货格兜底。"""
     if p is None:
         return []
     hits = []
@@ -318,15 +337,24 @@ def contact_slots(
         if d >= contact_m:
             continue
         yz = [_v(p)[1], _v(p)[2]]
+        hit_cell: dict | None = None
         for cell in mesh_cells(mesh):
             poly = [[c[1], c[2]] for c in cell["corners"]]
             if _point_in_poly(yz, poly):
-                hits.append({
-                    "wall_id": mesh["wall_id"],
-                    "shelf_code": str(mesh.get("shelf_code") or "").strip(),
-                    "box_id": cell["box_id"],
-                    "row": cell["row"],
-                    "col": cell["col"],
-                    "d": round(d, 3),
-                })
+                hit_cell = cell
+                break
+        nearest = False
+        if hit_cell is None:
+            hit_cell = _nearest_cell_yz(mesh, yz)
+            nearest = hit_cell is not None
+        if hit_cell:
+            hits.append({
+                "wall_id": mesh["wall_id"],
+                "shelf_code": str(mesh.get("shelf_code") or "").strip(),
+                "box_id": hit_cell["box_id"],
+                "row": hit_cell["row"],
+                "col": hit_cell["col"],
+                "d": round(d, 3),
+                "nearest": nearest,
+            })
     return hits
