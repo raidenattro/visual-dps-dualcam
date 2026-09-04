@@ -152,40 +152,17 @@ function mergeAisleOverlay(prev, data) {
   };
 }
 
-function wristAlarmOn(person) {
-  const wa = person?.wrist_alarm;
-  if (!wa || typeof wa !== 'object') return false;
-  return Boolean(wa[9] || wa[10] || wa['9'] || wa['10']);
-}
-
-function mergeAlarmTokens(alarms, persons) {
-  const out = [...(alarms || [])];
-  const seen = new Set(out.map(String));
-  for (const p of persons || []) {
-    for (const tok of p?.alarm_tokens || []) {
-      const t = String(tok || '').trim();
-      if (t && !seen.has(t)) {
-        seen.add(t);
-        out.push(t);
-      }
-    }
-  }
-  return out;
-}
-
-/** 3D 窗：双路 2D 骨架齐时展示 3D；告警始终透传（贴墙即报）。 */
+/** 3D 窗：双路 2D 齐时展示骨架；告警只认 worker 门控后的 alarm_collisions。 */
 function scene3dOverlay(overlayL, overlayR) {
   const hasSkelL = (overlayL.skeletons?.length || 0) > 0;
   const hasSkelR = (overlayR.skeletons?.length || 0) > 0;
   const src = newerOverlay(overlayL, overlayR);
-  const all = src.persons3d || [];
-  const alarms = mergeAlarmTokens(src.alarms, all);
+  const alarms = Array.isArray(src.alarms) ? src.alarms : [];
   if (!hasSkelL || !hasSkelR) {
-    return { persons3d: [], collisions: [], alarms };
+    return { persons3d: [], alarms };
   }
   return {
-    persons3d: all,
-    collisions: src.collisions?.length ? src.collisions : alarms,
+    persons3d: src.persons3d || [],
     alarms,
   };
 }
@@ -431,7 +408,6 @@ export default function AisleLivePage() {
             <AisleScene3D
               aisle={aisle}
               persons3d={scene3d.persons3d}
-              collisions={scene3d.collisions}
               alarms={scene3d.alarms}
             />
           ) : (

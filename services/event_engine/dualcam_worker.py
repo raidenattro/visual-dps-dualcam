@@ -47,15 +47,43 @@ class DualcamRedisWorker(EventRedisWorker):
     """同一 aisle_id 的 L/R 必须落在本 worker 的 shard 上。"""
 
     def __init__(self, app_config: dict, callback_reporter=None):
-        super().__init__(app_config, callback_reporter=callback_reporter)
+        # 须在 super().__init__ 之前：父类 init 会调用 _apply_runtime_settings
         self._aisle_proc: dict[str, DualcamProcessor] = {}
         self._aisle_mtime: dict[str, float] = {}
+        self._aisle_last_frame: dict[str, int] = {}
         self._pending: dict[str, dict[str, tuple[float, dict]]] = {}
         self._last_role_mono: dict[str, dict[str, float]] = {}
         self._pair_window = pair_window_sec(app_config)
         self._pair_window_mono = 0.0
         self._last_drop_log: dict[str, float] = {}
+        super().__init__(app_config, callback_reporter=callback_reporter)
         logger.info("dualcam pair_window=%.3fs", self._pair_window)
+
+    def _apply_runtime_settings(self, infer_cfg: dict) -> None:
+        super()._apply_runtime_settings(infer_cfg)
+        procs = getattr(self, "_aisle_proc", None)
+        if not procs:
+            return
+        for proc in procs.values():
+            proc.alarm_min_consecutive_frames = self._alarm_min
+
+    def _maybe_reset_aisle_on_frame_regression(
+        self,
+        aisle_id: str,
+        proc: DualcamProcessor,
+        frame_idx: int,
+    ) -> None:
+        """frame_idx 回退视为 infer 重启，清空连续命中计数（避免旧状态导致永不告警）。"""
+        last = self._aisle_last_frame.get(aisle_id, -1)
+        if last >= 0 and frame_idx < last:
+            proc.reset_infer_session()
+            logger.info(
+                "dualcam worker: infer frame_idx regression aisle=%s frame=%s last=%s; reset collision session",
+                aisle_id,
+                frame_idx,
+                last,
+            )
+        self._aisle_last_frame[aisle_id] = frame_idx
 
     def _json_root(self) -> str:
         return self._json_dir
@@ -87,6 +115,7 @@ class DualcamRedisWorker(EventRedisWorker):
         if not data:
             return None
         proc = DualcamProcessor(data)
+        proc.alarm_min_consecutive_frames = self._alarm_min
         self._aisle_proc[aisle_id] = proc
         self._aisle_mtime[aisle_id] = mtime
         return proc
@@ -250,6 +279,15 @@ class DualcamRedisWorker(EventRedisWorker):
 
     def _execute_job(self, job: dict[str, Any]) -> tuple[DualcamProcessor, dict] | None:
         proc: DualcamProcessor = job["proc"]
+        if job["kind"] == "single":
+            frame_idx = int(job["pose"].get("frame_idx") or 0)
+        else:
+            frame_idx = int(
+                job["pose_l"].get("frame_idx")
+                or job["pose_r"].get("frame_idx")
+                or 0
+            )
+        self._maybe_reset_aisle_on_frame_regression(str(job["aisle_id"]), proc, frame_idx)
         started = time.monotonic()
         if job["kind"] == "single":
             result = proc.process_single(job["role"], job["pose"])
@@ -284,6 +322,7 @@ class DualcamRedisWorker(EventRedisWorker):
             self._publish_overlay(proc, result)
 
     async def _handle_pose_batch(self, batch: list[tuple[str, str, str | None]]) -> None:
+        self._refresh_runtime_settings_if_needed()
         by_aisle: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for _stream, _msg_id, payload in batch:
             if not payload:

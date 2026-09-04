@@ -1,4 +1,4 @@
-"""双路 Pose 对齐后在 3D 做贴墙碰撞（contact_slots），贴墙即报。"""
+"""双路 Pose 对齐后在 3D 做贴墙碰撞（contact_slots），连续 N 帧命中才告警。"""
 
 from __future__ import annotations
 
@@ -229,6 +229,8 @@ class DualcamProcessor:
         self._sm2d = {"L": LivePose2DSmoother(), "R": LivePose2DSmoother()}
         self._sm3d = LivePose3DSmoother()
         cams = aisle.get("cameras") or {}
+        self.alarm_min_consecutive_frames = 3
+        self._box_consecutive_hits: dict[str, int] = {}
         self.cam_l = str((cams.get("L") or {}).get("camera_id") or "")
         self.cam_r = str((cams.get("R") or {}).get("camera_id") or "")
         views = aisle.get("views") or {}
@@ -387,14 +389,31 @@ class DualcamProcessor:
         result["contact_probe"] = self._contact_probe_from_people(people)
         return result
 
-    def _collect_alarm_tokens(self, people: list[dict[str, Any]]) -> list[str]:
-        """汇总所有人（含 hold 续帧）的贴墙 token。"""
+    def reset_infer_session(self) -> None:
+        """infer 重启导致 frame_idx 回绕时清空连续命中计数。"""
+        self._box_consecutive_hits.clear()
+
+    def _collect_collision_tokens(self, people: list[dict[str, Any]]) -> list[str]:
+        """汇总所有人（含 hold 续帧）的贴墙命中 token（未过门控）。"""
         tokens: list[str] = []
         for p in people or []:
             for tok in p.get("alarm_tokens") or []:
                 if tok not in tokens:
                     tokens.append(tok)
         return tokens
+
+    def _apply_alarm_gate(self, collision_tokens: list[str]) -> list[str]:
+        """同一 token 连续命中 ≥ alarm_min_consecutive_frames 才进入 alarm_collisions。"""
+        current_tokens = set(collision_tokens)
+        for token in list(self._box_consecutive_hits.keys()):
+            if token not in current_tokens:
+                self._box_consecutive_hits[token] = 0
+        alarm_collisions: list[str] = []
+        for token in current_tokens:
+            self._box_consecutive_hits[token] = self._box_consecutive_hits.get(token, 0) + 1
+            if self._box_consecutive_hits[token] >= self.alarm_min_consecutive_frames:
+                alarm_collisions.append(token)
+        return alarm_collisions
 
     def _hold_xyz_near(self, idx: int) -> list | None:
         if 0 <= idx < len(self._holds):
@@ -578,11 +597,12 @@ class DualcamProcessor:
             have_l=(role == "L"),
             have_r=(role == "R"),
         )
-        preview_tokens = self._collect_alarm_tokens(people)
+        collision_tokens = self._collect_collision_tokens(people)
+        alarm_collisions = self._apply_alarm_gate(collision_tokens)
         return self._result_with_probe({
             "frame_idx": frame_idx,
-            "collisions": list(preview_tokens),
-            "alarm_collisions": list(preview_tokens),
+            "collisions": list(collision_tokens),
+            "alarm_collisions": alarm_collisions,
             "skeletons_l": sk_l,
             "skeletons_r": sk_r,
             "persons_3d": people,
@@ -664,11 +684,12 @@ class DualcamProcessor:
             sk_l, sk_r = self._overlay_follow(
                 pose_l, pose_r, idx_l, idx_r, have_l=True, have_r=True,
             )
-            preview_tokens = self._collect_alarm_tokens(held)
+            collision_tokens = self._collect_collision_tokens(held)
+            alarm_collisions = self._apply_alarm_gate(collision_tokens)
             return self._result_with_probe({
                 "frame_idx": frame_idx,
-                "collisions": list(preview_tokens),
-                "alarm_collisions": list(preview_tokens),
+                "collisions": list(collision_tokens),
+                "alarm_collisions": alarm_collisions,
                 "skeletons_l": sk_l,
                 "skeletons_r": sk_r,
                 "persons_3d": held,
@@ -712,10 +733,11 @@ class DualcamProcessor:
             pose_l, pose_r, [i for i, _, _ in pairs], [j for _, j, _ in pairs],
             have_l=True, have_r=True,
         )
+        alarm_collisions = self._apply_alarm_gate(tokens)
         return self._result_with_probe({
             "frame_idx": frame_idx,
             "collisions": list(tokens),
-            "alarm_collisions": list(tokens),
+            "alarm_collisions": alarm_collisions,
             "skeletons_l": sk_l,
             "skeletons_r": sk_r,
             "persons_3d": persons_3d,

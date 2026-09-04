@@ -73,6 +73,15 @@ function alarmOn(alarm, idx) {
   return Boolean(alarm[idx] || alarm[String(idx)]);
 }
 
+/** 腕点告警色：仅当 worker alarm_collisions 已门控通过时亮起。 */
+function gatedWristAlarm(person, jointIdx, alarmSet) {
+  if (!alarmSet?.size || !alarmOn(person?.wrist_alarm, jointIdx)) return false;
+  for (const tok of person?.alarm_tokens || []) {
+    if (alarmSet.has(String(tok))) return true;
+  }
+  return false;
+}
+
 function makeSkelRig(scene) {
   const group = new THREE.Group();
   scene.add(group);
@@ -104,7 +113,7 @@ function makeSkelRig(scene) {
   return { people, wristNear, wristFar };
 }
 
-function updateSkelRig(rig, people) {
+function updateSkelRig(rig, people, alarmSet) {
   for (let p = 0; p < MAX_PERSONS; p += 1) {
     const slot = rig.people[p];
     const person = people?.[p];
@@ -115,7 +124,6 @@ function updateSkelRig(rig, people) {
       continue;
     }
     slot.g.visible = true;
-    const alarm = person?.wrist_alarm || {};
     let n = 0;
     for (let i = 0; i < 17; i += 1) {
       const m = slot.joints[i];
@@ -127,7 +135,7 @@ function updateSkelRig(rig, people) {
       m.visible = true;
       m.position.set(pt[0], pt[1], pt[2]);
       if (i === 9 || i === 10) {
-        m.material = alarmOn(alarm, i) ? rig.wristNear : rig.wristFar;
+        m.material = gatedWristAlarm(person, i, alarmSet) ? rig.wristNear : rig.wristFar;
       } else {
         m.material = slot.jointMat;
       }
@@ -145,8 +153,8 @@ function updateSkelRig(rig, people) {
   }
 }
 
-function paintSlots(slotObjs, collisions, alarms) {
-  const keys = new Set([...(collisions || []), ...(alarms || [])].map(String));
+function paintSlots(slotObjs, alarms) {
+  const keys = new Set((alarms || []).map(String));
   slotObjs.forEach((s) => {
     const on = s.tokens.some((t) => keys.has(t));
     s.fill.material = on ? s.alarmFill : s.idleFill;
@@ -238,11 +246,11 @@ function buildStatic(scene, aisle) {
   return { group, slotObjs };
 }
 
-/** 巷道 3D：墙/货格静态，人骨架与碰撞按 overlay 刷新；轨道视角按巷道记住。 */
-export default function AisleScene3D({ aisle, persons3d = [], collisions = [], alarms = [] }) {
+/** 巷道 3D：墙/货格静态，人骨架与告警按 worker alarm_collisions 刷新；轨道视角按巷道记住。 */
+export default function AisleScene3D({ aisle, persons3d = [], alarms = [] }) {
   const canvasRef = useRef(null);
-  const liveRef = useRef({ people: persons3d, collisions, alarms, aisle });
-  liveRef.current = { people: persons3d || [], collisions: collisions || [], alarms: alarms || [], aisle };
+  const liveRef = useRef({ people: persons3d, alarms, aisle });
+  liveRef.current = { people: persons3d || [], alarms: alarms || [], aisle };
   const geomKey = useMemo(() => aisleGeomKey(aisle), [aisle]);
   const aisleId = aisle?.aisle_id || '';
 
@@ -296,11 +304,12 @@ export default function AisleScene3D({ aisle, persons3d = [], collisions = [], a
     let lastPaint = '';
     const tick = () => {
       const live = liveRef.current;
-      updateSkelRig(skelRig, live.people);
-      const sig = `${(live.collisions || []).join('|')}|${(live.alarms || []).join('|')}`;
+      const alarmSet = new Set((live.alarms || []).map(String));
+      updateSkelRig(skelRig, live.people, alarmSet);
+      const sig = (live.alarms || []).join('|');
       if (sig !== lastPaint) {
         lastPaint = sig;
-        paintSlots(staticPack.slotObjs, live.collisions, live.alarms);
+        paintSlots(staticPack.slotObjs, live.alarms);
       }
       controls.update();
       renderer.render(scene, viewCam);

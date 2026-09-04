@@ -270,13 +270,37 @@ def test_flying_elbow_clamped_when_far_from_shoulder():
     assert abs(float(np.linalg.norm(e - sh)) - 0.42) < 1e-6
 
 
-def test_collect_alarm_tokens_includes_held():
+def test_collect_collision_tokens_includes_held():
     proc = DualcamProcessor({"aisle_id": "x", "solved": {"ok": False}, "cameras": {}})
     people = [
         {"preview": True, "wrist_alarm": {9: True, 10: False}, "alarm_tokens": ["S1:1-1"]},
         {"held": True, "preview": True, "wrist_alarm": {9: True}, "alarm_tokens": ["S2:2-2"]},
     ]
-    assert proc._collect_alarm_tokens(people) == ["S1:1-1", "S2:2-2"]
+    assert proc._collect_collision_tokens(people) == ["S1:1-1", "S2:2-2"]
+
+
+def test_alarm_gate_requires_consecutive_frames():
+    proc = DualcamProcessor({"aisle_id": "x", "solved": {"ok": False}, "cameras": {}})
+    proc.alarm_min_consecutive_frames = 3
+    assert proc._apply_alarm_gate(["T:1"]) == []
+    assert proc._apply_alarm_gate(["T:1"]) == []
+    assert proc._apply_alarm_gate(["T:1"]) == ["T:1"]
+    assert proc._apply_alarm_gate(["T:1"]) == ["T:1"]
+    assert proc._apply_alarm_gate([]) == []
+    assert proc._apply_alarm_gate(["T:1"]) == []
+    assert proc._apply_alarm_gate(["T:1"]) == []
+    assert proc._apply_alarm_gate(["T:1"]) == ["T:1"]
+
+
+def test_reset_infer_session_clears_consecutive_hits():
+    proc = DualcamProcessor({"aisle_id": "x", "solved": {"ok": False}, "cameras": {}})
+    proc.alarm_min_consecutive_frames = 3
+    proc._apply_alarm_gate(["T:1"])
+    proc._apply_alarm_gate(["T:1"])
+    proc.reset_infer_session()
+    assert proc._apply_alarm_gate(["T:1"]) == []
+    assert proc._apply_alarm_gate(["T:1"]) == []
+    assert proc._apply_alarm_gate(["T:1"]) == ["T:1"]
 
 
 def test_contact_m_zero_is_exact(calib):
@@ -360,8 +384,9 @@ def test_probe_wrist_contacts_reports_src_d_cell(calib):
 
 
 def test_process_pair_preview_emits_lift_follow_tokens(calib):
-    """pick_pairs 失败时，_lift_follow 已算的 token 应出现在 alarm_collisions。"""
+    """pick_pairs 失败时，_lift_follow 已算的 token 应出现在 collisions；门控测 1 帧。"""
     proc = DualcamProcessor(_ready_aisle(calib))
+    proc.alarm_min_consecutive_frames = 1
     xyz = [[0.2, 1.1, 0.8] for _ in range(17)]
     proc._prefer = [(np.array([640.0, 360.0]), np.array([640.0, 360.0]))]
     proc._apply_hold([{
