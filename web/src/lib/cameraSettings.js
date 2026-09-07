@@ -88,6 +88,16 @@ export const GLOBAL_ONLY_INFERENCE_FIELDS = [
     hint: '每隔 N 帧做一次姿态推理。双路共用此时长计算 L/R 配对窗，摄像头不可单独覆盖。',
     effectHint: '保存后需重新启动各路「智能检测」（visual-dps-infer-*）以及 visual-dps-event-worker。',
   },
+  {
+    key: 'inference.alarm_min_consecutive_frames',
+    label: '碰撞连续帧数 (告警门控)',
+    type: 'number',
+    min: 1,
+    max: 30,
+    default: 3,
+    hint: '同一货位 token 连续命中达到 N 帧才进入 alarm_collisions（UI 告警与回调）。1 表示贴墙即报。',
+    effectHint: '保存后 event-worker 热读生效；已在跑的 worker 下一批 pose 即应用新门控，无需重启 infer。',
+  },
 ];
 
 /** 仅全局设置页：流水线阶段日志（infer / event-worker 读取） */

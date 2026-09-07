@@ -91,6 +91,7 @@ for rel in \
   services/wall_clock.py \
   services/pipeline_log.py \
   services/pose_bus.py \
+  services/event_engine/sharding.py \
   services/runtime_config_service.py \
   services/inference_backends/__init__.py \
   services/inference_backends/model_registry.py \
