@@ -383,6 +383,22 @@ def test_probe_wrist_contacts_reports_src_d_cell(calib):
     assert lw["wrist_alarm"] is True
 
 
+def test_probe_wrist_contacts_includes_conf(calib):
+    solved = calib["solved"]
+    xyz = [None] * 17
+    srcs = [None] * 17
+    xyz[9] = [0.0, 1.0, 1.0]
+    srcs[9] = "stereo"
+    wrist_conf = {9: {"L": 0.91, "R": 0.72}, 10: {"L": 0.55, "R": 0.88}}
+    probes = probe_wrist_contacts(
+        xyz, srcs, {9: False, 10: False}, [], solved, contact_m=0.05, wrist_conf=wrist_conf,
+    )
+    lw = next(p for p in probes if p["wrist"] == "L")
+    rw = next(p for p in probes if p["wrist"] == "R")
+    assert lw["conf"] == {"L": 0.91, "R": 0.72}
+    assert rw["conf"] == {"L": 0.55, "R": 0.88}
+
+
 def test_process_pair_preview_emits_lift_follow_tokens(calib):
     """pick_pairs 失败时，_lift_follow 已算的 token 应出现在 collisions；门控测 1 帧。"""
     proc = DualcamProcessor(_ready_aisle(calib))

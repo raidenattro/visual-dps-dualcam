@@ -44,6 +44,22 @@ def _kpt_uv_score(k: np.ndarray, s: np.ndarray, idx: int) -> tuple[np.ndarray, f
     return k[idx], float(s[idx])
 
 
+def _wrist_conf_from_scores(
+    sl: np.ndarray | None,
+    sr: np.ndarray | None,
+) -> dict[int, dict[str, float | None]]:
+    """左右腕在 L/R 相机上的 2D 关键点置信度（推理 score）。"""
+    out: dict[int, dict[str, float | None]] = {}
+    for ji in (LWRIST, RWRIST):
+        conf: dict[str, float | None] = {"L": None, "R": None}
+        if sl is not None and ji < len(sl) and float(sl[ji]) > 0:
+            conf["L"] = round(float(sl[ji]), 3)
+        if sr is not None and ji < len(sr) and float(sr[ji]) > 0:
+            conf["R"] = round(float(sr[ji]), 3)
+        out[ji] = conf
+    return out
+
+
 # 单路预览不抬五官：贴墙射线会把鼻子/眼睛拉到货架平面，骨线变成「长射线」
 FACE_JOINTS = frozenset({0, 1, 2, 3, 4})
 # dump_skel3d 是 8 帧@25fps=0.32s；直播按 HOLD_SEC，不能照搬 8 个 pose 周期
@@ -82,6 +98,7 @@ def _person_preview_payload(
     xyz: list,
     srcs: list,
     wrist_tok: dict[int, list[str]],
+    wrist_conf: dict[int, dict[str, float | None]] | None = None,
 ) -> dict[str, Any]:
     """preview 路径：保留 _lift_joints 已算的贴墙 token。"""
     alarm9 = bool(wrist_tok.get(LWRIST))
@@ -90,13 +107,16 @@ def _person_preview_payload(
     for tok in (wrist_tok.get(LWRIST) or []) + (wrist_tok.get(RWRIST) or []):
         if tok not in tokens:
             tokens.append(tok)
-    return {
+    payload: dict[str, Any] = {
         "xyz": xyz,
         "src": srcs,
         "preview": True,
         "wrist_alarm": {9: alarm9, 10: alarm10},
         "alarm_tokens": tokens,
     }
+    if wrist_conf:
+        payload["wrist_conf"] = wrist_conf
+    return payload
 
 
 def probe_wrist_contacts(
@@ -106,6 +126,7 @@ def probe_wrist_contacts(
     meshes: list,
     solved: dict,
     contact_m: float,
+    wrist_conf: dict | None = None,
 ) -> list[dict[str, Any]]:
     """诊断腕点贴墙：src / 最近墙 d / 命中 cell / wrist_alarm。"""
     out: list[dict[str, Any]] = []
@@ -123,6 +144,11 @@ def probe_wrist_contacts(
             "wrist_alarm": alarm,
             "contact_m": round(float(contact_m), 4),
         }
+        conf = (wrist_conf or {}).get(ji)
+        if conf is None:
+            conf = (wrist_conf or {}).get(str(ji))
+        if conf:
+            entry["conf"] = conf
         if not p or len(p) < 3:
             entry["reason"] = "no_point"
             out.append(entry)
@@ -373,6 +399,7 @@ class DualcamProcessor:
                 self.meshes,
                 self.solved,
                 self.contact_m,
+                person.get("wrist_conf"),
             ):
                 row = dict(row)
                 row["person"] = pi
@@ -445,11 +472,13 @@ class DualcamProcessor:
                 )
                 idx_l.append(i)
                 idx_r.append(j)
+                wrist_conf = _wrist_conf_from_scores(fl["s"][i], fr["s"][j])
             elif i is not None:
                 xyz, srcs, wrist_tok = self._lift_joints(
                     fl["k"][i], fl["s"][i], None, None, ("F", 0), prev_xyz=prev_xyz,
                 )
                 idx_l.append(i)
+                wrist_conf = _wrist_conf_from_scores(fl["s"][i], None)
             else:
                 z = np.zeros_like(fr["k"][j])
                 zs = np.zeros_like(fr["s"][j])
@@ -457,7 +486,8 @@ class DualcamProcessor:
                     z, zs, fr["k"][j], fr["s"][j], ("F", 0), prev_xyz=prev_xyz,
                 )
                 idx_r.append(j)
-            people.append(_person_preview_payload(xyz, srcs, wrist_tok))
+                wrist_conf = _wrist_conf_from_scores(None, fr["s"][j])
+            people.append(_person_preview_payload(xyz, srcs, wrist_tok, wrist_conf))
             return people, idx_l, idx_r
         if not prefer:
             return [], [], []
@@ -483,17 +513,20 @@ class DualcamProcessor:
                 xyz, srcs, wrist_tok = self._lift_joints(
                     fl["k"][i], fl["s"][i], fr["k"][j], fr["s"][j], ("F", pi), prev_xyz=prev_xyz,
                 )
+                wrist_conf = _wrist_conf_from_scores(fl["s"][i], fr["s"][j])
             elif i is not None:
                 xyz, srcs, wrist_tok = self._lift_joints(
                     fl["k"][i], fl["s"][i], None, None, ("F", pi), prev_xyz=prev_xyz,
                 )
+                wrist_conf = _wrist_conf_from_scores(fl["s"][i], None)
             else:
                 z = np.zeros_like(fr["k"][j])
                 zs = np.zeros_like(fr["s"][j])
                 xyz, srcs, wrist_tok = self._lift_joints(
                     z, zs, fr["k"][j], fr["s"][j], ("F", pi), prev_xyz=prev_xyz,
                 )
-            people.append(_person_preview_payload(xyz, srcs, wrist_tok))
+                wrist_conf = _wrist_conf_from_scores(None, fr["s"][j])
+            people.append(_person_preview_payload(xyz, srcs, wrist_tok, wrist_conf))
         return people, idx_l, idx_r
 
     def _clear_hold(self) -> None:
@@ -722,6 +755,7 @@ class DualcamProcessor:
                 "preview": False,
                 "wrist_alarm": {9: alarm9, 10: alarm10},
                 "alarm_tokens": pair_tokens,
+                "wrist_conf": _wrist_conf_from_scores(fl["s"][i], fr["s"][j]),
             })
 
         self._prefer = new_prefer

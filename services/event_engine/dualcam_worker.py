@@ -39,6 +39,15 @@ def _compact_contact_probe(probes: list[dict[str, Any]]) -> str:
             extra += " held=1"
         if p.get("preview"):
             extra += " preview=1"
+        conf = p.get("conf")
+        if isinstance(conf, dict):
+            conf_parts: list[str] = []
+            if conf.get("L") is not None:
+                conf_parts.append(f"L={float(conf['L']):.2f}")
+            if conf.get("R") is not None:
+                conf_parts.append(f"R={float(conf['R']):.2f}")
+            if conf_parts:
+                extra += f" conf[{' '.join(conf_parts)}]"
         parts.append(f"{w}[src={src} d={d_s} cell={cell} alarm={alarm}{extra}]")
     return " ".join(parts) if parts else "—"
 
