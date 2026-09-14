@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiGet, apiPost, apiPut, thumbnailUrl } from '../api/client.js';
 import {
   meshCells,
+  meshRowTy,
   moveLayerRow,
   projectPix,
   rayPlane,
@@ -26,6 +27,15 @@ const FALLBACK_W = 1280;
 const FALLBACK_H = 720;
 /** 抽帧按上限高度，再把 image_size 写成返回的真实宽高（不沿用旧标定高度）。 */
 const GRAB_HEIGHT = 720;
+const SHOW_SOLVED_HINTS_KEY = 'aisle-annotate-show-solved-hints';
+
+function readShowSolvedHints() {
+  try {
+    return localStorage.getItem(SHOW_SOLVED_HINTS_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
 /** 层线命中 / 开始拖：屏幕像素。未超过拖动阈值的点击不得改线。 */
 const LAYER_HIT_PX = 10;
 const CORNER_HIT_PX = 16;
@@ -188,6 +198,22 @@ function lerpQuad(quad, ty, tz) {
   ];
 }
 
+/** 货格在标定像素下的四角（与层线绘制同一套 quad 参数化）。 */
+function cellQuadCalib(mesh, solWall, viewQuad, cell) {
+  const cols = Math.max(1, Number(mesh.cols) || 1);
+  if (viewQuad?.length < 4 || solWall?.corners?.length < 4) return null;
+  const ty0 = meshRowTy(mesh, solWall.corners, cell.row);
+  const ty1 = meshRowTy(mesh, solWall.corners, cell.row + 1);
+  const tz0 = cell.col / cols;
+  const tz1 = (cell.col + 1) / cols;
+  return [
+    lerpQuad(viewQuad, ty0, tz0),
+    lerpQuad(viewQuad, ty0, tz1),
+    lerpQuad(viewQuad, ty1, tz1),
+    lerpQuad(viewQuad, ty1, tz0),
+  ];
+}
+
 function pointInPoly(u, v, pts) {
   let inside = false;
   for (let i = 0, j = pts.length - 1; i < pts.length; j = i, i += 1) {
@@ -279,15 +305,25 @@ export default function AisleAnnotatePage() {
   const [boxIdEdit, setBoxIdEdit] = useState('');
   const [frameAt, setFrameAt] = useState({});
   const [grabbing, setGrabbing] = useState(false);
+  const [showSolvedHints, setShowSolvedHints] = useState(readShowSolvedHints);
   const dragRef = useRef(null);
   const didDragRef = useRef(false);
   const skipClickRef = useRef(false);
   const stateRef = useRef(state);
   stateRef.current = state;
   const editGen = useRef(0);
-  const loadedIdRef = useRef(aisleId);
+  const loadGenRef = useRef(0);
+  const aisleIdRef = useRef(aisleId);
+  aisleIdRef.current = aisleId;
+  const loadedIdRef = useRef('');
   const toastTimer = useRef(null);
   const cvs = { L: useRef(null), R: useRef(null) };
+
+  /** 当前选中巷道是否已加载完成，且与内存标定一致（防切换后旧请求写错文件）。 */
+  const isAisleReady = (id = aisleIdRef.current) => {
+    const cur = String(id || '').trim();
+    return Boolean(cur && cur === loadedIdRef.current && cur === aisleIdRef.current);
+  };
 
   const grouped = Boolean(camL && camR && camL !== camR);
   const wallsL = state.views?.L?.walls || emptyWalls();
@@ -344,6 +380,8 @@ export default function AisleAnnotatePage() {
   };
 
   useEffect(() => {
+    const gen = loadGenRef.current + 1;
+    loadGenRef.current = gen;
     apiGet('/api/cameras?probe=0').then((d) => setCameras(d.items || [])).catch(() => {});
     apiGet('/api/aisles')
       .then(async (d) => {
@@ -352,7 +390,11 @@ export default function AisleAnnotatePage() {
         const first = items.find((a) => a.camera_l && a.camera_r) || items[0];
         if (!first?.aisle_id) return;
         setAisleId(first.aisle_id);
+        aisleIdRef.current = first.aisle_id;
+        loadedIdRef.current = '';
         const one = await apiGet(`/api/aisles/${encodeURIComponent(first.aisle_id)}`);
+        if (gen !== loadGenRef.current) return;
+        if (first.aisle_id !== aisleIdRef.current) return;
         if (one.status === 'success' && one.aisle) applyAisle(one.aisle);
       })
       .catch(() => {});
@@ -366,10 +408,20 @@ export default function AisleAnnotatePage() {
       if (cam?.last_frame_at) extra[id] = cam.last_frame_at;
     }
     if (!Object.keys(extra).length) return;
-    setFrameAt((prev) => ({ ...extra, ...prev }));
+    // 只保留当前左右路摄像头的时间戳，避免切换巷道后沿用上一组的「已抽帧」状态
+    setFrameAt((prev) => {
+      const next = { ...extra };
+      for (const id of [camL, camR]) {
+        if (id && prev[id] != null && next[id] == null) next[id] = prev[id];
+      }
+      return next;
+    });
   }, [cameras, camL, camR]);
 
-  const grabStills = async (lId = camL, rId = camR, aisleState = state) => {
+  const grabStills = async (lId = camL, rId = camR, aisleState = stateRef.current) => {
+    const grabGen = loadGenRef.current;
+    const targetId = String(aisleIdRef.current || aisleId).trim();
+    if (!targetId || String(aisleState?.aisle_id || '').trim() !== targetId) return;
     const targets = [
       ['L', lId],
       ['R', rId],
@@ -416,13 +468,15 @@ export default function AisleAnnotatePage() {
           }),
         );
       }
-      const aid = aisleState?.aisle_id || aisleId;
-      if (aid && Object.keys(sizes).length) {
-        const sized = await apiPost(`/api/aisles/${encodeURIComponent(aid)}/capture-sizes`, {
-          ...sizes,
+      if (grabGen !== loadGenRef.current || targetId !== aisleIdRef.current) return;
+      if (targetId && Object.keys(sizes).length) {
+        const sized = await apiPost(`/api/aisles/${encodeURIComponent(targetId)}/capture-sizes`, {
+          sizes,
           views: aisleState?.views || stateRef.current?.views,
         });
+        if (grabGen !== loadGenRef.current || targetId !== aisleIdRef.current) return;
         if (sized?.status === 'success' && sized.aisle) {
+          if (String(sized.aisle.aisle_id || '') !== targetId) return;
           applyAisle(sized.aisle);
           const lsz = sized.aisle.views?.L?.image_size;
           const rsz = sized.aisle.views?.R?.image_size;
@@ -451,7 +505,7 @@ export default function AisleAnnotatePage() {
 
   const autoGrabKeyRef = useRef('');
   useEffect(() => {
-    if (!grouped || !aisleId || grabbing) return;
+    if (!grouped || !aisleId || grabbing || !isAisleReady()) return;
     const key = `${aisleId}:${camL}:${camR}`;
     if (hasGrabbedFrames(camL, camR, frameAt, cameras)) {
       autoGrabKeyRef.current = key;
@@ -462,9 +516,11 @@ export default function AisleAnnotatePage() {
     grabStills(camL, camR, stateRef.current);
   }, [aisleId, camL, camR, grouped, grabbing, frameAt, cameras]);
 
-  const loadAisle = async (id, { quiet = false } = {}) => {
+  const loadAisle = async (id, { quiet = false, gen = loadGenRef.current } = {}) => {
     try {
       const d = await apiGet(`/api/aisles/${encodeURIComponent(id)}`);
+      if (gen !== loadGenRef.current) return;
+      if (String(id) !== aisleIdRef.current) return;
       if (d.status !== 'success' || !d.aisle) {
         if (!quiet) setMsg(d.error || '巷道不存在');
         return;
@@ -472,6 +528,7 @@ export default function AisleAnnotatePage() {
       applyAisle(d.aisle);
       if (!quiet) setMsg('已打开巷道标定，点「抽帧」取左右路静止画面');
     } catch (e) {
+      if (gen !== loadGenRef.current) return;
       if (!quiet) setMsg(formatUserError(e.message));
     }
   };
@@ -482,10 +539,16 @@ export default function AisleAnnotatePage() {
   };
 
   const persistAisle = async (next = stateRef.current) => {
+    const targetId = String(aisleIdRef.current || aisleId).trim();
+    const bodyId = String(next?.aisle_id || '').trim();
+    if (!targetId || bodyId !== targetId || !isAisleReady(targetId)) {
+      return null;
+    }
     const snap = editGen.current;
     const payload = structuredClone(next);
-    payload.aisle_id = aisleId;
-    const d = await apiPut(`/api/aisles/${encodeURIComponent(aisleId)}`, payload);
+    payload.aisle_id = targetId;
+    const d = await apiPut(`/api/aisles/${encodeURIComponent(targetId)}`, payload);
+    if (!isAisleReady(targetId)) return null;
     if (d.status !== 'success') {
       showToast(d.error || '保存失败', 'err');
       return null;
@@ -566,7 +629,10 @@ export default function AisleAnnotatePage() {
   };
 
   const solve = async () => {
-    const d = await apiPost(`/api/aisles/${encodeURIComponent(aisleId)}/solve`, stateRef.current);
+    const targetId = String(aisleIdRef.current || aisleId).trim();
+    if (!isAisleReady(targetId)) return;
+    const d = await apiPost(`/api/aisles/${encodeURIComponent(targetId)}/solve`, stateRef.current);
+    if (!isAisleReady(targetId)) return;
     if (d.status !== 'success') {
       showToast(d.error || '反解失败。请确认四角顺序是 1顶远→2顶近→3底近→4底远', 'err');
       if (d.aisle) setState(d.aisle);
@@ -649,7 +715,21 @@ export default function AisleAnnotatePage() {
           const rows = Number(mesh.rows) || 0;
           const cols = Number(mesh.cols) || 0;
           if (rows < 1 || cols < 1 || !mesh.vertices) continue;
-          const toUv = (r, col) => projectPix(mesh.vertices[vertIndex(rows, cols, r, col)], cam);
+          const viewWall = walls.find((w) => Number(w.wall_id) === Number(mesh.wall_id));
+          const quad = viewWall?.quad?.length >= 4 ? viewWall.quad : null;
+          const solWall = wallById(state.solved, mesh.wall_id);
+          const anchorGrid = Boolean(quad && solWall?.corners?.length >= 4);
+          const strokeCalibSeg = (uvA, uvB, color, width) => {
+            const pa = mapCalibToCanvas(uvA, layout);
+            const pb = mapCalibToCanvas(uvB, layout);
+            if (!pa || !pb) return;
+            c.beginPath();
+            c.moveTo(pa[0], pa[1]);
+            c.lineTo(pb[0], pb[1]);
+            c.strokeStyle = color;
+            c.lineWidth = width;
+            c.stroke();
+          };
           const strokeUv = (pts, color, width) => {
             const mapped = pts.map((p) => mapCalibToCanvas(p, layout)).filter(Boolean);
             if (mapped.length < 2) return;
@@ -662,27 +742,61 @@ export default function AisleAnnotatePage() {
             c.lineWidth = width;
             c.stroke();
           };
-          for (let j = 0; j <= cols; j++) {
-            const pts = [];
-            for (let i = 0; i <= rows; i++) pts.push(toUv(i, j));
-            strokeUv(pts, onWall ? pal.dim : pal.dim, onWall ? 1.2 : 0.9);
-          }
-          for (let i = 0; i <= rows; i++) {
-            const pts = [];
-            for (let j = 0; j <= cols; j++) pts.push(toUv(i, j));
-            const inner = i > 0 && i < rows;
-            strokeUv(
-              pts,
-              onWall ? (inner ? pal.mesh : pal.line) : pal.dim,
-              onWall ? (inner ? 2.4 : 1.4) : 1.1,
-            );
+          const toUv = (r, col) => projectPix(mesh.vertices[vertIndex(rows, cols, r, col)], cam);
+          if (anchorGrid) {
+            const corners = solWall.corners;
+            // 外框已由 quad 描边，不再重复画最外圈层线（避免「多套框」叠在一起）
+            for (let j = 1; j < cols; j++) {
+              const tz = j / cols;
+              strokeCalibSeg(
+                lerpQuad(quad, 0, tz),
+                lerpQuad(quad, 1, tz),
+                onWall ? pal.dim : pal.dim,
+                onWall ? 1.2 : 0.9,
+              );
+            }
+            for (let i = 1; i < rows; i++) {
+              const ty = meshRowTy(mesh, corners, i);
+              strokeCalibSeg(
+                lerpQuad(quad, ty, 0),
+                lerpQuad(quad, ty, 1),
+                onWall ? pal.mesh : pal.dim,
+                onWall ? 2.4 : 1.1,
+              );
+            }
+          } else {
+            for (let j = 0; j <= cols; j++) {
+              const pts = [];
+              for (let i = 0; i <= rows; i++) pts.push(toUv(i, j));
+              strokeUv(pts, onWall ? pal.dim : pal.dim, onWall ? 1.2 : 0.9);
+            }
+            for (let i = 0; i <= rows; i++) {
+              const pts = [];
+              for (let j = 0; j <= cols; j++) pts.push(toUv(i, j));
+              const inner = i > 0 && i < rows;
+              strokeUv(
+                pts,
+                onWall ? (inner ? pal.mesh : pal.line) : pal.dim,
+                onWall ? (inner ? 2.4 : 1.4) : 1.1,
+              );
+            }
           }
           for (const cell of meshCells(mesh)) {
-            const a = projectPix(cell.corners[0], cam);
-            const b = projectPix(cell.corners[2], cam);
-            if (!a || !b) continue;
-            const pa = mapCalibToCanvas(a, layout);
-            const pb = mapCalibToCanvas(b, layout);
+            let pa;
+            let pb;
+            const cellQuad = anchorGrid ? cellQuadCalib(mesh, solWall, quad, cell) : null;
+            if (cellQuad) {
+              pa = cellQuad[0];
+              pb = cellQuad[2];
+            } else {
+              const a = projectPix(cell.corners[0], cam);
+              const b = projectPix(cell.corners[2], cam);
+              if (!a || !b) continue;
+              pa = a;
+              pb = b;
+            }
+            pa = mapCalibToCanvas(pa, layout);
+            pb = mapCalibToCanvas(pb, layout);
             if (!pa || !pb) continue;
             const cw = Math.abs(pb[0] - pa[0]);
             const ch = Math.abs(pb[1] - pa[1]);
@@ -705,9 +819,9 @@ export default function AisleAnnotatePage() {
           }
         }
       }
-      drawSolvedCornerHints(c, v, layout, state);
+      if (showSolvedHints) drawSolvedCornerHints(c, v, layout, state);
     }
-  }, [state, activeView, activeWall, selected]);
+  }, [state, activeView, activeWall, selected, showSolvedHints]);
 
   useEffect(() => {
     draw();
@@ -728,7 +842,7 @@ export default function AisleAnnotatePage() {
     return unmapCanvasToCalib(mx, my, layout);
   };
 
-  /** 层线命中：与实验仓 dualcam_annot 一样，在标定像素里测 3D 投影线段。 */
+  /** 层线命中：有四角时与绘制一致，测 quad 上的水平线段；否则回退 3D 投影。 */
   const hitLayerRow = (e, v, aisle = stateRef.current) => {
     if (!aisle.solved?.ok) return null;
     const cam = camOf(aisle, v);
@@ -743,11 +857,22 @@ export default function AisleAnnotatePage() {
     const hitPx = LAYER_HIT_PX / Math.max(layout.scale * ((layout.sx + layout.sy) / 2), 1e-6);
     const rows = Number(mesh.rows) || 0;
     const cols = Number(mesh.cols) || 0;
+    const viewWall = (aisle.views?.[v]?.walls || []).find((w) => Number(w.wall_id) === Number(wallId));
+    const quad = viewWall?.quad?.length >= 4 ? viewWall.quad : null;
+    const solWall = wallById(aisle.solved, wallId);
     let best = null;
     for (let i = 1; i < rows; i++) {
-      const a = projectPix(mesh.vertices[vertIndex(rows, cols, i, 0)], cam);
-      const b = projectPix(mesh.vertices[vertIndex(rows, cols, i, cols)], cam);
-      if (!a || !b) continue;
+      let a;
+      let b;
+      if (quad && solWall?.corners?.length >= 4) {
+        const ty = meshRowTy(mesh, solWall.corners, i);
+        a = lerpQuad(quad, ty, 0);
+        b = lerpQuad(quad, ty, 1);
+      } else {
+        a = projectPix(mesh.vertices[vertIndex(rows, cols, i, 0)], cam);
+        b = projectPix(mesh.vertices[vertIndex(rows, cols, i, cols)], cam);
+        if (!a || !b) continue;
+      }
       const d = distToSeg(iu, iv, a[0], a[1], b[0], b[1]);
       if (d <= hitPx && (!best || d < best.dist)) {
         best = { v, row: i, wallId: Number(mesh.wall_id), dist: d };
@@ -823,8 +948,11 @@ export default function AisleAnnotatePage() {
     for (const mesh of aisle.slot_meshes || []) {
       if (Number(mesh.wall_id) !== Number(wallsL[activeWall]?.wall_id)) continue;
       if (!cam) continue;
+      const solWall = wallById(aisle.solved, mesh.wall_id);
+      const viewQuad = w?.quad?.length >= 4 ? w.quad : null;
       for (const cell of meshCells(mesh)) {
-        const pts = (cell.corners || []).map((p) => projectPix(p, cam)).filter(Boolean);
+        const pts = cellQuadCalib(mesh, solWall, viewQuad, cell)
+          || (cell.corners || []).map((p) => projectPix(p, cam)).filter(Boolean);
         if (pts.length < 4 || !pointInPoly(u, vv, pts)) continue;
         const key = `${mesh.wall_id}:${cell.slot_key || `r${cell.row}c${cell.col}`}`;
         setSelected(key);
@@ -1060,8 +1188,15 @@ export default function AisleAnnotatePage() {
               value={aisleList.some((a) => a.aisle_id === aisleId) ? aisleId : aisleList[0].aisle_id}
               onChange={(e) => {
                 const id = e.target.value;
+                loadGenRef.current += 1;
+                editGen.current += 1;
+                autoGrabKeyRef.current = '';
+                setFrameAt({});
+                setDirty(false);
                 setAisleId(id);
-                if (id) loadAisle(id);
+                aisleIdRef.current = id;
+                loadedIdRef.current = '';
+                if (id) loadAisle(id, { gen: loadGenRef.current });
               }}
             >
               {aisleList.map((a) => (
@@ -1408,11 +1543,30 @@ export default function AisleAnnotatePage() {
               <input type="number" step="0.01" value={(state.aabb?.z || [-0.12, 2.5])[1]} onChange={(e) => setState({ ...state, aabb: { ...(state.aabb || {}), z: [(state.aabb?.z || [-0.12, 2.5])[0], Number(e.target.value)] } })} />
             </div>
           </div>
+          <label className="aisle-field aisle-check-row">
+            <input
+              type="checkbox"
+              checked={showSolvedHints}
+              disabled={!state.solved?.ok}
+              onChange={(e) => {
+                const on = e.target.checked;
+                setShowSolvedHints(on);
+                try {
+                  localStorage.setItem(SHOW_SOLVED_HINTS_KEY, on ? '1' : '0');
+                } catch {
+                  /* ignore */
+                }
+              }}
+            />
+            <span>显示反投影角点（空心圈，查残差用）</span>
+          </label>
           <p className="hint">
             {state.solved?.ok
-              ? '空心圈=反解墙角投回画面（墙色）；实心点=你标的。模型按面宽×面高的竖直面拟合，残差十几像素套不进圈是正常的，不用死磕。层线画在四角内，按住分层线对齐后再保存。'
+              ? (showSolvedHints
+                ? '空心圈=反解墙角投回画面；实心点=你标的四角。残差大时空心圈会离实心点较远，属正常。日常标层线可关闭空心圈。'
+                : '实心点与彩色外框是你标的四角；中间横线为层线。残差大时建议关闭空心圈，避免像多套框叠在一起。')
               : reqIds.length === 2
-                ? '左右路两面墙四角都齐后点此。成功后会画出空心圈提示反投影，并自动生成层线。'
+                ? '左右路两面墙四角都齐后点此。成功后会自动生成层线；空心圈默认关闭，需要时可勾选。'
                 : `左右路墙${reqIds[0]}四角都齐后点此。未勾选的墙不用标。`}
           </p>
           <div className="btns">

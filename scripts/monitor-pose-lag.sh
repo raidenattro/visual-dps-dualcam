@@ -2,15 +2,43 @@
 # 在 tmux 里挂着跑：按 worker / shard 打 Redis pose 队列占用。
 #   ./scripts/monitor-pose-lag.sh            # 每 300s，一直跑
 #   ./scripts/monitor-pose-lag.sh 300 24h    # 跑 24 小时后退出
+# 现场（部署包 scripts/）：无 docker 组时自动 sudo docker；也可：
+#   sudo ./scripts/monitor-pose-lag.sh
+#   VISUAL_DPS_DOCKER_SUDO=1 ./scripts/monitor-pose-lag.sh
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$ROOT"
-if [[ -f .env ]]; then
-  set -a
+
+ENV_FILE=""
+for f in "${ROOT}/.env" "${ROOT}/app/.env"; do
+  if [[ -f "${f}" ]]; then
+    ENV_FILE="${f}"
+    set -a
+    # shellcheck disable=SC1090
+    source "${f}"
+    set +a
+    break
+  fi
+done
+
+if [[ -f "${SCRIPT_DIR}/lib/docker-cmd.sh" ]]; then
   # shellcheck disable=SC1091
-  source .env
-  set +a
+  source "${SCRIPT_DIR}/lib/docker-cmd.sh"
+else
+  docker_cmd() {
+    if docker info >/dev/null 2>&1; then
+      docker "$@"
+    else
+      sudo docker "$@"
+    fi
+  }
+fi
+# 探一次：现场无 docker 组会走 sudo（可能要输密码）
+if ! docker_cmd info >/dev/null 2>&1; then
+  echo "docker 不可用（需要 docker 组或 sudo）" >&2
+  exit 1
 fi
 
 INTERVAL="${1:-${INTERVAL:-300}}"
@@ -41,15 +69,6 @@ parse_duration() {
   esac
 }
 
-if docker info >/dev/null 2>&1; then
-  DOCKER=(docker)
-elif sudo docker info >/dev/null 2>&1; then
-  DOCKER=(sudo docker)
-else
-  echo "docker 不可用" >&2
-  exit 1
-fi
-
 DURATION_S="$(parse_duration "$DURATION_RAW")"
 mkdir -p "$LOG_DIR"
 START="$(date '+%Y-%m-%d %H:%M:%S')"
@@ -62,9 +81,9 @@ fi
 
 redis_cmd() {
   if [[ -n "${REDIS_PASSWORD:-}" ]]; then
-    "${DOCKER[@]}" exec "$REDIS_CONTAINER" redis-cli -a "$REDIS_PASSWORD" --no-auth-warning "$@"
+    docker_cmd exec "$REDIS_CONTAINER" redis-cli -a "$REDIS_PASSWORD" --no-auth-warning "$@"
   else
-    "${DOCKER[@]}" exec "$REDIS_CONTAINER" redis-cli "$@"
+    docker_cmd exec "$REDIS_CONTAINER" redis-cli "$@"
   fi
 }
 
@@ -96,13 +115,13 @@ snapshot() {
 }
 
 infer_count() {
-  "${DOCKER[@]}" ps --format '{{.Names}}' --filter 'name=visual-dps-infer' 2>/dev/null \
+  docker_cmd ps --format '{{.Names}}' --filter 'name=visual-dps-infer' 2>/dev/null \
     | grep -c '^visual-dps-infer' || true
 }
 
 # 输出: cpu_a cpu_b
 worker_cpus() {
-  "${DOCKER[@]}" stats --no-stream --format '{{.Name}} {{.CPUPerc}}' "$WORKER_A" "$WORKER_B" 2>/dev/null \
+  docker_cmd stats --no-stream --format '{{.Name}} {{.CPUPerc}}' "$WORKER_A" "$WORKER_B" 2>/dev/null \
     | awk -v a="$WORKER_A" -v b="$WORKER_B" '
         $1 == a { ga = $2 }
         $1 == b { gb = $2 }
@@ -207,7 +226,8 @@ copy_prev() {
   echo "============================================================"
   echo "Visual-DPS lag monitor"
   echo "  deploy: $ROOT"
-  echo "  app:    $ROOT"
+  echo "  env:    ${ENV_FILE:-"（未找到 .env / app/.env）"}"
+  echo "  docker: ${VISUAL_DPS_DOCKER_MODE:-auto}  (VISUAL_DPS_DOCKER_SUDO=${VISUAL_DPS_DOCKER_SUDO:-auto})"
   echo "  log:    $LOG_FILE"
   echo "  start:  $START"
   echo "  every:  ${INTERVAL}s   duration: $DUR_TXT"

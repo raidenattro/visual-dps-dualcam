@@ -135,6 +135,17 @@ export function rowYsFromMesh(mesh) {
   return ys;
 }
 
+/** mesh 第 rowIndex 条水平线在墙面参数 ty（0=顶沿、1=底沿），与 make_layer_mesh 一致。 */
+export function meshRowTy(mesh, corners, rowIndex) {
+  const rows = Math.max(1, Number(mesh.rows) || 1);
+  const ri = Math.min(Math.max(0, Math.round(Number(rowIndex))), rows);
+  const ys = rowYsFromMesh(mesh);
+  const [yBot, yTop] = wallYSpan(corners);
+  const h = yTop - yBot;
+  if (Math.abs(h) < 1e-9) return ri / rows;
+  return (yTop - ys[ri]) / h;
+}
+
 export function meshFromRowYs(wallId, corners, rowYs, cols = 4, extra = null) {
   const [yBot, yTop] = wallYSpan(corners);
   let ys = (rowYs && rowYs.length >= 2) ? rowYs.map(Number) : [yTop, yBot];

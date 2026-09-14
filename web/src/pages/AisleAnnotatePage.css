@@ -97,6 +97,25 @@
   line-height: 1.35;
 }
 
+.aisle-check-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.aisle-check-row input {
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.aisle-check-row span {
+  color: #c5d6e6;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
 .btns {
   display: flex;
   flex-wrap: wrap;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import CameraSetupDrawer from '../components/CameraSetupDrawer';
 import AisleCreateDrawer from '../components/AisleCreateDrawer';
@@ -73,6 +73,8 @@ export default function DashboardPage() {
   const [saving, setSaving] = useState(false);
   const [configHint, setConfigHint] = useState('');
   const [globalSettings, setGlobalSettings] = useState({});
+  /** 当前抽屉打开的巷道 id；异步拉详情返回后须与此一致才写入表单，防切换抽屉时互相覆盖。 */
+  const setupOpenRef = useRef('');
 
   const applyConfigHint = (data) => {
     if (data?.reload_hint || data?.mediamtx?.reload_hint) {
@@ -247,13 +249,15 @@ export default function DashboardPage() {
   }, []);
 
   const openAisleSetup = async (aisle) => {
+    const openingId = aisle.aisle_id;
+    setupOpenRef.current = openingId;
     const left = cameras.find((c) => c.id === aisle.camera_l);
     const right = cameras.find((c) => c.id === aisle.camera_r);
     setDrawerMode('aisle');
     setSetupAisle(aisle);
     setSetupCamera(null);
     setAisleForm({
-      aisle_id: aisle.aisle_id,
+      aisle_id: openingId,
       left: cameraToForm(left),
       right: cameraToForm(right),
     });
@@ -268,11 +272,15 @@ export default function DashboardPage() {
           ? apiGet(`/api/cameras/${encodeURIComponent(aisle.camera_r)}`)
           : Promise.resolve(null),
       ]);
-      setAisleForm((prev) => ({
-        ...prev,
-        left: cameraToForm(ld?.camera || left),
-        right: cameraToForm(rd?.camera || right),
-      }));
+      if (setupOpenRef.current !== openingId) return;
+      setAisleForm((prev) => {
+        if (setupOpenRef.current !== openingId) return prev;
+        return {
+          ...prev,
+          left: cameraToForm(ld?.camera || left),
+          right: cameraToForm(rd?.camera || right),
+        };
+      });
     } catch {
       /* 列表里的表单仍可用 */
     }
@@ -306,6 +314,7 @@ export default function DashboardPage() {
   };
 
   const closeDrawer = () => {
+    setupOpenRef.current = '';
     setDrawerOpen(false);
     setSetupCamera(null);
     setSetupAisle(null);
