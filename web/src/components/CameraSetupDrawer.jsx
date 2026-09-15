@@ -88,8 +88,14 @@ export default function CameraSetupDrawer({
       <aside className="drawer-panel" role="dialog" aria-labelledby="drawer-title">
         <header className="drawer-header">
           <div>
-            <h2 id="drawer-title">{isCreate ? '添加摄像头' : '摄像头设置'}</h2>
-            {!isCreate && <p className="drawer-subtitle">{camera?.name}</p>}
+            <h2 id="drawer-title">{isCreate ? '添加单路摄像头' : '摄像头设置'}</h2>
+            {isCreate ? (
+              <p className="drawer-subtitle">
+                2D Legacy：勿占用已编入巷道的通道；编入巷道后请走「添加巷道」。
+              </p>
+            ) : (
+              <p className="drawer-subtitle">{camera?.name}</p>
+            )}
           </div>
           <button type="button" className="drawer-close" onClick={onClose} aria-label="关闭">
             ×

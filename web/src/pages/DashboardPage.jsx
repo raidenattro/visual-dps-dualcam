@@ -10,8 +10,21 @@ import {
   formatStreamError,
   formatUserError,
 } from '../lib/userFacingText';
-import { aisleInferOn, aisleInferStatus, AISLE_INFER_LABEL, startAisleInference, stopAisleInference } from '../lib/aisleInference';
+import {
+  aisleInferOn,
+  aisleInferStatus,
+  AISLE_INFER_LABEL,
+  cameraInferOn,
+  cameraInferStatus,
+  LEGACY_INFER_LABEL,
+  startAisleInference,
+  stopAisleInference,
+} from '../lib/aisleInference';
 import { cameraMonitorPath } from '../lib/aisleNavigation.js';
+import {
+  validateAisleCreate,
+  validateLegacyCameraCreate,
+} from '../lib/cameraPartitionValidation';
 import { applyFormFields, cameraToForm, emptyAisleCreateForm, emptyCameraForm, formToCameraPayload } from '../lib/cameraStreamForm';
 import './DashboardPage.css';
 
@@ -230,11 +243,36 @@ export default function DashboardPage() {
     return () => clearInterval(tick);
   }, []);
 
-  const openCreate = () => {
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const addMenuRef = useRef(null);
+
+  useEffect(() => {
+    if (!addMenuOpen) return undefined;
+    const onDoc = (e) => {
+      if (addMenuRef.current && !addMenuRef.current.contains(e.target)) {
+        setAddMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [addMenuOpen]);
+
+  const openCreateAisle = () => {
+    setAddMenuOpen(false);
     setDrawerMode('create');
     setSetupCamera(null);
     setSetupAisle(null);
     setAisleForm(emptyAisleCreateForm());
+    setDrawerOpen(true);
+    loadGlobalSettings();
+  };
+
+  const openCreateSingle = () => {
+    setAddMenuOpen(false);
+    setDrawerMode('camera-create');
+    setSetupCamera(null);
+    setSetupAisle(null);
+    setForm(emptyCameraForm());
     setDrawerOpen(true);
     loadGlobalSettings();
   };
@@ -339,11 +377,12 @@ export default function DashboardPage() {
 
   const saveFromDrawer = async () => {
     if (drawerMode === 'create') {
-      const aid = String(aisleForm.aisle_id || '').trim();
-      if (!aid) {
-        alert('请填写巷道编号');
+      const aisleErr = validateAisleCreate(aisleForm, aisles, cameras);
+      if (aisleErr) {
+        alert(aisleErr);
         return;
       }
+      const aid = String(aisleForm.aisle_id || '').trim();
       setSaving(true);
       try {
         const data = await apiPost('/api/aisles', {
@@ -394,6 +433,30 @@ export default function DashboardPage() {
         await refreshCamerasAfterMutation(data);
       } catch (err) {
         alert(formatUserError(err.message) || '保存失败');
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+    if (drawerMode === 'camera-create') {
+      const legacyErr = validateLegacyCameraCreate(form, cameras, aisles);
+      if (legacyErr) {
+        alert(legacyErr);
+        return;
+      }
+      const payload = formToCameraPayload(form);
+      setSaving(true);
+      try {
+        const data = await apiPost('/api/cameras', payload);
+        if (data.error) {
+          alert(formatUserError(data.error));
+          return;
+        }
+        applyConfigHint(data);
+        closeDrawer();
+        await refreshCamerasAfterMutation(data);
+      } catch (err) {
+        alert(formatUserError(err.message) || '创建单路失败');
       } finally {
         setSaving(false);
       }
@@ -528,43 +591,70 @@ export default function DashboardPage() {
   };
 
   const startAllInference = async () => {
-    const targets = aisles.filter((a) => a.camera_l && a.camera_r);
-    if (!targets.length) {
-      alert('没有已成组巷道可启动。未编入巷道的摄像头不会开推理。');
+    const targetsAisle = aisles.filter((a) => a.camera_l && a.camera_r);
+    const groupedSet = new Set(
+      aisles.flatMap((a) => [a.camera_l, a.camera_r].filter(Boolean)),
+    );
+    const targetsLegacy = cameras.filter(
+      (c) => !groupedSet.has(c.id) && c.enabled !== false && String(c.url || '').trim(),
+    );
+    if (!targetsAisle.length && !targetsLegacy.length) {
+      alert('没有可启动的巷道或单路摄像头（需启用且配置视频流）。');
       return;
     }
-    if (!window.confirm(`确认启动全部 ${targets.length} 条巷道的智能检测？将按左右路成对启动。`)) {
+    if (
+      !window.confirm(
+        `将启动 ${targetsAisle.length} 条巷道（双路 3D）与 ${targetsLegacy.length} 路单摄（2D），是否继续？`,
+      )
+    ) {
       return;
     }
     setBatchInferAction('start');
-    setMsg('正在按巷道启动智能检测…');
+    setMsg('正在启动智能检测…');
     setMsgErr(false);
     try {
-      let started = 0;
-      let skipped = 0;
-      let failed = 0;
+      let aisleStarted = 0;
+      let aisleSkipped = 0;
+      let aisleFailed = 0;
+      let legacyStarted = 0;
+      let legacySkipped = 0;
+      let legacyFailed = 0;
       const errors = [];
       const isLive = (st) => st === 'running' || st === 'starting';
-      for (const aisle of targets) {
+      for (const aisle of targetsAisle) {
         const left = cameras.find((c) => c.id === aisle.camera_l);
         const right = cameras.find((c) => c.id === aisle.camera_r);
         if (isLive(left?.inference?.status) && isLive(right?.inference?.status)) {
-          skipped += 1;
+          aisleSkipped += 1;
           continue;
         }
         const r = await startAisleInference(aisle.camera_l, aisle.camera_r);
         if (!r.ok) {
-          failed += 1;
+          aisleFailed += 1;
           if (r.error) errors.push(`${aisle.aisle_id}：${r.error}`);
         } else {
-          started += 1;
+          aisleStarted += 1;
+        }
+      }
+      for (const cam of targetsLegacy) {
+        if (isLive(cam.inference?.status)) {
+          legacySkipped += 1;
+          continue;
+        }
+        const data = await apiPost(`/api/cameras/${encodeURIComponent(cam.id)}/inference/start`, {});
+        if (data.error) {
+          legacyFailed += 1;
+          errors.push(`${cam.id}：${formatUserError(data.error)}`);
+        } else {
+          legacyStarted += 1;
         }
       }
       const detail = errors.length ? `。${errors[0]}` : '';
       setMsg(
-        `按巷道启动完成：成功 ${started} 条，跳过 ${skipped} 条，失败 ${failed} 条${detail}`,
+        `启动完成：巷道 成功${aisleStarted}/跳过${aisleSkipped}/失败${aisleFailed}；`
+          + `单路 成功${legacyStarted}/跳过${legacySkipped}/失败${legacyFailed}${detail}`,
       );
-      setMsgErr(failed > 0);
+      setMsgErr(aisleFailed > 0 || legacyFailed > 0);
       await loadCameras({ probe: false });
     } catch (e) {
       setMsg(formatUserError(e.message) || '批量启动失败');
@@ -659,8 +749,8 @@ export default function DashboardPage() {
             <button
               type="button"
               className="btn-batch"
-              title="按巷道成对启动智能检测（未编入巷道的不启动）"
-              disabled={batchInferBusy || listLoading || !aisleCards.length}
+              title="启动全部巷道（双路）与未编组单路（2D）"
+              disabled={batchInferBusy || listLoading || (!aisleCards.length && !ungrouped.length)}
               onClick={startAllInference}
             >
               {batchInferAction === 'start' ? '启动中…' : '全部启动检测'}
@@ -674,15 +764,29 @@ export default function DashboardPage() {
             >
               {batchInferAction === 'stop' ? '停止中…' : '全部停止检测'}
             </button>
-            <button
-              type="button"
-              className="btn-icon btn-icon-primary"
-              title="添加巷道"
-              aria-label="添加巷道"
-              onClick={openCreate}
-            >
-              +
-            </button>
+            <div className="add-menu-wrap" ref={addMenuRef}>
+              <button
+                type="button"
+                className="btn-icon btn-icon-primary"
+                title="添加巷道或单路"
+                aria-label="添加"
+                aria-expanded={addMenuOpen}
+                aria-haspopup="menu"
+                onClick={() => setAddMenuOpen((v) => !v)}
+              >
+                +
+              </button>
+              {addMenuOpen ? (
+                <div className="add-menu" role="menu">
+                  <button type="button" role="menuitem" onClick={openCreateAisle}>
+                    添加巷道（双路 3D）
+                  </button>
+                  <button type="button" role="menuitem" onClick={openCreateSingle}>
+                    添加单路（2D Legacy）
+                  </button>
+                </div>
+              ) : null}
+            </div>
             <button
               type="button"
               className="btn-icon"
@@ -702,9 +806,14 @@ export default function DashboardPage() {
           {listLoading ? (
             <div className="empty grid-status">加载中…</div>
           ) : !cameras.length ? (
-            <div className="empty">暂无巷道，点击「添加巷道」同时配置左右路摄像头。</div>
+            <div className="empty">
+              暂无摄像头。点击「+」选择「添加巷道（双路 3D）」或「添加单路（2D Legacy）」。
+            </div>
           ) : (
             <>
+              {aisleCards.length ? (
+                <h2 className="grid-section-label">巷道 · 双路 3D</h2>
+              ) : null}
               {aisleCards.map((aisle) => {
                 const left = cameras.find((c) => c.id === aisle.camera_l);
                 const right = cameras.find((c) => c.id === aisle.camera_r);
@@ -791,15 +900,25 @@ export default function DashboardPage() {
                   </article>
                 );
               })}
+              {ungrouped.length ? (
+                <h2 className="grid-section-label">单路 · 2D（Legacy）</h2>
+              ) : null}
               {ungrouped.map((cam) => {
                 const camHint = streamHintOf(cam);
+                const on = cameraInferOn(cam);
+                const inferSt = cameraInferStatus(cam);
+                const inferText = inferLoadingId === cam.id
+                  ? (inferLoadingAction === 'stop'
+                    ? LEGACY_INFER_LABEL.stopped
+                    : LEGACY_INFER_LABEL.starting)
+                  : (LEGACY_INFER_LABEL[inferSt] || LEGACY_INFER_LABEL.stopped);
                 return (
-                <article className="card" key={cam.id}>
+                <article className={`card${on || inferSt === 'starting' ? ' is-inferring' : ''}`} key={cam.id}>
                   <div
                     className="card-preview card-preview-link"
                     role="button"
                     tabIndex={0}
-                    title="未编入巷道，仅单路预览"
+                    title="单路监控与 2D 货框标注"
                     onClick={() => openMonitor(cam)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
@@ -817,6 +936,13 @@ export default function DashboardPage() {
                       <div className="card-preview-empty">{camHint || '暂无画面'}</div>
                     )}
                     <div className="card-actions" onClick={(e) => e.stopPropagation()}>
+                      <InferenceToggle
+                        on={on}
+                        loading={inferLoadingId === cam.id}
+                        disabled={inferToggleDisabled}
+                        title={on ? '停止检测' : '开启检测'}
+                        onToggle={(turnOn) => toggleInference(cam, turnOn)}
+                      />
                       <button
                         type="button"
                         className="btn-icon"
@@ -844,10 +970,10 @@ export default function DashboardPage() {
                         <span className="card-status-sep">·</span>
                         <span className="card-activity">{formatDuration(cam._displayActivity)}</span>
                         <span className="card-status-sep">·</span>
-                        <span className="card-infer stopped">未编入巷道</span>
+                        <span className={`card-infer ${inferSt}`}>{inferText}</span>
                       </div>
                       <div className={`card-url${camHint ? ' is-stream-err' : ''}`} title={camHint || cam.url}>
-                        {camHint || '未编入巷道'}
+                        {camHint || cam.id}
                       </div>
                     </div>
                   </div>
@@ -881,8 +1007,8 @@ export default function DashboardPage() {
         capturingId={refreshingId}
       />
       <CameraSetupDrawer
-        open={drawerOpen && drawerMode === 'edit'}
-        mode={drawerMode}
+        open={drawerOpen && (drawerMode === 'edit' || drawerMode === 'camera-create')}
+        mode={drawerMode === 'camera-create' ? 'create' : drawerMode}
         camera={drawerCamera}
         form={form}
         onChange={onFormChange}

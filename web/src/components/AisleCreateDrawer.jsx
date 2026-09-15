@@ -84,7 +84,7 @@ export default function AisleCreateDrawer({
             <p className="drawer-subtitle">
               {isEdit
                 ? '巷道号、通道号、名称、流类型、视频流地址均可改。'
-                : '左右路各配一路视频流，标注时只选这条巷道。'}
+                : '双路 3D：左右路各配一路流；通道不能与已有单路或他巷 L/R 重复。'}
             </p>
           </div>
           <button type="button" className="drawer-close" onClick={onClose} aria-label="关闭">

@@ -4,6 +4,14 @@
   margin: 0 0 8px;
 }
 
+.dashboard-page .grid-section-label {
+  grid-column: 1 / -1;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #8b949e;
+  margin: 8px 0 4px;
+}
+
 .dashboard-page .toolbar {
   display: flex;
   justify-content: space-between;
@@ -68,6 +76,39 @@
   border-color: #00b894;
   color: #072018;
   font-weight: 700;
+}
+
+.dashboard-page .add-menu-wrap {
+  position: relative;
+}
+
+.dashboard-page .add-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  min-width: 220px;
+  padding: 4px 0;
+  border-radius: 8px;
+  border: 1px solid #30363d;
+  background: #161b22;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.dashboard-page .add-menu button {
+  display: block;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  color: #e6edf3;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dashboard-page .add-menu button:hover {
+  background: rgba(0, 212, 170, 0.12);
 }
 
 .dashboard-page .toolbar-actions .btn-icon-primary:hover:not(:disabled) {

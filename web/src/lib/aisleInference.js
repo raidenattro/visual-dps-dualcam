@@ -67,3 +67,21 @@ export const AISLE_INFER_LABEL = {
   running: '巷道检测运行中',
   error: '检测异常',
 };
+
+export function cameraInferOn(cam) {
+  const st = inferStatusOf(cam);
+  return st === 'running' || st === 'starting';
+}
+
+export function cameraInferStatus(cam) {
+  const raw = inferStatusOf(cam);
+  if (raw === 'error' && isManualStop(cam)) return 'stopped';
+  return raw;
+}
+
+export const LEGACY_INFER_LABEL = {
+  stopped: '单路检测未启动',
+  starting: '骨架推理启动中',
+  running: '单路检测运行中',
+  error: '检测异常',
+};
