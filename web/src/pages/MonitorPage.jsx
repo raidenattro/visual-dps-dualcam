@@ -3,7 +3,7 @@ import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import InferenceToggle from '../components/InferenceToggle';
 import MonitorPreviewStage from '../components/MonitorPreviewStage';
 import ShelfBar from '../components/ShelfBar';
-import { overlayToAnnotation } from '../lib/annotation';
+import { overlayToAnnotation, parseAnnotationPayload } from '../lib/annotation';
 import { getPerspectiveTransform, perspectiveTransform } from '../lib/geometry';
 import { apiGet, apiPost, cameraPlaybackUrl, openCameraLiveStream } from '../api/client';
 import { resolveCameraModelLabel } from '../lib/cameraSettings';
@@ -515,13 +515,10 @@ export default function MonitorPage() {
     setCameraLoadState('loading');
 
     (async () => {
+      const camPath = `/api/cameras/${encodeURIComponent(cameraId)}?settings=0&probe=false`;
+      const aislePath = `/api/aisles/by-camera/${encodeURIComponent(cameraId)}`;
       try {
-        const camPath = `/api/cameras/${encodeURIComponent(cameraId)}?settings=0`;
-        const aislePath = `/api/aisles/by-camera/${encodeURIComponent(cameraId)}`;
-        const [data, aisleRes] = await Promise.all([
-          apiGet(camPath),
-          apiGet(aislePath).catch(() => null),
-        ]);
+        const data = await apiGet(camPath);
         if (cancelled) return;
         if (data.error || !data.camera) {
           setUIStatus('未找到摄像头', formatUserError(data.error) || '请从总览重新进入', '#e74c3c');
@@ -530,17 +527,7 @@ export default function MonitorPage() {
           setCameraLoadState('error');
           return;
         }
-        const live = aisleLivePath(aisleRes?.aisle?.aisle_id);
-        if (live) {
-          setAisleLiveId(aisleRes.aisle.aisle_id);
-          return;
-        }
         setMonitorCamera(data.camera);
-        if (aisleRes?.status === 'success' && aisleRes.overlay?.boxes?.length) {
-          setAnnotation(overlayToAnnotation(aisleRes.overlay));
-        } else {
-          setAnnotation(EMPTY_ANNOTATION);
-        }
         setCameraLoadState('ready');
         apiGet(cameraPlaybackUrl(cameraId))
           .then((pb) => {
@@ -549,6 +536,25 @@ export default function MonitorPage() {
           .catch(() => {
             if (!cancelled) setPlayback(null);
           });
+        apiGet(aislePath)
+          .catch(() => null)
+          .then((aisleRes) => {
+            if (cancelled) return;
+            const live = aisleLivePath(aisleRes?.aisle?.aisle_id);
+            if (live) {
+              setAisleLiveId(aisleRes.aisle.aisle_id);
+              return;
+            }
+            if (aisleRes?.status === 'success' && aisleRes.overlay?.boxes?.length) {
+              setAnnotation(overlayToAnnotation(aisleRes.overlay));
+            }
+          });
+        apiGet(`/api/cameras/${encodeURIComponent(cameraId)}/annotation`)
+          .then((ann) => {
+            if (cancelled || ann?.error) return;
+            setAnnotation(parseAnnotationPayload(ann));
+          })
+          .catch(() => {});
       } catch (e) {
         if (!cancelled) {
           setUIStatus('加载失败', formatUserError(e.message) || '无法加载摄像头', '#e74c3c');
@@ -582,7 +588,12 @@ export default function MonitorPage() {
         setAnnotation(overlayToAnnotation(aisleRes.overlay));
         return;
       }
-      setAnnotation(EMPTY_ANNOTATION);
+      const ann = await apiGet(`/api/cameras/${encodeURIComponent(cameraId)}/annotation`);
+      if (ann?.error) {
+        setAnnotation(EMPTY_ANNOTATION);
+        return;
+      }
+      setAnnotation(parseAnnotationPayload(ann));
     } catch {
       setAnnotation(EMPTY_ANNOTATION);
     }

@@ -158,6 +158,16 @@ def get_camera_status(
                     rec, snap, online=False, probed=True
                 )
             return cached
+        # 与列表 probe=false 一致：不拉 RTSP，避免单路监控进页卡在探活
+        err = describe_stream_error(rec, snap, online=False, probed=False)
+        return {
+            "id": cid,
+            "online": False,
+            "activity_seconds": 0,
+            "last_check": time.time(),
+            "stream_error": err,
+            "probed": False,
+        }
 
     online = probe_camera_online(url)
     err = describe_stream_error(rec, snap, online=online, probed=True)
