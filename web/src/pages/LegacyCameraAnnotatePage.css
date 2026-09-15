@@ -1,0 +1,255 @@
+/* 与巷道标注页同级的全屏工作区 */
+.legacy-annotate-root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: calc(100dvh - 148px);
+  min-height: 480px;
+}
+
+.legacy-annotate-header {
+  flex-shrink: 0;
+}
+
+.legacy-annotate-header .page-title {
+  margin: 0 0 4px;
+  font-size: 1.35rem;
+  font-weight: 600;
+}
+
+.legacy-annotate-lead {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #8fa3b5;
+  line-height: 1.45;
+}
+
+.legacy-annotate-page {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(300px, 340px) minmax(0, 1fr);
+  min-height: 0;
+  height: 100%;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.legacy-annotate-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  background: #141c22;
+}
+
+.legacy-annotate-field label {
+  display: block;
+  font-size: 0.78rem;
+  color: #8fa3b5;
+  margin-bottom: 6px;
+}
+
+.legacy-annotate-field select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.legacy-annotate-op-block {
+  border: 1px solid #2b3a45;
+  border-radius: 8px;
+  padding: 12px;
+  background: #0f151a;
+}
+
+.legacy-annotate-op-block .group-title {
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #9ab1c4;
+  margin-bottom: 10px;
+}
+
+.legacy-annotate-field-inline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.82rem;
+  color: #c7d6e2;
+  margin-bottom: 10px;
+}
+
+.legacy-annotate-field-inline input {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.legacy-annotate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.legacy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+}
+
+.legacy-btn.primary {
+  background: #00d4aa;
+  color: #072018;
+}
+
+.legacy-btn.primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.legacy-btn.ghost {
+  background: #2a3540;
+  color: #e6edf3;
+  border-color: #3a4a58;
+}
+
+.legacy-btn.block {
+  width: 100%;
+  margin-top: auto;
+}
+
+.legacy-annotate-sidebar .annotate-controls-sidebar {
+  flex: 0 0 auto;
+}
+
+.legacy-annotate-sidebar .monitor-panel-btn-primary {
+  background: #00d4aa;
+  color: #072018;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.legacy-annotate-sidebar .monitor-panel-btn-primary:disabled {
+  opacity: 0.45;
+}
+
+.legacy-annotate-sidebar .monitor-panel-btn-danger {
+  background: rgba(192, 57, 43, 0.3);
+  color: #ff8a80;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.legacy-annotate-msg.err {
+  color: #ff8a80;
+  font-size: 0.82rem;
+  margin: 0;
+}
+
+.legacy-annotate-stage {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px 14px 14px;
+  background: #0a0e12;
+  overflow: hidden;
+}
+
+/* 与巷道 .pane + canvas.ov 一致：容器撑满，canvas 用 CSS 放大，坐标仍按 bitmap/rect 换算 */
+.legacy-annotate-canvas-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: #000;
+  overflow: hidden;
+}
+
+.legacy-annotate-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.legacy-annotate-placeholder {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: #8fa3b5;
+  font-size: 0.95rem;
+}
+
+.legacy-annotate-status {
+  flex: none;
+  margin-top: 10px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  background: #141c22;
+  border: 1px solid var(--border);
+  font-size: 0.82rem;
+  color: #b7c9d8;
+  line-height: 1.5;
+  text-align: left;
+}
+
+.legacy-annotate-status.ok {
+  background: rgba(0, 212, 170, 0.12);
+  border-color: #00d4aa;
+  color: #c8ffe8;
+}
+
+.legacy-annotate-status.warn {
+  background: rgba(255, 159, 28, 0.12);
+  border-color: #ff9f1c;
+  color: #ffe8c0;
+}
+
+.legacy-annotate-status.err {
+  background: rgba(232, 80, 80, 0.12);
+  border-color: #e88;
+  color: #ffd0d0;
+}
+
+@media (max-width: 960px) {
+  .legacy-annotate-page {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .legacy-annotate-sidebar {
+    max-height: 42vh;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}

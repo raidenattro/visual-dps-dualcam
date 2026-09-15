@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { legacyCameraAnnotatePath } from '../lib/aisleNavigation.js';
 import CameraStreamFields from './CameraStreamFields.jsx';
 import InferenceToggle from './InferenceToggle';
 import { InferenceModelOverrideCard } from './InferenceModelFields';
@@ -360,9 +361,13 @@ function DualcamGeomSection({ cameraId }) {
     return (
       <section className="drawer-section">
         <div className="drawer-section-head">
-          <h3>双路 3D 几何</h3>
+          <h3>单路 2D 货框</h3>
           <p className="drawer-section-desc">
-            尚未编入巷道，请到总览添加。
+            尚未编入巷道。请
+            {' '}
+            <Link to={legacyCameraAnnotatePath(cameraId)}>打开 2D 货框标注</Link>
+            {' '}
+            后再开 Legacy 检测。
           </p>
         </div>
       </section>

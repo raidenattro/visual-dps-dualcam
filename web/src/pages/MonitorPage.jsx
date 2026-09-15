@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import InferenceToggle from '../components/InferenceToggle';
 import MonitorPreviewStage from '../components/MonitorPreviewStage';
@@ -7,7 +7,7 @@ import { overlayToAnnotation, parseAnnotationPayload } from '../lib/annotation';
 import { getPerspectiveTransform, perspectiveTransform } from '../lib/geometry';
 import { apiGet, apiPost, cameraPlaybackUrl, openCameraLiveStream } from '../api/client';
 import { resolveCameraModelLabel } from '../lib/cameraSettings';
-import { aisleLivePath } from '../lib/aisleNavigation.js';
+import { aisleLivePath, legacyCameraAnnotatePath } from '../lib/aisleNavigation.js';
 import { formatInferenceMessage, formatStreamError, formatUserError } from '../lib/userFacingText';
 import './MonitorPage.css';
 
@@ -55,9 +55,12 @@ export default function MonitorPage() {
   const [showSkeletonLayer, setShowSkeletonLayer] = useState(true);
   const [showRoiLayer, setShowRoiLayer] = useState(true);
   const [playback, setPlayback] = useState(null);
+  /** 预览流真实宽高，用于 annotation_size 为 0 时的 ROI 映射 */
+  const [previewFrameSize, setPreviewFrameSize] = useState({ w: 0, h: 0 });
 
   useEffect(() => {
     setShowVideoLayer(false);
+    setPreviewFrameSize({ w: 0, h: 0 });
   }, [cameraId]);
   const [inferLoading, setInferLoading] = useState(false);
   const [status, setStatus] = useState({
@@ -624,7 +627,24 @@ export default function MonitorPage() {
     [cameraId, inferLoading, refreshCameraMeta, loadAnnotation],
   );
 
-  const handlePreviewFrameSize = useCallback(() => {}, []);
+  const handlePreviewFrameSize = useCallback(({ width, height }) => {
+    const w = Math.round(Number(width) || 0);
+    const h = Math.round(Number(height) || 0);
+    if (w <= 0 || h <= 0) return;
+    setPreviewFrameSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
+  }, []);
+
+  const monitorAnnotationSize = useMemo(() => {
+    const aw = Number(annotation.annotationSize?.width) || 0;
+    const ah = Number(annotation.annotationSize?.height) || 0;
+    if (aw > 0 && ah > 0) {
+      return { width: aw, height: ah };
+    }
+    if (previewFrameSize.w > 0 && previewFrameSize.h > 0) {
+      return { width: previewFrameSize.w, height: previewFrameSize.h };
+    }
+    return annotation.annotationSize;
+  }, [annotation.annotationSize, previewFrameSize]);
 
   useEffect(() => {
     if (!cameraId) return undefined;
@@ -787,8 +807,8 @@ export default function MonitorPage() {
                   </label>
                 </div>
             </div>
-            <Link to="/aisle" className="monitor-aisle-link">
-              去巷道标注
+            <Link to={legacyCameraAnnotatePath(cameraId)} className="monitor-aisle-link">
+              2D 货框标注
             </Link>
           </div>
         </header>
@@ -819,7 +839,7 @@ export default function MonitorPage() {
           shelves={annotation.shelves}
           gridShape={annotation.gridShape}
           shelfCorners={annotation.shelfCorners}
-          annotationSize={annotation.annotationSize}
+          annotationSize={monitorAnnotationSize}
           inferRunning={inferRunning}
           hits={liveHits}
           alarms={liveAlarms}

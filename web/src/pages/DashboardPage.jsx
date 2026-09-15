@@ -20,7 +20,7 @@ import {
   startAisleInference,
   stopAisleInference,
 } from '../lib/aisleInference';
-import { cameraMonitorPath } from '../lib/aisleNavigation.js';
+import { cameraMonitorPath, legacyCameraAnnotatePath } from '../lib/aisleNavigation.js';
 import {
   validateAisleCreate,
   validateLegacyCameraCreate,
@@ -951,6 +951,14 @@ export default function DashboardPage() {
                         onClick={() => captureFrame(cam)}
                       >
                         ↻
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-icon"
+                        title="2D 货框标注"
+                        onClick={() => navigate(legacyCameraAnnotatePath(cam.id))}
+                      >
+                        ▦
                       </button>
                       <button
                         type="button"

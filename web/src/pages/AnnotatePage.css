@@ -1,0 +1,386 @@
+.annotate-page {
+  padding: 20px;
+  text-align: center;
+}
+
+.annotate-page .panel {
+  background: #182027;
+  border: 1px solid #2b3a45;
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 14px;
+}
+
+.annotate-page .controls-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.annotate-page .group {
+  border: 1px solid #2b3a45;
+  border-radius: 8px;
+  padding: 10px;
+  background: #141c22;
+  text-align: left;
+}
+
+.annotate-page .group-title {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: #9ab1c4;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.annotate-page .row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+}
+
+.annotate-page .field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #c7d6e2;
+  font-size: 13px;
+}
+
+.annotate-page input[type='text'],
+.annotate-page select,
+.annotate-page input[type='file'] {
+  background: #0f151a;
+  border: 1px solid #334653;
+  color: #eaf2f8;
+  border-radius: 6px;
+  padding: 9px 10px;
+}
+
+.annotate-page button {
+  border: 0;
+  border-radius: 6px;
+  padding: 10px 16px;
+  font-weight: 700;
+  cursor: pointer;
+  background: #00d2a0;
+  color: #072018;
+}
+
+.annotate-page button.secondary,
+.annotate-page .link-btn.secondary {
+  background: #3a4a58;
+  color: #eaf2f8;
+  text-decoration: none;
+  display: inline-block;
+}
+
+.annotate-page button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.annotate-page .annotator-canvas {
+  display: inline-block;
+  max-width: 100%;
+  border: 2px solid #34495e;
+  border-radius: 8px;
+  cursor: crosshair;
+}
+
+.annotate-page .status {
+  text-align: left;
+  font-size: 14px;
+  color: #b7c9d8;
+  line-height: 1.6;
+  margin-top: 10px;
+}
+
+.annotate-page .status.ok {
+  color: #2ecc71;
+}
+
+.annotate-page .status.warn {
+  color: #f1c40f;
+}
+
+.annotate-page .status.err {
+  color: #ff6b6b;
+}
+
+.annotate-page .box-editor-panel {
+  text-align: left;
+}
+
+.annotate-page .box-editor-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.annotate-page .box-item {
+  border: 1px solid #355063;
+  background: #1a2630;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.annotate-page .box-item-label {
+  font-size: 12px;
+  color: #9ec8e8;
+}
+
+.annotate-page .box-item input {
+  width: 100%;
+  box-sizing: border-box;
+  font-weight: 700;
+}
+
+.annotate-page .shelf-row {
+  justify-content: flex-start;
+}
+
+.annotate-panel-embedded {
+  padding: 0;
+  text-align: left;
+}
+
+.annotate-panel-embedded .panel {
+  max-width: 960px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.annotate-embedded-hint {
+  margin: 8px 0 0;
+  font-size: 0.75rem;
+  color: #7a92a8;
+  line-height: 1.45;
+}
+
+.annotate-controls-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.8rem;
+  min-height: 0;
+  flex: 1;
+}
+
+.annotate-controls-sidebar .group {
+  padding: 8px;
+  flex-shrink: 0;
+}
+
+.annotate-shelf-tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  margin-bottom: 8px;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.annotate-shelf-tab {
+  flex-shrink: 0;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid #2b3a45;
+  background: #0f151a;
+  color: #8fa3b5;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.annotate-shelf-tab:hover {
+  color: #eaf2f8;
+  border-color: #3d5260;
+}
+
+.annotate-shelf-tab.active {
+  color: #00d4aa;
+  border-color: rgba(0, 212, 170, 0.45);
+  background: rgba(0, 212, 170, 0.1);
+}
+
+.annotate-shelf-tab-add {
+  border-style: dashed;
+  color: #7a92a8;
+}
+
+.annotate-shelf-name-field {
+  margin-top: 0;
+}
+
+.annotate-row-compact {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.annotate-btn-block {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.annotate-btn-primary {
+  margin-top: 8px;
+  background: #00d4aa;
+  color: #072018;
+  border: none;
+  font-weight: 600;
+}
+
+.annotate-btn-primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.annotate-btn-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.annotate-status {
+  font-size: 0.72rem;
+  line-height: 1.4;
+  max-height: 80px;
+  overflow-y: auto;
+}
+
+.annotate-shelf-panel {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.annotate-shelf-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.annotate-shelf-head .group-title {
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.annotate-shelf-name {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #00d4aa;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.annotate-box-panel {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.annotate-box-pos {
+  margin: 0;
+  font-size: 0.72rem;
+  color: #7a92a8;
+}
+
+.annotate-box-id-field {
+  margin: 0;
+}
+
+.annotate-box-id-field input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  background: #0f151a;
+  border: 1px solid #334653;
+  color: #eaf2f8;
+  border-radius: 6px;
+}
+
+.annotate-box-empty-hint {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #7a92a8;
+  line-height: 1.45;
+}
+
+.annotate-btn-delete {
+  margin-top: 4px;
+  background: transparent;
+  color: #e74c3c;
+  border: 1px solid rgba(231, 76, 60, 0.45);
+  font-weight: 500;
+}
+
+.annotate-btn-delete:hover {
+  background: rgba(231, 76, 60, 0.12);
+  border-color: #e74c3c;
+}
+
+.annotate-box-cell.is-empty {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.annotate-box-grid {
+  display: grid;
+  gap: 4px;
+  overflow: auto;
+  min-height: 0;
+  flex: 1;
+  align-items: stretch;
+}
+
+.annotate-box-head {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: #7a92a8;
+  text-align: center;
+  line-height: 1.2;
+  padding: 2px 0;
+}
+
+.annotate-box-corner {
+  visibility: hidden;
+}
+
+.annotate-box-row-label {
+  text-align: right;
+  padding-right: 4px;
+  align-self: center;
+}
+
+.annotate-box-cell {
+  display: block;
+  min-width: 0;
+}
+
+.annotate-box-cell input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 3px 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-align: center;
+  background: #0f151a;
+  border: 1px solid #334653;
+  color: #eaf2f8;
+  border-radius: 4px;
+}
+
+.annotate-box-cell input:focus {
+  outline: 1px solid #00d4aa;
+  border-color: #00d4aa;
+}

@@ -10,3 +10,9 @@ export function cameraMonitorPath({ aisleId, cameraId } = {}) {
     ? `/monitor?camera=${encodeURIComponent(String(cameraId))}`
     : null);
 }
+
+/** 单路 Legacy 2D 货框标注（未成组 camera）。 */
+export function legacyCameraAnnotatePath(cameraId) {
+  const id = String(cameraId || '').trim();
+  return id ? `/legacy/annotate?camera=${encodeURIComponent(id)}` : '/legacy/annotate';
+}

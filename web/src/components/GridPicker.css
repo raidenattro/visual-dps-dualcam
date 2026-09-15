@@ -1,0 +1,39 @@
+.grid-picker {
+  display: flex;
+  flex-direction: column;
+}
+
+.grid-picker-matrix {
+  display: grid;
+  gap: 3px;
+  padding: 6px;
+  background: #0a0e12;
+  border: 1px solid #2b3a45;
+  border-radius: 8px;
+  touch-action: none;
+  user-select: none;
+}
+
+.grid-picker-matrix.is-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.grid-picker-cell {
+  aspect-ratio: 1;
+  min-height: 18px;
+  border-radius: 3px;
+  border: 1px solid #2b3a45;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: cell;
+}
+
+.grid-picker-cell.is-selected {
+  background: rgba(0, 212, 170, 0.28);
+  border-color: rgba(0, 212, 170, 0.55);
+}
+
+.grid-picker-cell:hover:not(.is-selected) {
+  border-color: #4a6275;
+  background: rgba(255, 255, 255, 0.08);
+}

@@ -474,19 +474,6 @@ export default function MonitorPreviewStage({
     });
   }, [annotateMode, showSkeletonLayer, layout, liveSkeletons, liveInferWidth, liveInferHeight]);
 
-  const shelfOutlines = useMemo(() => {
-    if (!showRoiLayer && !annotateMode) return [];
-    if (Array.isArray(shelves) && shelves.length) {
-      return shelves.filter(
-        (s) => Array.isArray(s.shelf_corners) && s.shelf_corners.length >= 3,
-      );
-    }
-    if (shelfCorners.length >= 3) {
-      return [{ shelf_code: '', shelf_corners: shelfCorners }];
-    }
-    return [];
-  }, [shelves, shelfCorners, showRoiLayer, annotateMode]);
-
   const multiShelf = Array.isArray(shelves) && shelves.length > 1;
 
   const legendItems = [
@@ -588,19 +575,6 @@ export default function MonitorPreviewStage({
                     viewBox={`0 0 ${layout.frameW} ${layout.frameH}`}
                     preserveAspectRatio="none"
                   >
-                    {shelfOutlines.map((shelf) => (
-                      <polygon
-                        key={shelf.shelf_code || 'shelf-outline'}
-                        className="roi-shelf-outline"
-                        points={polygonToFramePoints(
-                          shelf.shelf_corners,
-                          annotationSize || frameSize,
-                          null,
-                          layout.frameW,
-                          layout.frameH,
-                        )}
-                      />
-                    ))}
                     {showRoiLayer
                       ? displayBoxes.map((box) => {
                           const state = resolveRoiState(box, {

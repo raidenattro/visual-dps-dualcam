@@ -10,6 +10,7 @@ const ROUTE_TITLES = {
   '/topology': '服务拓扑',
   '/monitor': '检测监控',
   '/aisle': '巷道标注',
+  '/legacy/annotate': '单路货框标注',
   '/live': '巷道检测',
   '/settings': '系统设置',
 };
@@ -29,6 +30,10 @@ export function usePageTitle() {
     }
     if (pathname === '/monitor' && search.includes('camera=')) {
       document.title = `检测监控 - ${APP_NAME}`;
+      return;
+    }
+    if (pathname === '/legacy/annotate' && search.includes('camera=')) {
+      document.title = `单路货框标注 - ${APP_NAME}`;
       return;
     }
     document.title = page ? `${page} - ${APP_NAME}` : APP_NAME;
