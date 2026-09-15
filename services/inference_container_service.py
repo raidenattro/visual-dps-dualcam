@@ -314,11 +314,22 @@ def start_inference_container(camera: dict, request=None) -> dict:
     if not camera_id:
         return {"error": "摄像头信息不完整"}
 
-    from services.aisle_store import require_inference_ready
+    from services.aisle_store import (
+        camera_collision_mode,
+        require_inference_ready,
+        require_legacy_inference_ready,
+    )
 
-    grouped, group_err = require_inference_ready(camera_id)
-    if group_err:
-        return {"error": group_err}
+    mode = camera_collision_mode(camera_id)
+    if mode == "dualcam":
+        grouped, group_err = require_inference_ready(camera_id)
+        if group_err:
+            return {"error": group_err}
+    else:
+        _, group_err = require_legacy_inference_ready(camera_id)
+        if group_err:
+            return {"error": group_err}
+        grouped = None
 
     stream_url = str(camera.get("url") or "").strip()
     if not stream_url:

@@ -120,6 +120,12 @@ def create_app():
         mediamtx_config_path=mediamtx_config_path,
     )
 
+    @api_router.get("/config/partition-audit")
+    async def partition_audit_api():
+        from services.camera_partition import run_partition_audit
+
+        return run_partition_audit(app_config, paths["camera_ips_file"])
+
     @api_router.get("/last_frame")
     async def last_frame():
         return get_last_frame_b64(paths["last_frame_file"])

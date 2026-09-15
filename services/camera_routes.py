@@ -149,7 +149,9 @@ def register_camera_routes(
 
     @router.post("/cameras")
     async def create_camera_api(data: dict, request: Request):
-        result = create_camera(camera_ips_file, mediamtx_config_path, data)
+        result = create_camera(
+            camera_ips_file, mediamtx_config_path, data, json_dir=json_dir
+        )
         if result.get("status") == "success" and result.get("camera"):
             cam = result["camera"]
             materialize_camera_annotation(cam.get("id") or cam.get("path"), json_dir, camera=cam)
@@ -158,7 +160,13 @@ def register_camera_routes(
 
     @router.put("/cameras/{camera_id}")
     async def update_camera_api(camera_id: str, data: dict, request: Request):
-        result = update_camera(camera_ips_file, mediamtx_config_path, camera_id, data)
+        result = update_camera(
+            camera_ips_file,
+            mediamtx_config_path,
+            camera_id,
+            data,
+            json_dir=json_dir,
+        )
         audit_from_result(request, "camera.update", "camera", camera_id, result)
         return _attach_list_items(result, probe=False)
 

@@ -623,6 +623,41 @@ def require_inference_ready(camera_id: str, json_dir: str | None = None) -> tupl
     return grouped, None
 
 
+def camera_collision_mode(camera_id: str, json_dir: str | None = None) -> str:
+    """dualcam：已编入巷道；legacy：单路 2D。"""
+    return "dualcam" if camera_group(camera_id, json_dir) else "legacy"
+
+
+def require_legacy_inference_ready(
+    camera_id: str, json_dir: str | None = None
+) -> tuple[dict | None, str | None]:
+    """单路 legacy 开推理：未成组 + cameras/<id>.json 含货框。"""
+    cid = str(camera_id or "").strip()
+    if not cid:
+        return None, "摄像头信息不完整"
+    if camera_group(cid, json_dir):
+        return None, "该摄像头已编入巷道，请使用巷道双路检测，不能按单路 2D 开推理。"
+    from services.annotation_service import camera_annotation_path, flatten_annotation_boxes
+
+    root = _json_dir(json_dir)
+    apath = camera_annotation_path(root, cid)
+    if not os.path.isfile(apath):
+        return None, (
+            "尚未配置单路货框标注，请打开该路的单路监控页完成 2D 标定并保存。"
+        )
+    try:
+        with open(apath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None, "标注文件无效，请重新保存 2D 标定。"
+    if not isinstance(data, dict):
+        return None, "标注文件无效，请重新保存 2D 标定。"
+    boxes = flatten_annotation_boxes(data)
+    if not boxes:
+        return None, "货框标注为空，请绘制货位并保存后再开智能检测。"
+    return {"camera_id": cid, "box_count": len(boxes)}, None
+
+
 def bind_group(
     aisle_id: str,
     camera_l: str,
@@ -691,6 +726,11 @@ def create_aisle_with_cameras(
     aid = str(aisle_id or "").strip()
     if not _AISLE_RE.match(aid):
         return {"error": "巷道编号仅支持字母、数字、下划线、中划线（1–64）"}
+    from services.camera_partition import aisle_id_legacy_path_conflict
+
+    id_conflict = aisle_id_legacy_path_conflict(aid, camera_file, json_dir)
+    if id_conflict:
+        return {"error": id_conflict}
     existing = load_aisle(aid, json_dir)
     if existing:
         cams = existing.get("cameras") or {}
@@ -709,11 +749,11 @@ def create_aisle_with_cameras(
         right["name"] = f"{aid} 右路"
 
     created: list[str] = []
-    r1 = create_camera(camera_file, mediamtx_config_path, left)
+    r1 = create_camera(camera_file, mediamtx_config_path, left, json_dir=json_dir)
     if r1.get("error"):
         return {"error": f"左路：{r1['error']}"}
     created.append(str((r1.get("camera") or {}).get("id") or ""))
-    r2 = create_camera(camera_file, mediamtx_config_path, right)
+    r2 = create_camera(camera_file, mediamtx_config_path, right, json_dir=json_dir)
     if r2.get("error"):
         for cid in created:
             if cid:

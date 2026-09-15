@@ -227,7 +227,13 @@ def validate_camera_payload(data: dict, existing_id: str | None = None) -> tuple
     return rec, None
 
 
-def create_camera(camera_file: str, mediamtx_config_path: str, data: dict) -> dict:
+def create_camera(
+    camera_file: str,
+    mediamtx_config_path: str,
+    data: dict,
+    *,
+    json_dir: str | None = None,
+) -> dict:
     rec, err = validate_camera_payload(data)
     if err:
         return {"error": err}
@@ -236,6 +242,13 @@ def create_camera(camera_file: str, mediamtx_config_path: str, data: dict) -> di
     if _path_taken(items, rec["path"]):
         return {"error": f"通道号已被使用: {rec['path']}"}
 
+    if json_dir is not None:
+        from services.camera_partition import legacy_path_aisle_conflict
+
+        conflict = legacy_path_aisle_conflict(rec["path"], json_dir)
+        if conflict:
+            return {"error": conflict}
+
     rec["id"] = _next_camera_id(items)
     items.append(rec)
     save_cameras(camera_file, items)
@@ -243,7 +256,14 @@ def create_camera(camera_file: str, mediamtx_config_path: str, data: dict) -> di
     return {"status": "success", "camera": rec, "items": items, "mediamtx": mtx}
 
 
-def update_camera(camera_file: str, mediamtx_config_path: str, camera_id: str, data: dict) -> dict:
+def update_camera(
+    camera_file: str,
+    mediamtx_config_path: str,
+    camera_id: str,
+    data: dict,
+    *,
+    json_dir: str | None = None,
+) -> dict:
     items = load_cameras(camera_file)
     idx = next((i for i, c in enumerate(items) if c["id"] == camera_id), -1)
     if idx < 0:
@@ -254,6 +274,15 @@ def update_camera(camera_file: str, mediamtx_config_path: str, camera_id: str, d
     new_path = str((data or {}).get("path") or old_path).strip()
     if _path_taken(items, new_path, except_id=camera_id):
         return {"error": f"通道号已被使用: {new_path}"}
+
+    if json_dir is not None:
+        from services.aisle_store import grouped_cameras
+        from services.camera_partition import legacy_path_aisle_conflict
+
+        if camera_id not in grouped_cameras(json_dir):
+            conflict = legacy_path_aisle_conflict(new_path, json_dir)
+            if conflict:
+                return {"error": conflict}
 
     merged = {**old, **(data or {}), "id": camera_id, "path": new_path}
     if _is_auto_playback_url(str(old.get("url") or ""), old_path):

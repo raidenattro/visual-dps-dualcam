@@ -49,12 +49,14 @@ _COMPOSE_CONTAINERS = (
     ("visual-dps-redis", "redis", "redis"),
     ("visual-dps-event-worker", "event_worker", "event-worker"),
     ("visual-dps-event-worker-b", "event_worker", "event-worker-b"),
+    ("visual-dps-event-worker-legacy", "event_worker", "event-worker-legacy"),
     ("visual-dps-ui", "ui", "ui"),
 )
 
 _EVENT_WORKER_SPECS = (
     ("visual-dps-event-worker", "event-worker"),
     ("visual-dps-event-worker-b", "event-worker-b"),
+    ("visual-dps-event-worker-legacy", "event-worker-legacy"),
 )
 
 
@@ -242,11 +244,26 @@ def _discover_event_workers() -> list[dict[str, Any]]:
 
 
 def _event_worker_for_camera(
-    workers: list[dict[str, Any]], camera_id: str
+    workers: list[dict[str, Any]], camera_id: str, json_dir: str | None = None
 ) -> dict[str, Any] | None:
     if not workers:
         return None
-    sid = logical_shard_id(camera_id)
+    from services.aisle_store import camera_group
+
+    cid = str(camera_id or "").strip()
+    g = camera_group(cid, json_dir)
+    if g:
+        sid = logical_shard_id(g["aisle_id"])
+        dualcam = [w for w in workers if w.get("node_id") != "event-worker-legacy"]
+        for worker in dualcam:
+            if sid in (worker.get("shards") or []):
+                return worker
+        running = [w for w in dualcam if w.get("running")]
+        return running[0] if running else (dualcam[0] if dualcam else None)
+    legacy = [w for w in workers if w.get("node_id") == "event-worker-legacy"]
+    if legacy:
+        return legacy[0]
+    sid = logical_shard_id(cid)
     for worker in workers:
         if sid in (worker.get("shards") or []):
             return worker
@@ -845,7 +862,7 @@ def build_topology_overview(
             )
         )
 
-        owner = _event_worker_for_camera(event_workers, cid)
+        owner = _event_worker_for_camera(event_workers, cid, json_dir)
         paths_out.append(
             {
                 "camera_id": cid,
@@ -889,7 +906,10 @@ def build_topology_overview(
                 },
                 "event": {
                     "worker_container": (owner["container_name"] if owner else ""),
-                    "consumer_group": POSE_STREAM_GROUP,
+                    "consumer_group": (
+                        (owner.get("env") or {}).get("POSE_STREAM_GROUP") if owner else POSE_STREAM_GROUP
+                    )
+                    or POSE_STREAM_GROUP,
                     "consumer_name": (owner["consumer_name"] if owner else ""),
                     "redis_url": redis_masked,
                     "last_pose_age_sec": last_pose_age_sec,
@@ -915,7 +935,10 @@ def build_topology_overview(
                     direction="pull",
                     protocol="redis_stream",
                     role="event",
-                    endpoint=f"XREADGROUP {POSE_STREAM_GROUP} · {key_preview or '—'}",
+                    endpoint=(
+                        f"XREADGROUP {(worker.get('env') or {}).get('POSE_STREAM_GROUP') or POSE_STREAM_GROUP}"
+                        f" · {key_preview or '—'}"
+                    ),
                     health="ok" if worker["running"] else "error",
                     meta={
                         "shards": worker.get("shards") or [],
