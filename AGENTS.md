@@ -6,15 +6,15 @@
 
 1. **不改** `/home/hqit/workspace/visual-dps` 与 `visual-dps-pick-state`（后者只读拷代码）
 2. 碰撞是 **3D `contact_slots`**（贴墙即报），不接 `pipeline.v5_gated`
-3. 标注必须勾选 **同一组**（左/右路）；未成组 **禁止开推理**
-4. 成组后分片键是 `aisle_id`，L/R 同一 worker
+3. **Dualcam**：标注必须勾选 **同一组**（左/右路）；**Legacy 单路**：未成组 + `cameras/<id>.json` 货框，走 2D 碰撞
+4. 成组后分片键是 `aisle_id`，L/R 同一 dualcam worker；单路走 `event_worker_legacy.py`（Redis group `event-workers-legacy`）
 5. 产物写本仓 `localdata/`；不走 153 离线包
 
 ## 关键路径
 
 - 几何：`dualcam/solve.py`、`dualcam/geom.py`、`dualcam/lift.py`
 - 成组/标定：`services/aisle_store.py`、`services/aisle_routes.py`
-- Worker：`event_worker.py` → `DualcamRedisWorker`（默认 `visual-dps-event-worker` + `-b`，shard 0–7 / 8–15），分片键 `aisle_id`。
+- Worker：`event_worker.py` → `DualcamRedisWorker`（`visual-dps-event-worker` + `-b`）；`event_worker_legacy.py` → `EventRedisWorker`（`visual-dps-event-worker-legacy`）
 - 标注页：`/aisle`（`web/src/pages/AisleAnnotatePage.jsx`）
 
 ## 本地测试

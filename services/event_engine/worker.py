@@ -474,6 +474,11 @@ class EventRedisWorker:
             return
         if not owns_camera(camera_id):
             return
+        # 已成组巷道由 DualcamRedisWorker 处理，legacy 2D 跳过
+        from services.aisle_store import grouped_cameras
+
+        if camera_id in grouped_cameras(self._json_dir):
+            return
 
         infer_w = int(pose.get("infer_width") or 0)
         infer_h = int(pose.get("infer_height") or 0)

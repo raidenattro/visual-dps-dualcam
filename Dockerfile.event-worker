@@ -33,6 +33,7 @@ COPY services ./services
 COPY core ./core
 COPY dualcam ./dualcam
 COPY event_worker.py ./event_worker.py
+COPY event_worker_legacy.py ./event_worker_legacy.py
 COPY app_config.json ./app_config.json
 
 CMD ["python", "event_worker.py"]

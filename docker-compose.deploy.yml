@@ -157,6 +157,39 @@ services:
       - /etc/localtime:/etc/localtime:ro
     restart: unless-stopped
 
+  visual-dps-event-worker-legacy:
+    image: visual-dps-event-worker:${VISUAL_DPS_IMAGE_TAG:-latest}
+    container_name: visual-dps-event-worker-legacy
+    command: ["python", "event_worker_legacy.py"]
+    depends_on:
+      - redis
+      - mediamtx
+    networks:
+      - visual-dps-internal
+    environment:
+      - NO_PROXY=localhost,127.0.0.1,::1,mediamtx,redis,visual-dps-ui,visual-dps-event-worker,visual-dps-event-worker-b,visual-dps-event-worker-legacy,172.16.0.0/12,172.17.0.0/16,172.18.0.0/16,10.0.0.0/8
+      - no_proxy=localhost,127.0.0.1,::1,mediamtx,redis,visual-dps-ui,visual-dps-event-worker,visual-dps-event-worker-b,visual-dps-event-worker-legacy,172.16.0.0/12,172.17.0.0/16,172.18.0.0/16,10.0.0.0/8
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - JSON_DIR=/app/localdata/json
+      - POSE_DELIVERY=stream
+      - POSE_LOGICAL_SHARD_COUNT=${POSE_LOGICAL_SHARD_COUNT:-16}
+      - POSE_STREAM_KEY_PREFIX=${POSE_STREAM_KEY_PREFIX:-pose:stream}
+      - POSE_STREAM_GROUP=event-workers-legacy
+      - POSE_STREAM_READ_COUNT=${POSE_STREAM_READ_COUNT:-16}
+      - EVENT_WORKER_SHARD_START=${EVENT_WORKER_LEGACY_SHARD_START:-0}
+      - EVENT_WORKER_SHARD_END=${EVENT_WORKER_LEGACY_SHARD_END:-15}
+      - EVENT_WORKER_CONSUMER_NAME=${EVENT_WORKER_LEGACY_CONSUMER_NAME:-legacy-a}
+      - EVENT_WORKER_ENABLE_CALLBACKS=${EVENT_WORKER_ENABLE_CALLBACKS:-1}
+      - COLLISION_LOG=${COLLISION_LOG:-0}
+      - TZ=${TZ:-Asia/Shanghai}
+      - RUNTIME_CONFIG_FILE=/app/localdata/runtime_config.json
+    volumes:
+      - ./app_config.json:/app/app_config.json:ro
+      - ./localdata:/app/localdata
+      - /etc/localtime:/etc/localtime:ro
+    restart: unless-stopped
+
 networks:
   visual-dps-internal:
     name: visual-dps-internal
