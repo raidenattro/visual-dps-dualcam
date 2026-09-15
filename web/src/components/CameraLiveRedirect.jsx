@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Navigate, useParams } from 'react-router-dom';
 import { apiGet } from '../api/client.js';
-import { aisleLivePath } from '../lib/aisleNavigation.js';
+import { aisleLivePath, cameraMonitorPath } from '../lib/aisleNavigation.js';
 import { formatUserError } from '../lib/userFacingText.js';
 
 /** 旧 /camera/:id 书签 → 已编组则进巷道直播，否则回总览。 */
@@ -23,8 +23,9 @@ export default function CameraLiveRedirect() {
         if (cancelled) return;
         const aisleId = res?.aisle?.aisle_id;
         const live = aisleLivePath(aisleId);
-        setTarget(live || '/');
-        if (!live && res?.error) setErr(formatUserError(res.error));
+        const monitor = cameraMonitorPath({ aisleId, cameraId: cid });
+        setTarget(live || monitor || '/');
+        if (!live && !monitor && res?.error) setErr(formatUserError(res.error));
       } catch (e) {
         if (!cancelled) {
           setTarget('/');

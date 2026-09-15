@@ -17,6 +17,8 @@ export function formatUserError(message) {
   };
   if (exact[lower]) return exact[lower];
 
+  if (/已编入巷道/.test(raw)) return '该摄像头已编入巷道，请使用巷道检测';
+  if (/单路货框标注|货框标注为空/.test(raw)) return raw;
   if (/路径已存在/.test(raw)) return '该通道编号已被使用，请换一个';
   if (/path 不能为空|通道.*空/.test(raw)) return '请填写通道编号';
   if (/path 仅支持|通道编号/.test(raw)) return '通道编号仅支持字母、数字、下划线、中划线';
