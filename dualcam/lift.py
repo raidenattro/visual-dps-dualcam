@@ -23,6 +23,25 @@ ARM_CONF_JOINTS = frozenset({LELB, RELB, LWRIST, RWRIST})
 PAIR_GAP_MAX = 0.18
 JOINT_GAP_MAX = 0.20
 _PAIR_TORSO = (5, 6, 11, 12)
+LSHO, RSHO = 5, 6
+LHIP, RHIP = 11, 12
+LKNE, RKNE = 13, 14
+LANK, RANK = 15, 16
+# 方案 A：先立体锚定躯干，四肢共享肩/髋/质心深度，禁止 ray_plane 抬 limb
+TORSO_LIFT_JOINTS = _PAIR_TORSO
+LIMB_LIFT_JOINTS = frozenset({LELB, RELB, LWRIST, RWRIST, LKNE, RKNE, LANK, RANK})
+LIMB_ANCHOR = {
+    LELB: LSHO,
+    LWRIST: LSHO,
+    RELB: RSHO,
+    RWRIST: RSHO,
+    LKNE: LHIP,
+    LANK: LHIP,
+    RKNE: RHIP,
+    RANK: RHIP,
+}
+# 大 gap 时仍用双路加权交会中点，不再单路 point_on_ray 各抬各的深度
+JOINT_GAP_LOOSE_MAX = 0.45
 _PAIR_JOINTS = _PAIR_TORSO + (LWRIST, RWRIST)
 PAIR_MIN_VIS = 10
 PAIR_MIN_JOINTS = 3
@@ -171,6 +190,211 @@ def lift_point(
         hit = ray_plane(uv_r, cams["R"], plane) if plane is not None else None
         return hit, None, "Rmono" if hit is not None else None
     return None, None, None
+
+
+def _as3(p) -> np.ndarray | None:
+    if p is None or len(p) < 3:
+        return None
+    return np.asarray(p[:3], float)
+
+
+def _stereo_weighted(
+    uv_l: np.ndarray,
+    sc_l: float,
+    sc_r: float,
+    uv_r: np.ndarray,
+    cams: dict,
+    *,
+    conf_power: float,
+) -> tuple[np.ndarray, float, str]:
+    p1, p2, g = triangulate_ends(uv_l, uv_r, cams)
+    wl, wr = conf_weights(sc_l, sc_r, conf_power)
+    p = (wl * p1 + wr * p2) / (wl + wr)
+    if abs(sc_l - sc_r) < CONF_MARGIN:
+        src = "stereo"
+    else:
+        src = "L" if sc_l >= sc_r else "R"
+    return p, g, src
+
+
+def _lift_torso_joint(
+    uv_l: np.ndarray,
+    sc_l: float,
+    uv_r: np.ndarray,
+    sc_r: float,
+    cams: dict,
+    plane: dict | None,
+    prev: np.ndarray | None,
+) -> tuple[np.ndarray | None, float | None, str | None]:
+    sl, sr = float(sc_l), float(sc_r)
+    ok_l, ok_r = sl >= KPT_MIN, sr >= KPT_MIN
+    if ok_l and ok_r:
+        p, g, src = _stereo_weighted(uv_l, sl, sr, uv_r, cams, conf_power=CONF_POWER)
+        return p, g, src
+    if ok_l:
+        if prev is not None:
+            return point_on_ray(uv_l, cams["L"], prev), None, "Lhold"
+        hit = ray_plane(uv_l, cams["L"], plane) if plane is not None else None
+        return hit, None, "Lmono" if hit is not None else None
+    if ok_r:
+        if prev is not None:
+            return point_on_ray(uv_r, cams["R"], prev), None, "Rhold"
+        hit = ray_plane(uv_r, cams["R"], plane) if plane is not None else None
+        return hit, None, "Rmono" if hit is not None else None
+    return None, None, None
+
+
+def _lift_limb_joint(
+    uv_l: np.ndarray,
+    sc_l: float,
+    uv_r: np.ndarray,
+    sc_r: float,
+    cams: dict,
+    prev: np.ndarray | None,
+    depth_ref: np.ndarray | None,
+    *,
+    conf_power: float = ARM_CONF_POWER,
+) -> tuple[np.ndarray | None, float | None, str | None]:
+    sl, sr = float(sc_l), float(sc_r)
+    ok_l, ok_r = sl >= KPT_MIN, sr >= KPT_MIN
+    ref = depth_ref if depth_ref is not None else prev
+    if ok_l and ok_r:
+        p1, p2, g = triangulate_ends(uv_l, uv_r, cams)
+        if g <= JOINT_GAP_MAX:
+            p, g, src = _stereo_weighted(uv_l, sl, sr, uv_r, cams, conf_power=conf_power)
+            return p, g, src
+        if g <= JOINT_GAP_LOOSE_MAX:
+            p, g, src = _stereo_weighted(uv_l, sl, sr, uv_r, cams, conf_power=conf_power)
+            return p, g, src
+        if ref is not None:
+            winner_l = sl >= sr
+            uv, cam = (uv_l, cams["L"]) if winner_l else (uv_r, cams["R"])
+            src = "L" if winner_l else "R"
+            return point_on_ray(uv, cam, ref), g, src
+        p, g, src = _stereo_weighted(uv_l, sl, sr, uv_r, cams, conf_power=conf_power)
+        return p, g, src
+    if ok_l:
+        if ref is not None:
+            return point_on_ray(uv_l, cams["L"], ref), None, "Lhold"
+        return None, None, None
+    if ok_r:
+        if ref is not None:
+            return point_on_ray(uv_r, cams["R"], ref), None, "Rhold"
+        return None, None, None
+    return None, None, None
+
+
+def _lift_extremity_joint(
+    uv_l: np.ndarray,
+    sc_l: float,
+    uv_r: np.ndarray,
+    sc_r: float,
+    cams: dict,
+    plane: dict | None,
+    prev: np.ndarray | None,
+    depth_ref: np.ndarray | None,
+) -> tuple[np.ndarray | None, float | None, str | None]:
+    """头/颈等：优先立体，单路用躯干质心深度而非墙平面。"""
+    sl, sr = float(sc_l), float(sc_r)
+    ok_l, ok_r = sl >= KPT_MIN, sr >= KPT_MIN
+    ref = depth_ref if depth_ref is not None else prev
+    if ok_l and ok_r:
+        p1, p2, g = triangulate_ends(uv_l, uv_r, cams)
+        if g <= JOINT_GAP_LOOSE_MAX:
+            return _stereo_weighted(uv_l, sl, sr, uv_r, cams, conf_power=CONF_POWER)
+        if ref is not None:
+            return 0.5 * (p1 + p2), g, "stereo"
+        return _stereo_weighted(uv_l, sl, sr, uv_r, cams, conf_power=CONF_POWER)
+    if ok_l and ref is not None:
+        return point_on_ray(uv_l, cams["L"], ref), None, "Lhold"
+    if ok_r and ref is not None:
+        return point_on_ray(uv_r, cams["R"], ref), None, "Rhold"
+    return lift_point(uv_l, sc_l, uv_r, sc_r, cams, plane, prev, conf_power=CONF_POWER)
+
+
+def _torso_centroid_from_xyz(xyz: list) -> np.ndarray | None:
+    pts = [_as3(xyz[ji]) for ji in TORSO_LIFT_JOINTS if ji < len(xyz)]
+    pts = [p for p in pts if p is not None]
+    if not pts:
+        return None
+    return np.mean(pts, axis=0)
+
+
+def lift_person17(
+    kl: np.ndarray,
+    sl: np.ndarray,
+    kr: np.ndarray | None,
+    sr: np.ndarray | None,
+    cams: dict,
+    plane: dict | None,
+    get_prev: Any,
+    *,
+    has_r: bool,
+    skip_joint: frozenset[int] | None = None,
+) -> tuple[list[list[float] | None], list[str | None]]:
+    """两阶段抬升 17 点：躯干 stereo 锚点 → 四肢共享 depth_ref。"""
+    skip = skip_joint or frozenset()
+    xyz: list[list[float] | None] = [None] * 17
+    srcs: list[str | None] = [None] * 17
+
+    def _uv_score(ji: int) -> tuple[np.ndarray, float, np.ndarray, float]:
+        uv_l = np.asarray(kl[ji][:2], float)
+        sc_l = float(sl[ji])
+        if has_r and kr is not None and sr is not None:
+            return uv_l, sc_l, np.asarray(kr[ji][:2], float), float(sr[ji])
+        return uv_l, sc_l, uv_l, 0.0
+
+    if not has_r:
+        for ji in range(17):
+            if ji in skip:
+                continue
+            uv_l, sc_l, uv_r, sc_r = _uv_score(ji)
+            prev = get_prev(ji)
+            power = ARM_CONF_POWER if ji in ARM_CONF_JOINTS else CONF_POWER
+            p, _g, src = lift_point(
+                uv_l, sc_l, uv_r, sc_r, cams, plane, prev, conf_power=power,
+            )
+            srcs[ji] = src
+            if p is not None:
+                xyz[ji] = [float(p[0]), float(p[1]), float(p[2])]
+        return xyz, srcs
+
+    for ji in TORSO_LIFT_JOINTS:
+        if ji in skip:
+            continue
+        uv_l, sc_l, uv_r, sc_r = _uv_score(ji)
+        prev = get_prev(ji)
+        p, _g, src = _lift_torso_joint(uv_l, sc_l, uv_r, sc_r, cams, plane, prev)
+        srcs[ji] = src
+        if p is not None:
+            xyz[ji] = [float(p[0]), float(p[1]), float(p[2])]
+
+    torso_c = _torso_centroid_from_xyz(xyz)
+
+    for ji in range(17):
+        if ji in skip or ji in TORSO_LIFT_JOINTS:
+            continue
+        uv_l, sc_l, uv_r, sc_r = _uv_score(ji)
+        prev = get_prev(ji)
+        anchor_ji = LIMB_ANCHOR.get(ji)
+        depth_ref = None
+        if anchor_ji is not None and anchor_ji < len(xyz):
+            depth_ref = _as3(xyz[anchor_ji])
+        if depth_ref is None:
+            depth_ref = torso_c
+        if ji in LIMB_LIFT_JOINTS:
+            p, _g, src = _lift_limb_joint(
+                uv_l, sc_l, uv_r, sc_r, cams, prev, depth_ref, conf_power=ARM_CONF_POWER,
+            )
+        else:
+            p, _g, src = _lift_extremity_joint(
+                uv_l, sc_l, uv_r, sc_r, cams, plane, prev, depth_ref,
+            )
+        srcs[ji] = src
+        if p is not None:
+            xyz[ji] = [float(p[0]), float(p[1]), float(p[2])]
+
+    return xyz, srcs
 
 
 def _torso_xy(k, s) -> np.ndarray | None:
