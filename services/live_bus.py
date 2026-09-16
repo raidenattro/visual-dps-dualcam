@@ -15,13 +15,12 @@ import redis.asyncio as aioredis
 
 from services.event_bus import EVENT_CHANNEL_PREFIX, get_event_snapshot
 from services.pose_bus import POSE_CHANNEL_PREFIX, get_pose_snapshot
+from dualcam.pose_timing import EVENT_SKELETON_STALE_S
 
 logger = logging.getLogger(__name__)
 
 LIVE_SCHEMA_VERSION = 2
 SSE_QUEUE_MAX = max(8, int(os.environ.get("LIVE_SSE_QUEUE_MAX", "32")))
-# worker 平滑骨架相对 pose 允许的滞后（秒）。与 dualcam.skel3d_smooth.EVENT_SKELETON_STALE_S 一致
-EVENT_SKELETON_STALE_S = 0.40
 
 
 def redis_url() -> str:

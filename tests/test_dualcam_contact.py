@@ -103,7 +103,7 @@ def test_process_pair_empty_without_prior_hold(calib):
 
 def test_hold_keeps_then_clears_like_dump_skel3d():
     """dump 25fps：闪断沿用 0.32s（8 帧），第 9 帧空才丢掉。"""
-    from dualcam.skel3d_smooth import DESIGN_DT, HOLD_SEC
+    from dualcam.pose_timing import DESIGN_DT, HOLD_SEC
 
     proc = DualcamProcessor({"aisle_id": "x", "solved": {"ok": False}, "cameras": {}})
     xyz = [[0.0, 1.0, 1.0] for _ in range(17)]

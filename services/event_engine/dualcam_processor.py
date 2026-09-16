@@ -34,7 +34,7 @@ from services.dualcam_config import (
     get_dualcam_section,
     scale_keypoints_to_calib,
 )
-from dualcam.skel3d_smooth import HOLD_SEC, LivePose2DSmoother, LivePose3DSmoother, pose_time
+from dualcam.pose_timing import HOLD_SEC, pose_time
 
 
 def _kpt_uv_score(k: np.ndarray, s: np.ndarray, idx: int) -> tuple[np.ndarray, float]:
@@ -249,8 +249,6 @@ class DualcamProcessor:
         self._holds: list[tuple[dict, float, np.ndarray]] = []
         self._last_skel_l: list[dict[str, Any]] = []
         self._last_skel_r: list[dict[str, Any]] = []
-        self._sm2d = {"L": LivePose2DSmoother(), "R": LivePose2DSmoother()}
-        self._sm3d = LivePose3DSmoother()
         cams = aisle.get("cameras") or {}
         self.alarm_min_consecutive_frames = 3
         self._box_consecutive_hits: dict[str, int] = {}
@@ -527,9 +525,6 @@ class DualcamProcessor:
         self._prefer = []
         self._last_skel_l = []
         self._last_skel_r = []
-        self._sm2d["L"].reset()
-        self._sm2d["R"].reset()
-        self._sm3d.reset()
 
     def _apply_hold(self, people: list[dict[str, Any]], t: float = 0.0) -> list[dict[str, Any]]:
         """配不上时沿用上一帧 3D，最长 HOLD_SEC（dump 8 帧@25fps=0.32s）。"""
@@ -577,27 +572,15 @@ class DualcamProcessor:
             self._prefer = []
         return out
 
-    def _smooth_pose(self, role: str, pose: dict) -> dict:
-        """推理像素上做因果 2D 短窗，分数不动。"""
-        t = pose_time(pose, int(pose.get("frame_idx") or 0))
-        out = dict(pose)
-        out["persons"] = self._sm2d[role].update(t, pose.get("persons") or [])
-        return out
-
     def process_single(
         self,
         role: str,
         pose: dict,
         *,
         apply_hold: bool = True,
-        # 0902：直播关掉 2D/3D 窗平滑换吞吐。贴墙仍用当帧抬点。
-        smooth_2d: bool = False,
-        smooth_3d: bool = False,
     ) -> dict[str, Any]:
         """对侧未到时：2D 跟着当前检测走；3D 用上一帧深度沿射线跟上，不冻帧。"""
         role = str(role or "").strip().upper() or "L"
-        if smooth_2d:
-            pose = self._smooth_pose(role, pose)
         calib = self.calib_l if role == "L" else self.calib_r
         scaled, meta = _scale_pose(pose, *calib)
         frame_idx = int(pose.get("frame_idx") or 0)
@@ -611,8 +594,6 @@ class DualcamProcessor:
             people, idx_l, idx_r = self._lift_follow(fl, fr)
             if apply_hold:
                 people = self._apply_hold(people, pose_time(pose, frame_idx))
-            if smooth_3d:
-                people = self._sm3d.update(pose_time(pose, frame_idx), people, self.plane)
             self._prev_xyz = self._new_prev
         sk_l, sk_r = self._overlay_follow(
             pose if role == "L" else None,
@@ -672,16 +653,10 @@ class DualcamProcessor:
         self,
         pose_l: dict,
         pose_r: dict,
-        *,
-        smooth_2d: bool = False,
-        smooth_3d: bool = False,
     ) -> dict[str, Any]:
         """两路 PoseFrame → 贴墙 token。无立体则空报警。"""
         frame_idx = int(pose_l.get("frame_idx") or pose_r.get("frame_idx") or 0)
         t = pose_time(pose_l, frame_idx) or pose_time(pose_r, frame_idx)
-        if smooth_2d:
-            pose_l = self._smooth_pose("L", pose_l)
-            pose_r = self._smooth_pose("R", pose_r)
         pose_ls, meta_l = _scale_pose(pose_l, *self.calib_l)
         pose_rs, meta_r = _scale_pose(pose_r, *self.calib_r)
         if not self.ready():
@@ -703,8 +678,6 @@ class DualcamProcessor:
         if not pairs:
             followed, idx_l, idx_r = self._lift_follow(fl, fr)
             held = self._apply_hold(followed, t)
-            if smooth_3d:
-                held = self._sm3d.update(t, held, self.plane)
             self._prev_xyz = self._new_prev
             sk_l, sk_r = self._overlay_follow(
                 pose_l, pose_r, idx_l, idx_r, have_l=True, have_r=True,
@@ -753,8 +726,6 @@ class DualcamProcessor:
         self._prefer = new_prefer
         self._prev_xyz = self._new_prev
         persons_3d = self._apply_hold(persons_3d, t)
-        if smooth_3d:
-            persons_3d = self._sm3d.update(t, persons_3d, self.plane)
         sk_l, sk_r = self._overlay_follow(
             pose_l, pose_r, [i for i, _, _ in pairs], [j for _, j, _ in pairs],
             have_l=True, have_r=True,
