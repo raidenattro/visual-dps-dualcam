@@ -14,6 +14,9 @@ from dualcam.geom import (
     wall_by_id,
 )
 from dualcam.lift import (
+    ARM_CONF_JOINTS,
+    ARM_CONF_POWER,
+    CONF_POWER,
     LELB,
     LWRIST,
     PREFER_PX,
@@ -21,7 +24,7 @@ from dualcam.lift import (
     RWRIST,
     _torso_xy,
     keypoints_to_ks,
-    lift_person17,
+    lift_point,
     nms_indices,
     pick_pairs,
     wall_plane_from_solved,
@@ -273,26 +276,27 @@ class DualcamProcessor:
         srcs: list[str | None] = [None] * 17
         wrist_tokens: dict[int, list[str]] = {LWRIST: [], RWRIST: []}
         has_r = kr is not None and sr is not None
-        # 五官 3D 不参与贴墙且易三角化到地面；与 3D 窗一致，整帧不抬、不下发
-        skip_joints = FACE_JOINTS
-
-        def _get_prev(ji: int) -> np.ndarray | None:
+        for ji in range(17):
+            if ji in FACE_JOINTS:
+                continue
+            uv_l, sc_l = _kpt_uv_score(kl, sl, ji)
+            if has_r:
+                uv_r, sc_r = _kpt_uv_score(kr, sr, ji)
+            else:
+                uv_r, sc_r = uv_l, 0.0
+            prev = None
             if prev_xyz is not None and ji < len(prev_xyz) and prev_xyz[ji]:
-                return np.asarray(prev_xyz[ji][:3], float)
-            p = self._prev_xyz.get((*prev_key, ji))
-            return np.asarray(p, float) if p is not None else None
-
-        xyz, srcs = lift_person17(
-            kl,
-            sl,
-            kr,
-            sr,
-            self.cams,
-            self.plane,
-            _get_prev,
-            has_r=has_r,
-            skip_joint=skip_joints,
-        )
+                prev = np.asarray(prev_xyz[ji][:3], float)
+            if prev is None:
+                prev = self._prev_xyz.get((*prev_key, ji))
+            power = ARM_CONF_POWER if ji in ARM_CONF_JOINTS else CONF_POWER
+            p, _g, src = lift_point(
+                uv_l, sc_l, uv_r, sc_r, self.cams, self.plane, prev, conf_power=power,
+            )
+            srcs[ji] = src
+            if p is None:
+                continue
+            xyz[ji] = [float(p[0]), float(p[1]), float(p[2])]
         self._clamp_flying_wrists(xyz, srcs)
         for ji in range(17):
             if xyz[ji]:
