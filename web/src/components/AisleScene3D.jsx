@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { meshCells, makeLayerMesh, DEFAULT_LAYER_PITCH } from '../lib/dualcamGeom.js';
-import { AISLE_3D_EDGES } from '../lib/cocoSkeleton.js';
+import { AISLE_3D_EDGES, AISLE_3D_HEAD_JOINTS } from '../lib/cocoSkeleton.js';
 
 /** 与 pick-state dualcam_player 一致：墙1 绿、墙2 蓝（不是标注页的橙/青） */
 const WALL_FILL = { 1: 0x3d8a5a, 2: 0x2f6f9f };
@@ -127,6 +127,10 @@ function updateSkelRig(rig, people, alarmSet) {
     let n = 0;
     for (let i = 0; i < 17; i += 1) {
       const m = slot.joints[i];
+      if (AISLE_3D_HEAD_JOINTS.has(i)) {
+        m.visible = false;
+        continue;
+      }
       const pt = xyz[i];
       if (!pt || pt.length < 3) {
         m.visible = false;
