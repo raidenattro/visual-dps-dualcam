@@ -14,9 +14,6 @@ from dualcam.geom import (
     wall_by_id,
 )
 from dualcam.lift import (
-    ARM_CONF_JOINTS,
-    ARM_CONF_POWER,
-    CONF_POWER,
     LELB,
     LWRIST,
     PREFER_PX,
@@ -24,7 +21,7 @@ from dualcam.lift import (
     RWRIST,
     _torso_xy,
     keypoints_to_ks,
-    lift_point,
+    lift_person17,
     nms_indices,
     pick_pairs,
     wall_plane_from_solved,
@@ -278,42 +275,37 @@ class DualcamProcessor:
         srcs: list[str | None] = [None] * 17
         wrist_tokens: dict[int, list[str]] = {LWRIST: [], RWRIST: []}
         has_r = kr is not None and sr is not None
-        for ji in range(17):
-            uv_l, sc_l = _kpt_uv_score(kl, sl, ji)
-            if has_r:
-                uv_r, sc_r = _kpt_uv_score(kr, sr, ji)
-            else:
-                uv_r, sc_r = uv_l, 0.0
-            # 单路（对侧分数为 0）不抬五官，避免贴墙射线拉成「射向货架」的长骨线
-            if ji in FACE_JOINTS and (not has_r or sc_l <= 0.0 or sc_r <= 0.0):
-                continue
-            prev = None
+        # 五官 3D 不参与贴墙且易三角化到地面；与 3D 窗一致，整帧不抬、不下发
+        skip_joints = FACE_JOINTS
+
+        def _get_prev(ji: int) -> np.ndarray | None:
             if prev_xyz is not None and ji < len(prev_xyz) and prev_xyz[ji]:
-                prev = np.asarray(prev_xyz[ji][:3], float)
-            if prev is None:
-                prev = self._prev_xyz.get((*prev_key, ji))
-            power = ARM_CONF_POWER if ji in ARM_CONF_JOINTS else CONF_POWER
-            p, _g, src = lift_point(
-                uv_l, sc_l, uv_r, sc_r, self.cams, self.plane, prev, conf_power=power,
-            )
-            srcs[ji] = src
-            if p is None:
-                continue
-            xyz[ji] = [float(p[0]), float(p[1]), float(p[2])]
-        raw_wrist: dict[int, np.ndarray] = {}
-        for ji in (LWRIST, RWRIST):
-            p = xyz[ji] if ji < len(xyz) else None
-            if p:
-                raw_wrist[ji] = np.asarray(p[:3], float)
+                return np.asarray(prev_xyz[ji][:3], float)
+            p = self._prev_xyz.get((*prev_key, ji))
+            return np.asarray(p, float) if p is not None else None
+
+        xyz, srcs = lift_person17(
+            kl,
+            sl,
+            kr,
+            sr,
+            self.cams,
+            self.plane,
+            _get_prev,
+            has_r=has_r,
+            skip_joint=skip_joints,
+        )
         self._clamp_flying_wrists(xyz, srcs)
         for ji in range(17):
             if xyz[ji]:
                 self._new_prev[(*prev_key, ji)] = np.asarray(xyz[ji], float)
         for ji in (LWRIST, RWRIST):
-            p = raw_wrist.get(ji)
-            if p is None:
+            p = xyz[ji] if ji < len(xyz) else None
+            if not p:
                 continue
-            hits = contact_slots(p, self.meshes, self.solved, self.contact_m)
+            hits = contact_slots(
+                np.asarray(p[:3], float), self.meshes, self.solved, self.contact_m,
+            )
             toks: list[str] = []
             for hit in hits:
                 shelf = str(hit.get("shelf_code") or "").strip() or wall_shelf_code(
