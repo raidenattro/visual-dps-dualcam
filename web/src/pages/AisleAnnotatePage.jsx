@@ -747,21 +747,20 @@ export default function AisleAnnotatePage() {
             c.stroke();
           };
           const toUv = (r, col) => projectPix(mesh.vertices[vertIndex(rows, cols, r, col)], cam);
-          // 3D slot_meshes 投影为唯一真值（与碰撞、geom 文档一致），不用 2D quad 插值层线
+          const viewWall = walls.find((w) => Number(w.wall_id) === Number(mesh.wall_id));
+          // 3D 投影为真值；该路已标四角时外框由 quad 描边，跳过最外圈网格线避免「四套框」
+          const skipOuter = viewWall?.quad?.length >= 4;
           for (let j = 0; j <= cols; j++) {
+            if (skipOuter && (j === 0 || j === cols)) continue;
             const pts = [];
             for (let i = 0; i <= rows; i++) pts.push(toUv(i, j));
             strokeUv(pts, onWall ? pal.dim : pal.dim, onWall ? 1.2 : 0.9);
           }
           for (let i = 0; i <= rows; i++) {
+            if (skipOuter && (i === 0 || i === rows)) continue;
             const pts = [];
             for (let j = 0; j <= cols; j++) pts.push(toUv(i, j));
-            const inner = i > 0 && i < rows;
-            strokeUv(
-              pts,
-              onWall ? (inner ? pal.mesh : pal.line) : pal.dim,
-              onWall ? (inner ? 2.4 : 1.4) : 1.1,
-            );
+            strokeUv(pts, onWall ? pal.mesh : pal.dim, onWall ? 2.4 : 1.1);
           }
           for (const cell of meshCells(mesh)) {
             const a = projectPix(cell.corners[0], cam);
