@@ -222,6 +222,22 @@ function hasGrabbedFrames(camL, camR, frameAt, cameras) {
   return Boolean(lCam?.last_frame_at && rCam?.last_frame_at);
 }
 
+/** 是否尚未在本巷道做过标定/抽帧基线（仅此时允许自动抽帧一次）。 */
+function aisleNeedsAutoGrab(aisle) {
+  if (!aisle || typeof aisle !== 'object') return false;
+  if (aisle.solved?.ok) return false;
+  if ((aisle.slot_meshes || []).length > 0) return false;
+  const req = requiredWallIds(aisle);
+  for (const role of ['L', 'R']) {
+    const walls = aisle.views?.[role]?.walls || [];
+    for (const w of walls) {
+      if (!req.includes(Number(w.wall_id))) continue;
+      if ((w.quad || []).length > 0) return false;
+    }
+  }
+  return true;
+}
+
 function annotateSteps(aisle, { grouped, frameAt, camL, camR, dirty, cameras = [] }) {
   const req = requiredWallIds(aisle);
   const quadsOk = req.every((id) => viewHasWallQuad(aisle, 'L', id) && viewHasWallQuad(aisle, 'R', id));
@@ -403,6 +419,7 @@ export default function AisleAnnotatePage() {
 
   const grabStills = async (lId = camL, rId = camR, aisleState = stateRef.current) => {
     const grabGen = loadGenRef.current;
+    const editSnapAtGrab = editGen.current;
     const targetId = String(aisleIdRef.current || aisleId).trim();
     if (!targetId || String(aisleState?.aisle_id || '').trim() !== targetId) return;
     const targets = [
@@ -460,19 +477,38 @@ export default function AisleAnnotatePage() {
         if (grabGen !== loadGenRef.current || targetId !== aisleIdRef.current) return;
         if (sized?.status === 'success' && sized.aisle) {
           if (String(sized.aisle.aisle_id || '') !== targetId) return;
-          applyAisle(sized.aisle);
           const lsz = sized.aisle.views?.L?.image_size;
           const rsz = sized.aisle.views?.R?.image_size;
           const dim = (s) => (Array.isArray(s) ? `${s[0]}×${s[1]}` : '');
-          if (sized.size_changed) {
+          const hadLocalEdits = editGen.current !== editSnapAtGrab;
+          if (hadLocalEdits) {
+            const cur = stateRef.current;
+            const merged = structuredClone(cur);
+            merged.views = sized.aisle.views;
+            if (sized.size_changed) {
+              merged.solved = sized.aisle.solved;
+            }
+            stateRef.current = merged;
+            setState(merged);
+            setDirty(true);
             showToast(
-              sized.aisle.solved?.ok
-                ? `已按实际画面更新标定像素（左 ${dim(lsz)} · 右 ${dim(rsz)}），反解已同步缩放。`
-                : `已按实际画面更新标定像素（左 ${dim(lsz)} · 右 ${dim(rsz)}）。若已反解请再点一次反解。`,
-              'ok',
+              sized.size_changed
+                ? `已更新静止画面（左 ${dim(lsz)} · 右 ${dim(rsz)}），未保存的标定仍保留，请点保存`
+                : `已更新静止画面，未保存的标定仍保留，请点保存`,
+              'warn',
             );
-          } else if (!errs.length) {
-            setMsg(`已抽取静止画面（左 ${dim(lsz)} · 右 ${dim(rsz)}），可在图上标墙四角`);
+          } else {
+            applyAisle(sized.aisle);
+            if (sized.size_changed) {
+              showToast(
+                sized.aisle.solved?.ok
+                  ? `已按实际画面更新标定像素（左 ${dim(lsz)} · 右 ${dim(rsz)}），反解已同步缩放。`
+                  : `已按实际画面更新标定像素（左 ${dim(lsz)} · 右 ${dim(rsz)}）。若已反解请再点一次反解。`,
+                'ok',
+              );
+            } else if (!errs.length) {
+              setMsg(`已抽取静止画面（左 ${dim(lsz)} · 右 ${dim(rsz)}），可在图上标墙四角`);
+            }
           }
         } else if (sized?.error) {
           errs.push(formatUserError(sized.error));
@@ -488,16 +524,16 @@ export default function AisleAnnotatePage() {
 
   const autoGrabKeyRef = useRef('');
   useEffect(() => {
-    if (!grouped || !aisleId || grabbing || !isAisleReady()) return;
+    if (!grouped || !aisleId || grabbing || dirty || !isAisleReady()) return;
     const key = `${aisleId}:${camL}:${camR}`;
-    if (hasGrabbedFrames(camL, camR, frameAt, cameras)) {
+    if (!aisleNeedsAutoGrab(stateRef.current)) {
       autoGrabKeyRef.current = key;
       return;
     }
     if (autoGrabKeyRef.current === key) return;
     autoGrabKeyRef.current = key;
     grabStills(camL, camR, stateRef.current);
-  }, [aisleId, camL, camR, grouped, grabbing, frameAt, cameras]);
+  }, [aisleId, camL, camR, grouped, grabbing, dirty]);
 
   const loadAisle = async (id, { quiet = false, gen = loadGenRef.current } = {}) => {
     try {
