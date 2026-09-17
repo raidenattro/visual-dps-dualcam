@@ -154,7 +154,12 @@ def register_camera_routes(
         )
         if result.get("status") == "success" and result.get("camera"):
             cam = result["camera"]
-            materialize_camera_annotation(cam.get("id") or cam.get("path"), json_dir, camera=cam)
+            materialize_camera_annotation(
+                cam.get("id") or cam.get("path"),
+                json_dir,
+                camera=cam,
+                camera_ips_file=camera_ips_file,
+            )
         audit_from_result(request, "camera.create", "camera", data.get("path") or data.get("id", ""), result)
         return _attach_list_items(result, probe=False)
 
@@ -186,14 +191,21 @@ def register_camera_routes(
             json_dir,
             default_json_file,
             camera=found["camera"],
+            camera_ips_file=camera_ips_file,
         )
         if result.get("error") == "annotation not found":
-            materialize_camera_annotation(camera_id, json_dir, camera=found["camera"])
+            materialize_camera_annotation(
+                camera_id,
+                json_dir,
+                camera=found["camera"],
+                camera_ips_file=camera_ips_file,
+            )
             result = load_camera_annotation(
                 camera_id,
                 json_dir,
                 default_json_file,
                 camera=found["camera"],
+                camera_ips_file=camera_ips_file,
             )
         if result.get("status") == "success":
             from core.state import STATE
@@ -207,7 +219,13 @@ def register_camera_routes(
         if found.get("error"):
             audit_from_result(request, "annotation.save", "camera", camera_id, found)
             return found
-        result = save_camera_annotation(data, camera_id, json_dir)
+        result = save_camera_annotation(
+            data,
+            camera_id,
+            json_dir,
+            camera=found["camera"],
+            camera_ips_file=camera_ips_file,
+        )
         audit_from_result(request, "annotation.save", "camera", camera_id, result)
         return result
 

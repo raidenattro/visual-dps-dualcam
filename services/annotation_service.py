@@ -5,25 +5,43 @@ import os
 from datetime import datetime
 
 from core.state import STATE
+from services.camera_annotation_paths import (
+    camera_annotation_path,
+    existing_camera_annotation_path,
+    legacy_id_annotation_path,
+)
+
+# 兼容旧 import
+__all__ = [
+    "camera_annotation_path",
+    "delete_camera_annotation",
+    "materialize_camera_annotation",
+    "ensure_camera_annotation_file",
+    "save_camera_annotation",
+    "load_camera_annotation",
+]
 
 
-def camera_annotation_path(json_dir: str, camera_id: str) -> str:
-    cid = str(camera_id or "").strip()
-    if not cid:
-        return ""
-    return os.path.join(json_dir, "cameras", f"{cid}.json")
-
-
-def delete_camera_annotation(camera_id: str, json_dir: str) -> bool:
+def delete_camera_annotation(
+    camera_id: str,
+    json_dir: str,
+    camera: dict | None = None,
+    camera_ips_file: str | None = None,
+) -> bool:
     """删除该摄像头的标注 JSON。文件不存在不算失败。"""
-    path = camera_annotation_path(json_dir, camera_id)
-    if not path or not os.path.isfile(path):
-        return False
-    try:
-        os.remove(path)
-        return True
-    except OSError:
-        return False
+    removed = False
+    for path in (
+        camera_annotation_path(json_dir, camera_id, camera, camera_ips_file),
+        legacy_id_annotation_path(json_dir, camera_id),
+    ):
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            os.remove(path)
+            removed = True
+        except OSError:
+            pass
+    return removed
 
 
 def _read_annotation_file(json_path: str):
@@ -54,14 +72,15 @@ def _source_info_matches_camera(source_info: dict, camera: dict, camera_id: str)
 
 
 def _find_latest_annotation_for_camera(json_dir: str, camera: dict, camera_id: str) -> str:
-    if not os.path.isdir(json_dir):
+    cam_dir = os.path.join(json_dir, "cameras")
+    if not os.path.isdir(cam_dir):
         return ""
     best_path = ""
     best_mtime = 0.0
-    for name in os.listdir(json_dir):
+    for name in os.listdir(cam_dir):
         if not name.endswith(".json") or name == "STATE.json":
             continue
-        path = os.path.join(json_dir, name)
+        path = os.path.join(cam_dir, name)
         if not os.path.isfile(path):
             continue
         data = _read_annotation_file(path)
@@ -94,16 +113,17 @@ def materialize_camera_annotation(
     camera_id: str,
     json_dir: str,
     camera: dict | None = None,
+    camera_ips_file: str | None = None,
 ) -> str:
     """为摄像头创建空的 per-camera 标注文件（若尚不存在）。"""
     cid = str(camera_id or "").strip()
     if not cid:
         return ""
-    stable_path = camera_annotation_path(json_dir, cid)
+    cam = camera if isinstance(camera, dict) else {}
+    stable_path = camera_annotation_path(json_dir, cid, cam, camera_ips_file)
     if os.path.isfile(stable_path):
         return stable_path
-    cam = camera if isinstance(camera, dict) else {}
-    save_camera_annotation(_empty_annotation_template(cam, cid), cid, json_dir)
+    save_camera_annotation(_empty_annotation_template(cam, cid), cid, json_dir, camera=cam, camera_ips_file=camera_ips_file)
     return stable_path
 
 
@@ -112,32 +132,40 @@ def ensure_camera_annotation_file(
     json_dir: str,
     default_json_file: str,
     camera: dict | None = None,
+    camera_ips_file: str | None = None,
 ) -> str:
-    """返回推理应使用的标注相对路径；必要时从 legacy 文件物化到 cameras/{id}.json。"""
+    """返回推理应使用的标注相对路径；必要时从 uploads/cameras 物化到 cameras/{path}.json。"""
     cid = str(camera_id or "").strip()
     if not cid:
         return default_json_file
 
-    stable_path = camera_annotation_path(json_dir, cid)
-    if os.path.isfile(stable_path):
-        return stable_path
-
     cam = camera if isinstance(camera, dict) else {}
+    existing = existing_camera_annotation_path(json_dir, cid, cam, camera_ips_file)
+    if os.path.isfile(existing):
+        return existing
+
     legacy_path = _find_latest_annotation_for_camera(json_dir, cam, cid)
     if legacy_path:
         data = _read_annotation_file(legacy_path)
         if isinstance(data, dict):
-            save_camera_annotation(data, cid, json_dir)
-            return stable_path
+            save_camera_annotation(data, cid, json_dir, camera=cam, camera_ips_file=camera_ips_file)
+            return camera_annotation_path(json_dir, cid, cam, camera_ips_file)
 
-    return materialize_camera_annotation(cid, json_dir, cam)
+    return materialize_camera_annotation(cid, json_dir, cam, camera_ips_file)
 
 
-def save_camera_annotation(data: dict, camera_id: str, json_dir: str) -> dict:
+def save_camera_annotation(
+    data: dict,
+    camera_id: str,
+    json_dir: str,
+    camera: dict | None = None,
+    camera_ips_file: str | None = None,
+) -> dict:
     cid = str(camera_id or "").strip()
     if not cid:
         return {"status": "error", "error": "camera_id is required"}
-    json_path = camera_annotation_path(json_dir, cid)
+    cam = camera if isinstance(camera, dict) else {}
+    json_path = camera_annotation_path(json_dir, cid, cam, camera_ips_file)
     os.makedirs(os.path.dirname(json_path), exist_ok=True)
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -145,18 +173,24 @@ def save_camera_annotation(data: dict, camera_id: str, json_dir: str) -> dict:
     return {"status": "success", "json_path": json_path, "camera_id": cid}
 
 
-def load_camera_annotation(camera_id: str, json_dir: str, default_json_file: str, camera: dict | None = None):
+def load_camera_annotation(
+    camera_id: str,
+    json_dir: str,
+    default_json_file: str,
+    camera: dict | None = None,
+    camera_ips_file: str | None = None,
+):
     cid = str(camera_id or "").strip()
     if not cid:
         return {"error": "camera_id is required"}
 
-    stable_path = camera_annotation_path(json_dir, cid)
+    cam = camera if isinstance(camera, dict) else {}
+    stable_path = existing_camera_annotation_path(json_dir, cid, cam, camera_ips_file)
     if os.path.isfile(stable_path):
         data = _read_annotation_file(stable_path)
         if isinstance(data, dict):
             return {"status": "success", "data": data, "json_path": stable_path, "camera_id": cid}
 
-    cam = camera if isinstance(camera, dict) else {}
     legacy_path = _find_latest_annotation_for_camera(json_dir, cam, cid)
     if legacy_path:
         data = _read_annotation_file(legacy_path)
@@ -165,7 +199,7 @@ def load_camera_annotation(camera_id: str, json_dir: str, default_json_file: str
 
     return {
         "error": "annotation not found",
-        "json_path": stable_path,
+        "json_path": camera_annotation_path(json_dir, cid, cam, camera_ips_file),
         "camera_id": cid,
     }
 

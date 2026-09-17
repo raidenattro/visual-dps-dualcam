@@ -17,7 +17,7 @@ from services.inference_backends.model_registry import (
 )
 
 _LITE_BACKENDS = LITE_BACKEND_FAMILIES
-from services.annotation_service import ensure_camera_annotation_file
+from services.annotation_service import ensure_camera_annotation_file, existing_camera_annotation_path
 from services.runtime_config_service import (
     effective_pipeline_log_enabled,
     ensure_runtime_overlay,
@@ -64,11 +64,18 @@ def _infer_gpu_ld_library_path() -> str:
     return ":".join(parts)
 
 
-def resolve_inference_json_rel(camera_id: str, json_dir: str = "localdata/json") -> str:
+def resolve_inference_json_rel(
+    camera_id: str,
+    json_dir: str = "localdata/json",
+    camera: dict | None = None,
+    camera_ips_file: str | None = None,
+) -> str:
     default = INFERENCE_JSON_PATH
     if default.startswith("/app/"):
         default = default[len("/app/") :]
-    cam_rel = camera_annotation_path(json_dir, camera_id)
+    cam_rel = existing_camera_annotation_path(
+        json_dir, camera_id, camera, camera_ips_file=camera_ips_file
+    )
     if not cam_rel:
         return default
     if HOST_PROJECT_ROOT:
@@ -320,13 +327,19 @@ def start_inference_container(camera: dict, request=None) -> dict:
         require_legacy_inference_ready,
     )
 
+    app_config = load_app_config()
+    paths = app_config.get("paths", {})
+    cam_ips = str(paths.get("camera_ips_file") or "")
+
     mode = camera_collision_mode(camera_id)
     if mode == "dualcam":
         grouped, group_err = require_inference_ready(camera_id)
         if group_err:
             return {"error": group_err}
     else:
-        _, group_err = require_legacy_inference_ready(camera_id)
+        _, group_err = require_legacy_inference_ready(
+            camera_id, camera_ips_file=cam_ips or None
+        )
         if group_err:
             return {"error": group_err}
         grouped = None
@@ -346,16 +359,22 @@ def start_inference_container(camera: dict, request=None) -> dict:
     except docker.errors.NotFound:
         pass
 
-    app_config = load_app_config()
     ensure_runtime_overlay(app_config)
-    paths = app_config.get("paths", {})
     json_dir = str(paths.get("json_dir", "localdata/json"))
     default_json = str(paths.get("default_json_file", INFERENCE_JSON_PATH))
-    json_rel = ensure_camera_annotation_file(camera_id, json_dir, default_json, camera=camera)
+    json_rel = ensure_camera_annotation_file(
+        camera_id,
+        json_dir,
+        default_json,
+        camera=camera,
+        camera_ips_file=cam_ips or None,
+    )
     if not os.path.isfile(json_rel) and HOST_PROJECT_ROOT:
         host_json = os.path.join(HOST_PROJECT_ROOT, json_rel)
         if not os.path.isfile(host_json):
-            json_rel = resolve_inference_json_rel(camera_id, json_dir)
+            json_rel = resolve_inference_json_rel(
+                camera_id, json_dir, camera=camera, camera_ips_file=cam_ips or None
+            )
 
     binds = [
         _host_bind("localdata"),

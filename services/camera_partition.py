@@ -52,7 +52,7 @@ def aisle_id_legacy_path_conflict(
                 "请先删除或修改该单路。"
             )
     return None
-from services.annotation_service import camera_annotation_path, flatten_annotation_boxes
+from services.annotation_service import existing_camera_annotation_path, flatten_annotation_boxes
 from services.camera_store import load_cameras
 
 
@@ -120,7 +120,7 @@ def run_partition_audit(app_config: dict, camera_ips_file: str) -> dict[str, Any
                 legacy_aisle_path_conflicts.append(
                     {"camera_id": cid, "path": cp, "message": msg}
                 )
-        apath = camera_annotation_path(json_dir, cid)
+        apath = existing_camera_annotation_path(json_dir, cid, camera=cam_rec, camera_ips_file=camera_ips_file)
         ready = False
         if os.path.isfile(apath):
             try:

@@ -10,7 +10,7 @@ import time
 
 import redis.asyncio as aioredis
 
-from services.annotation_service import camera_annotation_path
+from services.annotation_service import existing_camera_annotation_path
 from services.box_identity import parse_collision_token
 from services.event_bus import publish_event_frame
 from services.event_engine.annotation_boxes import load_scaled_boxes
@@ -73,10 +73,12 @@ class EventRedisWorker:
     def __init__(self, app_config: dict, callback_reporter=None):
         self.app_config = app_config
         self.callback_reporter = callback_reporter
+        paths = app_config.get("paths") or {}
         self._json_dir = (
             os.environ.get("JSON_DIR", "").strip()
-            or str(app_config.get("paths", {}).get("json_dir", "localdata/json"))
+            or str(paths.get("json_dir", "localdata/json"))
         )
+        self._camera_ips_file = str(paths.get("camera_ips_file") or "localdata/camera_ips.json")
         self._runtime_config_path = os.environ.get("RUNTIME_CONFIG_FILE", DEFAULT_PATH)
         self._runtime_settings_mtime: float | None = None
         self._contexts: dict[str, _CameraContext] = {}
@@ -153,7 +155,9 @@ class EventRedisWorker:
         reload_process_logging(self.app_config)
 
     def _resolve_json_path(self, camera_id: str) -> str:
-        rel = camera_annotation_path(self._json_dir, camera_id)
+        rel = existing_camera_annotation_path(
+            self._json_dir, camera_id, camera_ips_file=self._camera_ips_file
+        )
         if rel.startswith("/"):
             return rel
         base = os.environ.get("HOST_PROJECT_ROOT", "").strip()

@@ -6,7 +6,7 @@
 
 1. **不改** `/home/hqit/workspace/visual-dps` 与 `visual-dps-pick-state`（后者只读拷代码）
 2. 碰撞是 **3D `contact_slots`**（贴墙即报），不接 `pipeline.v5_gated`
-3. **Dualcam**：标注必须勾选 **同一组**（左/右路）；**Legacy 单路**：未成组 + `cameras/<id>.json` 货框，走 2D 碰撞
+3. **Dualcam**：标注必须勾选 **同一组**（左/右路）；**Legacy 单路**：未成组 + `json/cameras/<path>.json`（如 `aisle1-L.json`、`cam1.json`，与 `camera_ips.path` 一致）货框，走 2D 碰撞
 4. 成组后分片键是 `aisle_id`，L/R 同一 dualcam worker；单路走 `event_worker_legacy.py`（Redis group `event-workers-legacy`）
 5. 产物写本仓 `localdata/`；不走 153 离线包
 

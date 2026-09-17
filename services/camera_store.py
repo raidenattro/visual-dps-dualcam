@@ -309,8 +309,9 @@ def delete_camera(
     from services.inference_container_service import stop_inference_container
 
     items = load_cameras(camera_file)
+    cam = next((c for c in items if c["id"] == camera_id), None)
     new_items = [c for c in items if c["id"] != camera_id]
-    if len(new_items) == len(items):
+    if cam is None:
         return {"error": "未找到该摄像头"}
 
     stop_inference_container(camera_id)
@@ -319,7 +320,12 @@ def delete_camera(
     if json_dir:
         from services.annotation_service import delete_camera_annotation
 
-        delete_camera_annotation(camera_id, json_dir)
+        delete_camera_annotation(
+            camera_id,
+            json_dir,
+            camera=cam,
+            camera_ips_file=camera_file,
+        )
     return {"status": "success", "items": new_items, "mediamtx": mtx}
 
 

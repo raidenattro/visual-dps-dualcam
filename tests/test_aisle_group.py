@@ -185,8 +185,8 @@ def test_delete_aisle_with_cameras_unbinds(tmp_path: Path, json_dir: str, monkey
     assert created.get("status") == "success", created
     cam_json = Path(json_dir) / "cameras"
     cam_json.mkdir(parents=True, exist_ok=True)
-    (cam_json / f"{created['camera_l']['id']}.json").write_text("{}", encoding="utf-8")
-    (cam_json / f"{created['camera_r']['id']}.json").write_text("{}", encoding="utf-8")
+    (cam_json / f"{created['camera_l']['path']}.json").write_text("{}", encoding="utf-8")
+    (cam_json / f"{created['camera_r']['path']}.json").write_text("{}", encoding="utf-8")
     out = delete_aisle_with_cameras(
         "aisle-del",
         camera_file=cam_file,
@@ -202,8 +202,8 @@ def test_delete_aisle_with_cameras_unbinds(tmp_path: Path, json_dir: str, monkey
     assert leftover is None
     from services.aisle_store import list_aisles
     assert "aisle-del" not in {a["aisle_id"] for a in list_aisles(json_dir, bound_only=False)}
-    assert not (cam_json / f"{created['camera_l']['id']}.json").is_file()
-    assert not (cam_json / f"{created['camera_r']['id']}.json").is_file()
+    assert not (cam_json / f"{created['camera_l']['path']}.json").is_file()
+    assert not (cam_json / f"{created['camera_r']['path']}.json").is_file()
 
 
 def test_list_aisles_hides_unbound(json_dir: str):
@@ -258,7 +258,7 @@ def test_purge_unbound_aisles_and_orphan_cameras(tmp_path: Path, json_dir: str, 
     cam_json = Path(json_dir) / "cameras"
     cam_json.mkdir(parents=True, exist_ok=True)
     (cam_json / "orphan-old.json").write_text("{}", encoding="utf-8")
-    (cam_json / f"{created['camera_l']['id']}.json").write_text("{}", encoding="utf-8")
+    (cam_json / f"{created['camera_l']['path']}.json").write_text("{}", encoding="utf-8")
 
     out = purge_unbound_aisles_and_cameras(
         camera_file=cam_file,
@@ -276,7 +276,7 @@ def test_purge_unbound_aisles_and_orphan_cameras(tmp_path: Path, json_dir: str, 
     assert created["camera_r"]["id"] in ids
     assert lonely["camera"]["id"] not in ids
     assert not (cam_json / "orphan-old.json").is_file()
-    assert (cam_json / f"{created['camera_l']['id']}.json").is_file()
+    assert (cam_json / f"{created['camera_l']['path']}.json").is_file()
 
 
 def test_update_aisle_cameras_changes_stream_not_ids(tmp_path: Path, json_dir: str):

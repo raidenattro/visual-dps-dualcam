@@ -629,7 +629,9 @@ def camera_collision_mode(camera_id: str, json_dir: str | None = None) -> str:
 
 
 def require_legacy_inference_ready(
-    camera_id: str, json_dir: str | None = None
+    camera_id: str,
+    json_dir: str | None = None,
+    camera_ips_file: str | None = None,
 ) -> tuple[dict | None, str | None]:
     """单路 legacy 开推理：未成组 + cameras/<id>.json 含货框。"""
     cid = str(camera_id or "").strip()
@@ -637,10 +639,15 @@ def require_legacy_inference_ready(
         return None, "摄像头信息不完整"
     if camera_group(cid, json_dir):
         return None, "该摄像头已编入巷道，请使用巷道双路检测，不能按单路 2D 开推理。"
-    from services.annotation_service import camera_annotation_path, flatten_annotation_boxes
+    from services.annotation_service import existing_camera_annotation_path, flatten_annotation_boxes
 
     root = _json_dir(json_dir)
-    apath = camera_annotation_path(root, cid)
+    ips_file = (
+        str(camera_ips_file or "").strip()
+        or os.environ.get("CAMERA_IPS_FILE", "").strip()
+        or None
+    )
+    apath = existing_camera_annotation_path(root, cid, camera_ips_file=ips_file)
     if not os.path.isfile(apath):
         return None, (
             "尚未配置单路货框标注，请打开该路的单路监控页完成 2D 标定并保存。"
@@ -920,16 +927,24 @@ def purge_unbound_aisles_and_cameras(
             last_mtx = r.get("mediamtx")
 
     keep = {str(c.get("id") or "") for c in last_items}
+    slug_to_id = {
+        str(c.get("path") or "").strip(): str(c.get("id") or "").strip()
+        for c in load_cameras(camera_file)
+        if str(c.get("path") or "").strip()
+    }
     removed_annotations: list[str] = []
     cam_dir = os.path.join(_json_dir(json_dir), "cameras")
     if os.path.isdir(cam_dir):
         for name in list(os.listdir(cam_dir)):
             if not name.endswith(".json"):
                 continue
-            cid = name[:-5]
+            slug = name[:-5]
+            cid = slug_to_id.get(slug, slug)
             if cid in keep:
                 continue
-            if delete_camera_annotation(cid, _json_dir(json_dir)):
+            if delete_camera_annotation(
+                cid, _json_dir(json_dir), camera_ips_file=camera_file
+            ):
                 removed_annotations.append(cid)
 
     return {
