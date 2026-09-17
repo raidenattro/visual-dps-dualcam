@@ -18,6 +18,19 @@ const DEFAULT_CANVAS_W = 854;
 const DEFAULT_CANVAS_H = 480;
 const GRAB_HEIGHT = 720;
 
+/** 缩略图/抓帧失败时 Image 可能 complete 但 naturalWidth=0（broken），不可 drawImage */
+function isDrawableImage(img) {
+  if (!img || !img.src) return false;
+  return img.complete && img.naturalWidth > 0 && img.naturalHeight > 0;
+}
+
+function resetBgImageElement(img) {
+  if (!img) return;
+  img.onload = null;
+  img.onerror = null;
+  img.src = '';
+}
+
 const INITIAL_STATUS_HTML = [
   '1. 每个货架会自动生成区域四边形，拖动顶点即可调整。',
   '2. 选择网格行列后点击「确认生成」创建货位。',
@@ -497,7 +510,11 @@ export function useAnnotateTool(canvasRef, options = {}) {
       return;
     }
 
-    if (!bgImage?.src) {
+    if (!isDrawableImage(bgImage)) {
+      if (bgImage?.src && bgImage.complete) {
+        resetBgImageElement(bgImage);
+        embeddedThumbSrcRef.current = '';
+      }
       if (loadedAnnotationRef.current) {
         renderLoadedAnnotation();
         if (mInvRef.current) {
@@ -579,14 +596,23 @@ export function useAnnotateTool(canvasRef, options = {}) {
   );
 
   const renderFrameAndEnterAnnotating = useCallback(
-    (imageSrc, loadedMsg) => {
+    (imageSrc, loadedMsg, loadGen) => {
+      const expectedGen = loadGen ?? embeddedLoadGenRef.current;
       if (!bgImageRef.current) {
         bgImageRef.current = new Image();
       }
       const bgImage = bgImageRef.current;
       embeddedThumbSrcRef.current = '';
-      bgImage.src = imageSrc;
+      bgImage.onerror = () => {
+        if (expectedGen !== embeddedLoadGenRef.current) return;
+        resetBgImageElement(bgImage);
+        embeddedThumbSrcRef.current = '';
+        setStatus('抓帧图片解码失败，请重试。', 'err');
+        bumpRender();
+      };
       bgImage.onload = () => {
+        bgImage.onerror = null;
+        if (expectedGen !== embeddedLoadGenRef.current) return;
         const annCvs = getCanvas();
         if (!annCvs) return;
         annCvs.width = bgImage.width;
@@ -600,6 +626,7 @@ export function useAnnotateTool(canvasRef, options = {}) {
         );
         bumpRender();
       };
+      bgImage.src = imageSrc;
     },
     [getCanvas, renderAnnotator, setStatus, bumpRender, bootstrapShelfOnFrame],
   );
@@ -1210,6 +1237,7 @@ export function useAnnotateTool(canvasRef, options = {}) {
 
       const stamp = cam?.last_frame_at || 0;
       const src = thumbnailUrl(camId, stamp || undefined);
+      const expectedGen = embeddedLoadGenRef.current;
 
       return new Promise((resolve) => {
         if (!bgImageRef.current) {
@@ -1227,6 +1255,10 @@ export function useAnnotateTool(canvasRef, options = {}) {
         }
         embeddedThumbSrcRef.current = src;
         bgImage.onload = () => {
+          if (expectedGen !== embeddedLoadGenRef.current) {
+            resolve(false);
+            return;
+          }
           const annCvs = getCanvas();
           if (!annCvs) {
             resolve(false);
@@ -1263,7 +1295,16 @@ export function useAnnotateTool(canvasRef, options = {}) {
           }
           resolve(true);
         };
-        bgImage.onerror = () => resolve(false);
+        bgImage.onerror = () => {
+          if (expectedGen !== embeddedLoadGenRef.current) {
+            resolve(false);
+            return;
+          }
+          resetBgImageElement(bgImage);
+          embeddedThumbSrcRef.current = '';
+          bumpRender();
+          resolve(false);
+        };
         bgImage.src = src;
       });
     },
@@ -1554,6 +1595,8 @@ export function useAnnotateTool(canvasRef, options = {}) {
 
     resetAnnotationSession({ preserveCanvas: true, preserveLoaded: true, preserveGrid: false });
     setStatus('正在抓取一帧…', 'warn');
+    const captureGen = embeddedLoadGenRef.current + 1;
+    embeddedLoadGenRef.current = captureGen;
 
     try {
       let data = null;
@@ -1565,13 +1608,17 @@ export function useAnnotateTool(canvasRef, options = {}) {
       }
       if (!data?.image) {
         if (!url) {
-          setStatus(`抓帧失败：${formatUserError(data?.error) || '无画面'}`, 'err');
+          if (captureGen === embeddedLoadGenRef.current) {
+            setStatus(`抓帧失败：${formatUserError(data?.error) || '无画面'}`, 'err');
+          }
           return;
         }
         data = await apiPost('/api/get_camera_frame', { url });
       }
       if (data?.error || !data?.image) {
-        setStatus(`摄像头抓帧失败：${formatUserError(data?.error) || '未知错误'}`, 'err');
+        if (captureGen === embeddedLoadGenRef.current) {
+          setStatus(`摄像头抓帧失败：${formatUserError(data?.error) || '未知错误'}`, 'err');
+        }
         return;
       }
 
@@ -1588,11 +1635,14 @@ export function useAnnotateTool(canvasRef, options = {}) {
         };
       }
 
+      if (captureGen !== embeddedLoadGenRef.current) return;
       renderFrameAndEnterAnnotating(
         `data:image/jpeg;base64,${data.image}`,
         '抓帧成功。已生成货架外框，可拖四角或点选补全后「生成货位」。',
+        captureGen,
       );
     } catch (err) {
+      if (captureGen !== embeddedLoadGenRef.current) return;
       setStatus(`摄像头抓帧失败：${formatUserError(err.message) || '无法连接服务器'}`, 'err');
     }
   }, [

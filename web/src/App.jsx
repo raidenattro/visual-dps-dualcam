@@ -8,6 +8,7 @@ import DashboardPage from './pages/DashboardPage';
 import MonitorPage from './pages/MonitorPage';
 import AisleAnnotatePage from './pages/AisleAnnotatePage';
 import LegacyCameraAnnotatePage from './pages/LegacyCameraAnnotatePage';
+import RouteErrorBoundary from './components/RouteErrorBoundary.jsx';
 import AisleLivePage from './pages/AisleLivePage';
 import LoginPage from './pages/LoginPage';
 import SettingsPage from './pages/SettingsPage';
@@ -34,7 +35,14 @@ export default function App() {
           <Route path="/topology" element={<TopologyPage />} />
           <Route path="/monitor" element={<MonitorPage />} />
           <Route path="/annotate" element={<Navigate to="/aisle" replace />} />
-          <Route path="/legacy/annotate" element={<LegacyCameraAnnotatePage />} />
+          <Route
+            path="/legacy/annotate"
+            element={
+              <RouteErrorBoundary>
+                <LegacyCameraAnnotatePage />
+              </RouteErrorBoundary>
+            }
+          />
           <Route path="/aisle" element={<AisleAnnotatePage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>

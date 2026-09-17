@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import AnnotateControls from '../components/AnnotateControls.jsx';
+import AnnotateStatusText from '../components/AnnotateStatusText.jsx';
 import { useAnnotateTool } from '../features/annotate/useAnnotateTool.js';
 import { apiGet } from '../api/client.js';
 import { cameraMonitorPath } from '../lib/aisleNavigation.js';
@@ -151,7 +152,15 @@ export default function LegacyCameraAnnotatePage() {
                 />
               </label>
               <div className="legacy-annotate-actions">
-                <button type="button" className="legacy-btn primary" onClick={() => tool.captureFrame()}>
+                <button
+                  type="button"
+                  className="legacy-btn primary"
+                  onClick={() => {
+                    void tool.captureFrame().catch((e) => {
+                      console.error('captureFrame', e);
+                    });
+                  }}
+                >
                   抓帧
                 </button>
                 <button
@@ -185,9 +194,9 @@ export default function LegacyCameraAnnotatePage() {
                 <canvas ref={canvasRef} className="legacy-annotate-canvas" />
               </div>
               {tool.statusHtml ? (
-                <div
+                <AnnotateStatusText
+                  html={tool.statusHtml}
                   className={`legacy-annotate-status ${tool.statusClass || ''}`}
-                  dangerouslySetInnerHTML={{ __html: tool.statusHtml }}
                 />
               ) : null}
             </>

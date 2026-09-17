@@ -1,9 +1,21 @@
 const fetchOpts = { credentials: 'include' };
 
 async function parseJson(resp) {
-  const data = await resp.json();
-  if (resp.status === 401 && !String(window.location.pathname).startsWith('/login')) {
-    window.location.assign(`/login?from=${encodeURIComponent(window.location.pathname)}`);
+  const text = await resp.text();
+  let data = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      const hint = text.replace(/\s+/g, ' ').trim().slice(0, 120);
+      throw new Error(
+        resp.ok
+          ? '服务器返回格式异常'
+          : `请求失败 (${resp.status})${hint ? `：${hint}` : ''}`,
+      );
+    }
+  }
+  if (resp.status === 401) {
     throw new Error('未登录或会话已过期');
   }
   return data;
