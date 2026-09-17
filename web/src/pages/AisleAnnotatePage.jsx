@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiGet, apiPost, apiPut, thumbnailUrl } from '../api/client.js';
 import {
   meshCells,
-  meshRowTy,
   moveLayerRow,
   projectPix,
   rayPlane,
@@ -195,22 +194,6 @@ function lerpQuad(quad, ty, tz) {
   return [
     (1 - ty) * (1 - tz) * c0[0] + (1 - ty) * tz * c1[0] + ty * tz * c2[0] + ty * (1 - tz) * c3[0],
     (1 - ty) * (1 - tz) * c0[1] + (1 - ty) * tz * c1[1] + ty * tz * c2[1] + ty * (1 - tz) * c3[1],
-  ];
-}
-
-/** 货格在标定像素下的四角（与层线绘制同一套 quad 参数化）。 */
-function cellQuadCalib(mesh, solWall, viewQuad, cell) {
-  const cols = Math.max(1, Number(mesh.cols) || 1);
-  if (viewQuad?.length < 4 || solWall?.corners?.length < 4) return null;
-  const ty0 = meshRowTy(mesh, solWall.corners, cell.row);
-  const ty1 = meshRowTy(mesh, solWall.corners, cell.row + 1);
-  const tz0 = cell.col / cols;
-  const tz1 = (cell.col + 1) / cols;
-  return [
-    lerpQuad(viewQuad, ty0, tz0),
-    lerpQuad(viewQuad, ty0, tz1),
-    lerpQuad(viewQuad, ty1, tz1),
-    lerpQuad(viewQuad, ty1, tz0),
   ];
 }
 
@@ -715,21 +698,6 @@ export default function AisleAnnotatePage() {
           const rows = Number(mesh.rows) || 0;
           const cols = Number(mesh.cols) || 0;
           if (rows < 1 || cols < 1 || !mesh.vertices) continue;
-          const viewWall = walls.find((w) => Number(w.wall_id) === Number(mesh.wall_id));
-          const quad = viewWall?.quad?.length >= 4 ? viewWall.quad : null;
-          const solWall = wallById(state.solved, mesh.wall_id);
-          const anchorGrid = Boolean(quad && solWall?.corners?.length >= 4);
-          const strokeCalibSeg = (uvA, uvB, color, width) => {
-            const pa = mapCalibToCanvas(uvA, layout);
-            const pb = mapCalibToCanvas(uvB, layout);
-            if (!pa || !pb) return;
-            c.beginPath();
-            c.moveTo(pa[0], pa[1]);
-            c.lineTo(pb[0], pb[1]);
-            c.strokeStyle = color;
-            c.lineWidth = width;
-            c.stroke();
-          };
           const strokeUv = (pts, color, width) => {
             const mapped = pts.map((p) => mapCalibToCanvas(p, layout)).filter(Boolean);
             if (mapped.length < 2) return;
@@ -743,60 +711,28 @@ export default function AisleAnnotatePage() {
             c.stroke();
           };
           const toUv = (r, col) => projectPix(mesh.vertices[vertIndex(rows, cols, r, col)], cam);
-          if (anchorGrid) {
-            const corners = solWall.corners;
-            // 外框已由 quad 描边，不再重复画最外圈层线（避免「多套框」叠在一起）
-            for (let j = 1; j < cols; j++) {
-              const tz = j / cols;
-              strokeCalibSeg(
-                lerpQuad(quad, 0, tz),
-                lerpQuad(quad, 1, tz),
-                onWall ? pal.dim : pal.dim,
-                onWall ? 1.2 : 0.9,
-              );
-            }
-            for (let i = 1; i < rows; i++) {
-              const ty = meshRowTy(mesh, corners, i);
-              strokeCalibSeg(
-                lerpQuad(quad, ty, 0),
-                lerpQuad(quad, ty, 1),
-                onWall ? pal.mesh : pal.dim,
-                onWall ? 2.4 : 1.1,
-              );
-            }
-          } else {
-            for (let j = 0; j <= cols; j++) {
-              const pts = [];
-              for (let i = 0; i <= rows; i++) pts.push(toUv(i, j));
-              strokeUv(pts, onWall ? pal.dim : pal.dim, onWall ? 1.2 : 0.9);
-            }
-            for (let i = 0; i <= rows; i++) {
-              const pts = [];
-              for (let j = 0; j <= cols; j++) pts.push(toUv(i, j));
-              const inner = i > 0 && i < rows;
-              strokeUv(
-                pts,
-                onWall ? (inner ? pal.mesh : pal.line) : pal.dim,
-                onWall ? (inner ? 2.4 : 1.4) : 1.1,
-              );
-            }
+          // 3D slot_meshes 投影为唯一真值（与碰撞、geom 文档一致），不用 2D quad 插值层线
+          for (let j = 0; j <= cols; j++) {
+            const pts = [];
+            for (let i = 0; i <= rows; i++) pts.push(toUv(i, j));
+            strokeUv(pts, onWall ? pal.dim : pal.dim, onWall ? 1.2 : 0.9);
+          }
+          for (let i = 0; i <= rows; i++) {
+            const pts = [];
+            for (let j = 0; j <= cols; j++) pts.push(toUv(i, j));
+            const inner = i > 0 && i < rows;
+            strokeUv(
+              pts,
+              onWall ? (inner ? pal.mesh : pal.line) : pal.dim,
+              onWall ? (inner ? 2.4 : 1.4) : 1.1,
+            );
           }
           for (const cell of meshCells(mesh)) {
-            let pa;
-            let pb;
-            const cellQuad = anchorGrid ? cellQuadCalib(mesh, solWall, quad, cell) : null;
-            if (cellQuad) {
-              pa = cellQuad[0];
-              pb = cellQuad[2];
-            } else {
-              const a = projectPix(cell.corners[0], cam);
-              const b = projectPix(cell.corners[2], cam);
-              if (!a || !b) continue;
-              pa = a;
-              pb = b;
-            }
-            pa = mapCalibToCanvas(pa, layout);
-            pb = mapCalibToCanvas(pb, layout);
+            const a = projectPix(cell.corners[0], cam);
+            const b = projectPix(cell.corners[2], cam);
+            if (!a || !b) continue;
+            let pa = mapCalibToCanvas(a, layout);
+            let pb = mapCalibToCanvas(b, layout);
             if (!pa || !pb) continue;
             const cw = Math.abs(pb[0] - pa[0]);
             const ch = Math.abs(pb[1] - pa[1]);
@@ -842,7 +778,7 @@ export default function AisleAnnotatePage() {
     return unmapCanvasToCalib(mx, my, layout);
   };
 
-  /** 层线命中：有四角时与绘制一致，测 quad 上的水平线段；否则回退 3D 投影。 */
+  /** 层线命中：与绘制一致，测 3D mesh 投影线段。 */
   const hitLayerRow = (e, v, aisle = stateRef.current) => {
     if (!aisle.solved?.ok) return null;
     const cam = camOf(aisle, v);
@@ -857,22 +793,11 @@ export default function AisleAnnotatePage() {
     const hitPx = LAYER_HIT_PX / Math.max(layout.scale * ((layout.sx + layout.sy) / 2), 1e-6);
     const rows = Number(mesh.rows) || 0;
     const cols = Number(mesh.cols) || 0;
-    const viewWall = (aisle.views?.[v]?.walls || []).find((w) => Number(w.wall_id) === Number(wallId));
-    const quad = viewWall?.quad?.length >= 4 ? viewWall.quad : null;
-    const solWall = wallById(aisle.solved, wallId);
     let best = null;
     for (let i = 1; i < rows; i++) {
-      let a;
-      let b;
-      if (quad && solWall?.corners?.length >= 4) {
-        const ty = meshRowTy(mesh, solWall.corners, i);
-        a = lerpQuad(quad, ty, 0);
-        b = lerpQuad(quad, ty, 1);
-      } else {
-        a = projectPix(mesh.vertices[vertIndex(rows, cols, i, 0)], cam);
-        b = projectPix(mesh.vertices[vertIndex(rows, cols, i, cols)], cam);
-        if (!a || !b) continue;
-      }
+      const a = projectPix(mesh.vertices[vertIndex(rows, cols, i, 0)], cam);
+      const b = projectPix(mesh.vertices[vertIndex(rows, cols, i, cols)], cam);
+      if (!a || !b) continue;
       const d = distToSeg(iu, iv, a[0], a[1], b[0], b[1]);
       if (d <= hitPx && (!best || d < best.dist)) {
         best = { v, row: i, wallId: Number(mesh.wall_id), dist: d };
@@ -948,11 +873,8 @@ export default function AisleAnnotatePage() {
     for (const mesh of aisle.slot_meshes || []) {
       if (Number(mesh.wall_id) !== Number(wallsL[activeWall]?.wall_id)) continue;
       if (!cam) continue;
-      const solWall = wallById(aisle.solved, mesh.wall_id);
-      const viewQuad = w?.quad?.length >= 4 ? w.quad : null;
       for (const cell of meshCells(mesh)) {
-        const pts = cellQuadCalib(mesh, solWall, viewQuad, cell)
-          || (cell.corners || []).map((p) => projectPix(p, cam)).filter(Boolean);
+        const pts = (cell.corners || []).map((p) => projectPix(p, cam)).filter(Boolean);
         if (pts.length < 4 || !pointInPoly(u, vv, pts)) continue;
         const key = `${mesh.wall_id}:${cell.slot_key || `r${cell.row}c${cell.col}`}`;
         setSelected(key);
