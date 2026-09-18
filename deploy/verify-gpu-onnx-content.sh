@@ -7,14 +7,27 @@ set -euo pipefail
 IMAGE="${1:-}"
 [[ -n "${IMAGE}" ]] || { echo "用法: $0 <image:tag>" >&2; exit 1; }
 
-docker image inspect "${IMAGE}" >/dev/null 2>&1 || {
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DOCKER_LIB="${ROOT}/../scripts/lib/docker-cmd.sh"
+if [[ -f "${DOCKER_LIB}" ]]; then
+  # shellcheck disable=SC1090
+  source "${DOCKER_LIB}"
+else
+  docker_cmd() {
+    if docker info >/dev/null 2>&1; then docker "$@"
+    elif sudo docker info >/dev/null 2>&1; then sudo docker "$@"
+    else sudo docker "$@"; fi
+  }
+fi
+
+docker_cmd image inspect "${IMAGE}" >/dev/null 2>&1 || {
   echo "错误: 镜像不存在: ${IMAGE}" >&2
   exit 1
 }
 
 GPU_ARGS=()
 if [[ "${VERIFY_GPU_SKIP:-0}" != "1" ]]; then
-  if docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi -L >/dev/null 2>&1; then
+  if docker_cmd run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi -L >/dev/null 2>&1; then
     GPU_ARGS=(--gpus all)
   else
     echo "warn: 无 GPU，仅做包版本检查" >&2
@@ -22,7 +35,7 @@ if [[ "${VERIFY_GPU_SKIP:-0}" != "1" ]]; then
   fi
 fi
 
-docker run --rm -i "${GPU_ARGS[@]}" -e "VERIFY_GPU_SKIP=${VERIFY_GPU_SKIP:-0}" "${IMAGE}" python3 - <<'PY'
+docker_cmd run --rm -i "${GPU_ARGS[@]}" -e "VERIFY_GPU_SKIP=${VERIFY_GPU_SKIP:-0}" "${IMAGE}" python3 - <<'PY'
 import importlib.metadata as m
 import sys
 

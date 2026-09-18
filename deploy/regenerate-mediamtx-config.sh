@@ -16,12 +16,24 @@ fi
 # shellcheck disable=SC1091
 set -a && source "${ENV_FILE}" && set +a
 
+DOCKER_LIB="${APP_DIR}/../scripts/lib/docker-cmd.sh"
+if [[ -f "${DOCKER_LIB}" ]]; then
+  # shellcheck disable=SC1090
+  source "${DOCKER_LIB}"
+else
+  docker_cmd() {
+    if docker info >/dev/null 2>&1; then docker "$@"
+    elif sudo docker info >/dev/null 2>&1; then sudo docker "$@"
+    else sudo docker "$@"; fi
+  }
+fi
+
 TAG="${VISUAL_DPS_IMAGE_TAG:-latest}"
 UI_IMAGE="visual-dps-visual-dps-ui:${TAG}"
-if ! docker image inspect "${UI_IMAGE}" >/dev/null 2>&1; then
+if ! docker_cmd image inspect "${UI_IMAGE}" >/dev/null 2>&1; then
   UI_IMAGE="visual-dps-visual-dps-ui:latest"
 fi
-if ! docker image inspect "${UI_IMAGE}" >/dev/null 2>&1; then
+if ! docker_cmd image inspect "${UI_IMAGE}" >/dev/null 2>&1; then
   echo "错误: 未找到 UI 镜像 visual-dps-visual-dps-ui:${TAG}（请先 docker load）" >&2
   exit 1
 fi
@@ -39,7 +51,7 @@ fi
 
 echo "==> 按 .env 生成 mediamtx.yml（镜像 ${UI_IMAGE}）..."
 # 须 -i：否则 heredoc 留在宿主机 stdin，容器内 python3 - 读不到脚本
-docker run --rm -i \
+docker_cmd run --rm -i \
   -v "${LOCALDATA}:/app/localdata" \
   "${APP_CONFIG_MOUNT[@]}" \
   --env-file "${ENV_FILE}" \

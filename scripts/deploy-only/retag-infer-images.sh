@@ -29,9 +29,11 @@ usage() {
   -h, --help        显示本说明
 
 处理的镜像:
-  visual-dps-inference-lite              （可选；--skip-lite-cpu 时不处理）
-  visual-dps-inference-lite-gpu          （GPU 现场必需）
-  visual-dps-inference-lite-gpu-onnx     （GPU 现场必需）
+  visual-dps-inference-lite-gpu          （GPU 解码等）
+  visual-dps-inference-lite-gpu-onnx     （GPU 推理，compose 默认）
+
+  现场常用旧 tag：20260907-dualcam-3041fb0（见 scripts/retag-field-infer-0907.sh）
+  Docker 无权限时自动 sudo docker；强制: export VISUAL_DPS_DOCKER_SUDO=1
 
 行为:
   - 找到任一旧 TAG 镜像 → docker tag 为新 TAG，输出 OK
@@ -115,7 +117,10 @@ else
     _add_candidate "${INFER_RETAG_OLD_ALT:-}"
     _add_candidate "${INFER_RETAG_OLD_ALT2:-}"
   fi
-  # 0820 现场常见旧 tag（0817 增量 → 0820；0813 → 0820；0727 全量）
+  # 0919 延锋 / dualcam 现场常见旧 tag
+  _add_candidate "20260907-dualcam-3041fb0"
+  _add_candidate "20260917-dualcam-4d62070"
+  _add_candidate "20260904-dualcam-36a2483"
   _add_candidate "20260817-feature-eventworker2-0b26d8a"
   _add_candidate "20260813-feature-eventworker2-5e4f4fe"
   _add_candidate "20260727-test-from-4841de6a-85288b7"
@@ -135,6 +140,7 @@ fi
 [[ "${SKIP_LITE_CPU}" -eq 1 ]] && echo "    （跳过 CPU lite）"
 
 repos=(
+  visual-dps-inference-lite-gpu
   visual-dps-inference-lite-gpu-onnx
 )
 
@@ -172,11 +178,11 @@ done
 
 if [[ "${fail}" -ne 0 ]]; then
   echo "" >&2
-  echo "提示: 确认目标机已有 gpu-onnx 推理镜像（0817 / 0813 / 0727 任一 tag）。" >&2
-  echo "      可显式指定: $0 <旧TAG>" >&2
-  echo "      0817: 20260817-feature-eventworker2-0b26d8a" >&2
-  echo "      0813: 20260813-feature-eventworker2-5e4f4fe" >&2
-  echo "      0727: 20260727-test-from-4841de6a-85288b7" >&2
+  echo "提示: 确认目标机已有 gpu / gpu-onnx 推理镜像。" >&2
+  echo "      延锋现场: ./scripts/retag-field-infer-0907.sh" >&2
+  echo "      或显式: $0 <旧TAG>" >&2
+  echo "      0907: 20260907-dualcam-3041fb0" >&2
+  echo "      0917: 20260917-dualcam-4d62070" >&2
   exit 1
 fi
 

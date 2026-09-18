@@ -6,5 +6,10 @@ visual_dps_compose_up_stack() {
   echo "==> 启动服务（双路 3D event-worker）"
   compose_cmd up -d
   compose_cmd stop visual-dps-event-worker-2 visual-dps-event-worker-2-b 2>/dev/null || true
-  docker stop visual-dps-event-worker-2 visual-dps-event-worker-2-b 2>/dev/null || true
+  if declare -f docker_cmd >/dev/null 2>&1; then
+    docker_cmd stop visual-dps-event-worker-2 visual-dps-event-worker-2-b 2>/dev/null || true
+  else
+    docker stop visual-dps-event-worker-2 visual-dps-event-worker-2-b 2>/dev/null || true
+    sudo docker stop visual-dps-event-worker-2 visual-dps-event-worker-2-b 2>/dev/null || true
+  fi
 }

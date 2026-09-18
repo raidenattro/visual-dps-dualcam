@@ -32,8 +32,9 @@ visual_dps_verify_deploy_images() {
   local tag="${VISUAL_DPS_IMAGE_TAG:-}"
   [[ -n "${tag}" ]] || { echo "错误: VISUAL_DPS_IMAGE_TAG 未设置" >&2; return 1; }
 
-  local onnx
+  local onnx gpu
   onnx="$(visual_dps_image_ref_from_env "${INFERENCE_LITE_GPU_ONNX_IMAGE:-}" "visual-dps-inference-lite-gpu-onnx" "${tag}")"
+  gpu="$(visual_dps_image_ref_from_env "${INFERENCE_LITE_GPU_IMAGE:-}" "visual-dps-inference-lite-gpu" "${tag}")"
 
   local lib_docker="${VISUAL_DPS_PKG_ROOT:-}/scripts/lib/docker-cmd.sh"
   if [[ -f "${lib_docker}" ]]; then
@@ -43,7 +44,11 @@ visual_dps_verify_deploy_images() {
     # shellcheck disable=SC1091
     source "$(dirname "${BASH_SOURCE[0]}")/docker-cmd.sh"
   else
-    docker_cmd() { docker "$@"; }
+    docker_cmd() {
+      if docker info >/dev/null 2>&1; then docker "$@"
+      elif sudo docker info >/dev/null 2>&1; then sudo docker "$@"
+      else sudo docker "$@"; fi
+    }
   fi
 
   local fail=0
@@ -64,10 +69,14 @@ visual_dps_verify_deploy_images() {
   _vdpi_check "visual-dps-visual-dps-ui:${tag}"
   _vdpi_check "visual-dps-event-worker:${tag}"
   _vdpi_check "${onnx}"
+  if [[ -n "${INFERENCE_LITE_GPU_IMAGE:-}" || "${INFERENCE_USE_GPU:-0}" == "1" ]]; then
+    _vdpi_check "${gpu}"
+  fi
 
   if [[ "${fail}" -ne 0 ]]; then
     echo "" >&2
-    echo "提示: 推理镜像请准备 visual-dps-inference-lite-gpu-onnx（可从旧 tag retag）" >&2
+    echo "提示: 推理镜像请准备 gpu-onnx（及可选 lite-gpu），可从旧 tag retag：" >&2
+    echo "      ./scripts/retag-field-infer-0907.sh  或  ./scripts/retag-infer-images.sh <旧TAG>" >&2
     return 1
   fi
   echo "==> 镜像校验通过"

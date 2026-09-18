@@ -91,6 +91,7 @@ for rel in \
   services/wall_clock.py \
   services/pipeline_log.py \
   services/pose_bus.py \
+  services/aisle_store.py \
   services/event_engine/sharding.py \
   services/runtime_config_service.py \
   services/inference_backends/__init__.py \
@@ -122,13 +123,15 @@ cp "${ROOT}/scripts/deploy-only/verify-package.sh" "${PKG}/verify-package.sh"
 cp "${ROOT}/scripts/deploy-only/verify-images.sh" "${PKG}/verify-images.sh"
 cp "${ROOT}/scripts/deploy-only/infer-bind-mounts.sh" "${PKG}/scripts/infer-bind-mounts.sh"
 cp "${ROOT}/scripts/deploy-only/retag-infer-images.sh" "${PKG}/scripts/retag-infer-images.sh"
+cp "${ROOT}/scripts/deploy-only/retag-field-infer-0907.sh" "${PKG}/scripts/retag-field-infer-0907.sh"
 cp "${ROOT}/scripts/lib/docker-cmd.sh" "${PKG}/scripts/lib/docker-cmd.sh"
 cp "${ROOT}/scripts/monitor-pose-lag.sh" "${PKG}/scripts/monitor-pose-lag.sh"
 cp "${ROOT}/scripts/lib/install-deploy-stack.sh" "${PKG}/scripts/lib/install-deploy-stack.sh"
 cp "${ROOT}/scripts/lib/verify-deploy-images.sh" "${PKG}/scripts/lib/verify-deploy-images.sh"
 cp "${ROOT}/scripts/deploy-only/pack-deploy.sh" "${PKG}/pack-deploy.sh"
 cp "${ROOT}/scripts/deploy-only/DEPLOY-0629.md" "${PKG}/DEPLOY-0629.md"
-chmod +x "${PKG}/install.sh" "${PKG}/verify-package.sh" "${PKG}/verify-images.sh" "${PKG}/pack-deploy.sh" "${PKG}/scripts/retag-infer-images.sh" "${PKG}/scripts/monitor-pose-lag.sh"
+chmod +x "${PKG}/install.sh" "${PKG}/verify-package.sh" "${PKG}/verify-images.sh" "${PKG}/pack-deploy.sh" \
+  "${PKG}/scripts/retag-infer-images.sh" "${PKG}/scripts/retag-field-infer-0907.sh" "${PKG}/scripts/monitor-pose-lag.sh"
 
 GIT_HEAD="nogit"
 git -C "${ROOT}" rev-parse HEAD >/dev/null 2>&1 && GIT_HEAD="$(git -C "${ROOT}" rev-parse HEAD)"
