@@ -1,7 +1,7 @@
 """骨架时序平滑。只用于 /play 验证，不进推理。
 
 先滤左右路 2D（短窗），再三角化；3D 只做轻滤波 + 骨长。
-离线零相位（时间高斯），伸手动作不往后拖。分数不平滑。
+因果窗（只含当前及过去），模拟实时，会有一点滞后。分数不平滑。
 """
 
 from __future__ import annotations
@@ -274,7 +274,7 @@ def _gauss_smooth(
     times: np.ndarray,
     sigma_s: float,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """非均匀时间的归一化高斯。缺测处若邻域够近则补上。"""
+    """因果高斯：只加权 [t-3σ, t] 内的有效点，不用未来帧。"""
     n, dim = values.shape
     out = np.full_like(values, np.nan)
     out_mask = np.zeros(n, dtype=bool)
@@ -285,15 +285,12 @@ def _gauss_smooth(
     for i in range(n):
         while j0 < n and times[i] - times[j0] > radius:
             j0 += 1
-        j1 = i
-        while j1 < n and times[j1] - times[i] <= radius:
-            j1 += 1
         wsum = 0.0
         acc = np.zeros(dim)
-        for j in range(j0, j1):
+        for j in range(j0, i + 1):
             if not mask[j]:
                 continue
-            dlt = float(times[j] - times[i])
+            dlt = float(times[i] - times[j])
             w = float(np.exp(-0.5 * (dlt / sigma_s) ** 2))
             wsum += w
             acc += w * values[j]
@@ -305,17 +302,33 @@ def _gauss_smooth(
     return out, out_mask
 
 
-def _median_len(a: np.ndarray, b: np.ndarray, ma: np.ndarray, mb: np.ndarray, lo: float, hi: float) -> float | None:
-    lens = []
-    for i in range(len(ma)):
-        if not (ma[i] and mb[i]):
+def _clamp_bones_causal(
+    prox: np.ndarray,
+    dist: np.ndarray,
+    mp: np.ndarray,
+    md: np.ndarray,
+    lo: float,
+    hi: float,
+) -> None:
+    """骨长中位只用到当前帧为止的样本，再把远端收到该长度上。"""
+    hist: list[float] = []
+    L_run: float | None = None
+    for i in range(len(mp)):
+        if mp[i] and md[i]:
+            d = float(np.linalg.norm(dist[i] - prox[i]))
+            if lo <= d <= hi:
+                hist.append(d)
+                if len(hist) >= BONE_MIN_SAMPLES:
+                    L_run = float(np.median(hist))
+        if L_run is None or not (mp[i] and md[i]) or L_run <= 1e-6:
             continue
-        d = float(np.linalg.norm(a[i] - b[i]))
-        if lo <= d <= hi:
-            lens.append(d)
-    if len(lens) < BONE_MIN_SAMPLES:
-        return None
-    return float(np.median(lens))
+        v = dist[i] - prox[i]
+        d = float(np.linalg.norm(v))
+        if d < 1e-6:
+            continue
+        if abs(d - L_run) / L_run <= BONE_TOL:
+            continue
+        dist[i] = prox[i] + v * (L_run / d)
 
 
 def _clamp_bone(prox: np.ndarray, dist: np.ndarray, mp: np.ndarray, md: np.ndarray, L: float) -> None:
@@ -409,15 +422,12 @@ def smooth_frames(frames: list[dict], plane: dict | None = None) -> dict:
             _reject_speed(vals, mask, times, joint_vmax(j))
             sm, sm_mask = _gauss_smooth(vals, mask, times, joint_sigma(j))
             series[j] = (sm, sm_mask, times)
-        # 骨长：先上臂再前臂，腕跟着已经稳住的肘走
+        # 骨长：先上臂再前臂，腕跟着已经稳住的肘走；中位只看过去
         for a, b in ARM_BONES:
             sa, ma, _ = series[a]
             sb, mb, _ = series[b]
             lo, hi = BONE_LEN_RANGE[(a, b)]
-            L = _median_len(sa, sb, ma, mb, lo, hi)
-            if L is None:
-                continue
-            _clamp_bone(sa, sb, ma, mb, L)
+            _clamp_bones_causal(sa, sb, ma, mb, lo, hi)
         for j in range(N_JOINTS):
             sm, sm_mask, _ = series[j]
             if j in (LWRIST, RWRIST):
@@ -448,6 +458,7 @@ def smooth_frames(frames: list[dict], plane: dict | None = None) -> dict:
         "sigma_body_s": SIGMA_BODY,
         "vmax_wrist": VMAX_WRIST,
         "bone_clamp": True,
+        "causal": True,
     }
 
 

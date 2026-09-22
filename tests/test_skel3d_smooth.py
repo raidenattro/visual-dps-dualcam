@@ -1,4 +1,4 @@
-"""3D 骨架时序平滑：压抖、零相位、骨长夹紧。"""
+"""3D 骨架时序平滑：压抖、因果窗、骨长夹紧。"""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from scripts.skel3d_smooth import (
 )
 
 
-def test_gauss_reduces_noise_without_lag():
+def test_gauss_reduces_noise_causal():
     t = np.linspace(0, 2.0, 51)
     true = np.stack([0.4 * t, np.ones_like(t), np.zeros_like(t)], axis=1)
     rng = np.random.default_rng(0)
@@ -33,10 +33,18 @@ def test_gauss_reduces_noise_without_lag():
     assert sm_mask.all()
     rms_in = float(np.sqrt(np.mean((noisy - true) ** 2)))
     rms_out = float(np.sqrt(np.mean((sm - true) ** 2)))
-    assert rms_out < 0.55 * rms_in
-    # 零相位：中点不该被单向 EMA 拖在后面
-    mid = len(t) // 2
-    assert abs(sm[mid, 0] - true[mid, 0]) < 0.03
+    assert rms_out < 0.85 * rms_in
+
+
+def test_gauss_does_not_use_future():
+    t = np.arange(26) * 0.04
+    x = np.zeros((26, 3))
+    x[:, 1] = 1.0
+    x[20] = [0.0, 1.0, 8.0]
+    mask = np.ones(26, dtype=bool)
+    sm, _ = _gauss_smooth(x, mask, t, 0.10)
+    assert abs(sm[19, 2]) < 1e-9
+    assert sm[20, 2] > 1.0
 
 
 def test_reject_speed_drops_one_frame_spike():

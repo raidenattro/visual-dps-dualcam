@@ -8,7 +8,7 @@ import socket
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -52,6 +52,22 @@ def _save(data: dict) -> None:
     CALIB.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _skel_path(query: str) -> Path | None:
+    """只允许 output/dualcam/ 下 skel3d*.json；无参数则默认 skel3d.json。"""
+    name = (parse_qs(query).get("skel") or [None])[0]
+    if not name:
+        return SKEL
+    base = Path(name).name
+    if not base.startswith("skel3d") or not base.endswith(".json"):
+        return None
+    cand = (SKEL.parent / base).resolve()
+    try:
+        cand.relative_to(SKEL.parent.resolve())
+    except ValueError:
+        return None
+    return cand
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -93,10 +109,11 @@ class Handler(BaseHTTPRequestHandler):
             self._stream_file(path, ctype, head_only, cache="public, max-age=86400")
             return
         if u.path == "/api/skel3d":
-            if not SKEL.is_file():
+            path = _skel_path(u.query)
+            if path is None or not path.is_file():
                 self.send_error(404, "skel3d missing")
                 return
-            self._stream_file(SKEL, "application/json; charset=utf-8", head_only)
+            self._stream_file(path, "application/json; charset=utf-8", head_only)
             return
         if u.path == "/api/calib":
             self._json(_load(), head_only)

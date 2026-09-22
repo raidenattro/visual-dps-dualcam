@@ -98,7 +98,9 @@ import { contactSlots, makeLayerMesh, meshCells, projectCorners, pointInPolygon,
 
 const boot = document.getElementById('boot');
 boot.textContent = '正在加载骨架（约 22MB）…';
-const DATA = await fetch('/api/skel3d').then((r) => {
+const skelQ = new URLSearchParams(location.search).get('skel');
+const skelUrl = skelQ ? `/api/skel3d?skel=${encodeURIComponent(skelQ)}` : '/api/skel3d';
+const DATA = await fetch(skelUrl).then((r) => {
   if (!r.ok) throw new Error('skel3d ' + r.status);
   return r.json();
 }).catch((e) => {

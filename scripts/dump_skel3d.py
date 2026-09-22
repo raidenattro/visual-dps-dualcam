@@ -64,6 +64,13 @@ def _infer_stride(pack) -> int:
     return d if d > 0 else 1
 
 
+def _keep_every(pack: list, step: int) -> list:
+    """按源帧号隔 step 帧取一帧。step=2 即 25fps→约 12.5fps。"""
+    if step <= 1:
+        return pack
+    return [fr for fr in pack if int(fr["i"]) % step == 0]
+
+
 SHOULDER_WRIST_MAX = 0.85  # 超过则腕点几何不可信
 HOLD_FRAMES = 8  # 单路闪断时沿用上一帧 3D，约 0.32s
 LSHO, RSHO = 5, 6
@@ -160,10 +167,25 @@ def _prefer_of(persons: list[dict]) -> list[tuple]:
 def main() -> int:
     ap = argparse.ArgumentParser(description="从已落姿态三角化 17 点，默认先滤 2D 再轻滤 3D")
     ap.add_argument("--no-smooth", action="store_true", help="2D/3D 都不平滑，写出原始三角化")
+    ap.add_argument(
+        "--keep-stride",
+        type=int,
+        default=1,
+        help="源帧号隔几帧取一帧后再平滑/抬 3D；2=约 12.5fps。>1 必须 --out 另存",
+    )
+    ap.add_argument("--out", type=Path, default=None, help="写出路径，默认 output/dualcam/skel3d.json")
     args = ap.parse_args()
+    if args.keep_stride < 1:
+        print("--keep-stride 必须 >= 1", file=sys.stderr)
+        return 2
+    out = (args.out if args.out is not None else OUT).resolve()
+    if args.keep_stride > 1 and out == OUT.resolve():
+        print("keep-stride>1 必须 --out 另存，避免覆盖 skel3d.json", file=sys.stderr)
+        return 2
 
     cams, plane, sol = load_cams()
     raw_pack = list(np.load(NPZ, allow_pickle=True)["frames"])
+    raw_pack = _keep_every(raw_pack, args.keep_stride)
     stride = _infer_stride(raw_pack)
     pack = copy_pose_pack(raw_pack)
     smooth2d_info = None
@@ -273,10 +295,11 @@ def main() -> int:
         "smooth": smooth_info,
         "frames": frames,
     }
-    OUT.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(
-        f"wrote {OUT}  frames={len(frames)} paired={n_paired} people={n_people} "
-        f"stride={stride}  {OUT.stat().st_size / 1e6:.1f}MB"
+        f"wrote {out}  frames={len(frames)} paired={n_paired} people={n_people} "
+        f"stride={stride}  {out.stat().st_size / 1e6:.1f}MB"
     )
     if smooth2d_info:
         print(
