@@ -20,7 +20,8 @@
   .stage video, .stage canvas.frame, .stage canvas.ov {
     display: block; width: 100%; height: 100%;
   }
-  .stage video { object-fit: cover; object-position: left center; }
+  /* 隐藏 video，仅作解码源；左右路都用 canvas 裁半幅，与 1280×720 骨架坐标一致 */
+  .stage video { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
   .stage canvas.frame { position: absolute; inset: 0; }
   .stage canvas.ov { position: absolute; inset: 0; pointer-events: none; }
   #view3d { position: relative; min-width: 0; min-height: 0; }
@@ -57,9 +58,10 @@
 <div id="boot">正在加载 3D 回放…</div>
 <div id="app">
   <div class="pane">
-    <span class="tag">左路 · 1-3组-1</span>
+    <span class="tag">左路 · 144</span>
     <div class="stage">
       <video id="vid" playsinline muted preload="auto"></video>
+      <canvas class="frame" id="frameL"></canvas>
       <canvas class="ov" id="ovL"></canvas>
     </div>
   </div>
@@ -69,8 +71,9 @@
     <canvas id="c"></canvas>
   </div>
   <div class="pane">
-    <span class="tag">右路 · 1-3组-2</span>
+    <span class="tag">右路 · 24</span>
     <div class="stage">
+      <video id="vidR" playsinline muted preload="auto"></video>
       <canvas class="frame" id="frameR"></canvas>
       <canvas class="ov" id="ovR"></canvas>
     </div>
@@ -94,25 +97,83 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { contactSlots, makeLayerMesh, meshCells, projectCorners, pointInPolygon, DEFAULT_LAYER_PITCH, DEFAULT_CONTACT_M } from '/dualcam_geom.js';
+import {
+  contactSlots, makeLayerMesh, meshCells, meshFromRowYs, projectCorners,
+  pointInPolygon, rowYsFromMesh, DEFAULT_LAYER_PITCH, DEFAULT_CONTACT_M,
+} from '/dualcam_geom.js';
 
 const boot = document.getElementById('boot');
-boot.textContent = '正在加载骨架（约 22MB）…';
+boot.textContent = '正在加载骨架…';
+function videoPref() {
+  const q = new URLSearchParams(location.search);
+  if (q.get('src') || q.get('L') || q.get('R')) {
+    return {
+      mode: q.get('mode') || 'stitched',
+      src: q.get('src') || '',
+      L: q.get('L') || '',
+      R: q.get('R') || '',
+    };
+  }
+  try { return JSON.parse(localStorage.getItem('dualcam-video-sources') || 'null'); } catch (e) { return null; }
+}
+function sourcesQuery(pref) {
+  if (!pref) return '';
+  const q = new URLSearchParams();
+  q.set('mode', pref.mode || 'stitched');
+  if ((pref.mode || '') === 'split') {
+    if (pref.L) q.set('L', pref.L);
+    if (pref.R) q.set('R', pref.R);
+  } else {
+    q.set('src', pref.src || 'output/dualcam/src.mp4');
+  }
+  return q.toString();
+}
+const pref = videoPref();
+const srcQ = sourcesQuery(pref);
 const skelQ = new URLSearchParams(location.search).get('skel');
-const skelUrl = skelQ ? `/api/skel3d?skel=${encodeURIComponent(skelQ)}` : '/api/skel3d';
+const skelUrl = skelQ
+  ? `/api/skel3d?skel=${encodeURIComponent(skelQ)}`
+  : (srcQ ? `/api/skel3d?${srcQ}` : '/api/skel3d');
+const calibFetchUrl = srcQ ? `/api/calib?${srcQ}` : '/api/calib';
 const DATA = await fetch(skelUrl).then((r) => {
-  if (!r.ok) throw new Error('skel3d ' + r.status);
+  if (!r.ok) throw new Error('这路视频还没有对应骨架（' + skelUrl + '）');
   return r.json();
 }).catch((e) => {
   boot.textContent = '骨架加载失败：' + e;
   throw e;
 });
-const CALIB = await fetch('/api/calib').then((r) => r.json()).catch(() => ({}));
+const CALIB = await fetch(calibFetchUrl).then((r) => r.json()).catch(() => ({}));
+/** 标注页与回放必须同一套 solved：网格来自 calib，投影必须用 calib 相机，不能用 skel3d 里旧 1-3 相机。 */
+const solvedCalib = (CALIB.solved && CALIB.solved.ok) ? CALIB.solved : null;
+const sceneWalls = (solvedCalib && solvedCalib.walls && solvedCalib.walls.length)
+  ? solvedCalib.walls
+  : (DATA.walls || []);
+const projCams = (solvedCalib && solvedCalib.cameras) ? solvedCalib.cameras : DATA.cameras;
 boot.remove();
 const vid = document.getElementById('vid');
+const vidR = document.getElementById('vidR');
+const vs = CALIB.video_sources || pref || {};
+const splitVideo = vs.mode === 'split' && vs.L && vs.R;
+function leafName(path) {
+  return String(path || '').split('/').pop().replace(/\.mp4$/i, '') || '—';
+}
+const paneTags = document.querySelectorAll('.pane .tag');
+if (splitVideo) {
+  paneTags[0].textContent = '左路 · ' + leafName(vs.L);
+  paneTags[1].textContent = '右路 · ' + leafName(vs.R);
+} else {
+  const name = leafName(vs.src);
+  paneTags[0].textContent = '左路 · ' + name;
+  paneTags[1].textContent = '右路 · ' + name;
+}
+document.getElementById('hint').textContent =
+  (CALIB.calib_path || '标定') + ' · ' + (splitVideo ? (vs.L + ' | ' + vs.R) : (vs.src || 'src.mp4'))
+  + ' · 空格播放 · ←→ 跳 2 秒';
+const frameL = document.getElementById('frameL');
 const frameR = document.getElementById('frameR');
 const ovL = document.getElementById('ovL');
 const ovR = document.getElementById('ovR');
+const ctxFrameL = frameL.getContext('2d', { alpha: false });
 const ctxFrameR = frameR.getContext('2d', { alpha: false });
 const seek = document.getElementById('seek');
 const tlab = document.getElementById('tlab');
@@ -164,7 +225,7 @@ const wallMat = [
   new THREE.MeshPhongMaterial({ color: 0x3d8a5a, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }),
   new THREE.MeshPhongMaterial({ color: 0x2f6f9f, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }),
 ];
-for (const w of DATA.walls) {
+for (const w of sceneWalls) {
   const c = w.corners;
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute([
@@ -184,8 +245,8 @@ function addCam(cam, color) {
   g.add(new THREE.ArrowHelper(new THREE.Vector3(...cam.fwd), new THREE.Vector3(...cam.C), 0.55, color, 0.12, 0.08));
   scene.add(g);
 }
-addCam(DATA.cameras.L, 0xffcc66);
-addCam(DATA.cameras.R, 0xff8866);
+addCam(projCams.L, 0xffcc66);
+addCam(projCams.R, 0xff8866);
 
 let contactM = Number.isFinite(Number(CALIB.contact_m)) ? Number(CALIB.contact_m) : DEFAULT_CONTACT_M;
 const inpContact = document.getElementById('contactM');
@@ -198,10 +259,18 @@ inpContact.addEventListener('input', () => {
   lastPaintSig = null;
   show(vid.currentTime || 0);
 });
-const solved = (CALIB.solved && CALIB.solved.ok) ? CALIB.solved : { walls: DATA.walls || [] };
-const slotMeshes = (CALIB.slot_meshes && CALIB.slot_meshes.length)
-  ? CALIB.slot_meshes
-  : (DATA.walls || []).map((w) => makeLayerMesh(w.wall_id, w.corners, DEFAULT_LAYER_PITCH, 4, 4));
+const solved = solvedCalib || { walls: sceneWalls, cameras: projCams };
+const sceneWallIds = new Set(sceneWalls.map((w) => w.wall_id));
+let slotMeshes = (CALIB.slot_meshes && CALIB.slot_meshes.length)
+  ? CALIB.slot_meshes.filter((m) => sceneWallIds.has(m.wall_id))
+  : sceneWalls.map((w) => makeLayerMesh(w.wall_id, w.corners, DEFAULT_LAYER_PITCH, 4, 4));
+if (solvedCalib) {
+  slotMeshes = slotMeshes.flatMap((m) => {
+    const w = sceneWalls.find((x) => x.wall_id === m.wall_id);
+    if (!w) return [];
+    return [meshFromRowYs(m.wall_id, w.corners, rowYsFromMesh(m), m.cols)];
+  });
+}
 
 const idleFill = new THREE.MeshBasicMaterial({
   color: 0x3a6a88, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false,
@@ -340,7 +409,7 @@ for (let p = 0; p < MAX_PERSONS; p++) {
 
 const slotProj = { L: [], R: [] };
 for (const side of ['L', 'R']) {
-  const cam = DATA.cameras[side];
+  const cam = projCams[side];
   for (const mesh of slotMeshes) {
     for (const cell of meshCells(mesh)) {
       slotProj[side].push({
@@ -467,13 +536,25 @@ function draw2d(cv, fr, side, keys, wristHits) {
   });
 }
 
-function blitRight() {
-  const w = frameR.clientWidth, h = frameR.clientHeight;
-  if (!w || !h || vid.readyState < 2) return;
-  if (frameR.width !== w) frameR.width = w;
-  if (frameR.height !== h) frameR.height = h;
-  const vw = vid.videoWidth || 2560, vh = vid.videoHeight || 720;
-  ctxFrameR.drawImage(vid, vw / 2, 0, vw / 2, vh, 0, 0, w, h);
+function blitFrom(canvas, ctx, video, x0, srcW) {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!w || !h || !video || video.readyState < 2) return;
+  if (canvas.width !== w) canvas.width = w;
+  if (canvas.height !== h) canvas.height = h;
+  const vw = video.videoWidth || srcW || 1280;
+  const vh = video.videoHeight || 720;
+  ctx.drawImage(video, x0, 0, srcW || vw, vh, 0, 0, w, h);
+}
+
+function blitFrames() {
+  if (splitVideo) {
+    blitFrom(frameL, ctxFrameL, vid, 0, vid.videoWidth || 1280);
+    blitFrom(frameR, ctxFrameR, vidR, 0, vidR.videoWidth || 1280);
+    return;
+  }
+  const half = (vid.videoWidth || 2560) / 2;
+  blitFrom(frameL, ctxFrameL, vid, 0, half);
+  blitFrom(frameR, ctxFrameR, vid, half, half);
 }
 
 let lastIdx = -1;
@@ -508,23 +589,37 @@ function show(t) {
 function setTime(t) {
   t = Math.max(0, Math.min(vid.duration || 1000, t));
   vid.currentTime = t;
+  if (splitVideo) vidR.currentTime = t;
   show(t);
 }
 
-vid.src = '/api/video';
+function videoUrl(rel) {
+  return '/api/video?src=' + encodeURIComponent(rel || 'output/dualcam/src.mp4');
+}
+if (splitVideo) {
+  vid.src = videoUrl(vs.L);
+  vidR.src = videoUrl(vs.R);
+} else {
+  vid.src = videoUrl(vs.src || 'output/dualcam/src.mp4');
+}
 vid.addEventListener('loadedmetadata', () => {
   seek.max = String(vid.duration);
   show(0);
-  blitRight();
+  blitFrames();
 });
-vid.addEventListener('loadeddata', blitRight);
-vid.addEventListener('seeked', blitRight);
+vid.addEventListener('loadeddata', blitFrames);
+vid.addEventListener('seeked', blitFrames);
 btn.onclick = () => {
   if (vid.paused) {
+    if (splitVideo) {
+      vidR.currentTime = vid.currentTime;
+      vidR.play();
+    }
     vid.play();
     btn.textContent = '暂停';
   } else {
     vid.pause();
+    if (splitVideo) vidR.pause();
     btn.textContent = '播放';
   }
 };
@@ -541,7 +636,10 @@ document.addEventListener('keydown', (e) => {
 
 function tick() {
   if (!vid.paused) {
-    blitRight();
+    if (splitVideo && Math.abs(vidR.currentTime - vid.currentTime) > 0.08) {
+      vidR.currentTime = vid.currentTime;
+    }
+    blitFrames();
     show(vid.currentTime);
   }
   controls.update();
@@ -551,7 +649,7 @@ function tick() {
 for (const el of document.querySelectorAll('.stage')) {
   new ResizeObserver(() => {
     lastIdx = -1;
-    blitRight();
+    blitFrames();
     show(vid.currentTime || 0);
   }).observe(el);
 }

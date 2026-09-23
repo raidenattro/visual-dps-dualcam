@@ -27,8 +27,10 @@ from scripts.dualcam_lift import (
     PREFER_PX,
     RWRIST,
     _torso_xy,
+    anchor_xyz_list_to_floor,
     lift_point,
     load_cams,
+    normalize_pose_pack_for_calib,
     pick_pairs,
     signed_x,
 )
@@ -41,8 +43,9 @@ from scripts.skel3d_smooth import (
     wrist_jump_stats,
 )
 
-NPZ = ROOT / "output/dualcam/poses_5fps.npz"
-OUT = ROOT / "output/dualcam/skel3d.json"
+NPZ = ROOT / "output/dualcam/poses_test_144_24.npz"
+OUT = ROOT / "output/dualcam/skel3d_144_24.json"
+CALIB = ROOT / "output/calib/dual_144-24.json"
 EDGES = [
     [0, 1], [0, 2], [1, 3], [2, 4], [5, 6], [5, 7], [7, 9], [6, 8], [8, 10],
     [5, 11], [6, 12], [11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [0, 5], [0, 6],
@@ -103,7 +106,9 @@ def _lift_person(
         prev = None
         if prev_xyz and k < len(prev_xyz) and prev_xyz[k]:
             prev = np.asarray(prev_xyz[k], float)
-        p, g, kind = lift_point(kl[k], float(sl[k]), kr[k], float(sr[k]), cams, plane, prev)
+        p, g, kind = lift_point(
+            kl[k], float(sl[k]), kr[k], float(sr[k]), cams, plane, prev
+        )
         jg.append(None if g is None else round(float(g), 3))
         src.append(kind)
         if p is None:
@@ -173,18 +178,21 @@ def main() -> int:
         default=1,
         help="源帧号隔几帧取一帧后再平滑/抬 3D；2=约 12.5fps。>1 必须 --out 另存",
     )
-    ap.add_argument("--out", type=Path, default=None, help="写出路径，默认 output/dualcam/skel3d.json")
+    ap.add_argument("--calib", type=Path, default=CALIB, help="双路标定 JSON")
+    ap.add_argument("--npz", type=Path, default=NPZ, help="两路 2D 姿态 npz")
+    ap.add_argument("--out", type=Path, default=None, help="写出路径，默认 output/dualcam/skel3d_144_24.json")
     args = ap.parse_args()
     if args.keep_stride < 1:
         print("--keep-stride 必须 >= 1", file=sys.stderr)
         return 2
     out = (args.out if args.out is not None else OUT).resolve()
     if args.keep_stride > 1 and out == OUT.resolve():
-        print("keep-stride>1 必须 --out 另存，避免覆盖 skel3d.json", file=sys.stderr)
+        print("keep-stride>1 必须 --out 另存，避免覆盖默认 skel3d", file=sys.stderr)
         return 2
 
-    cams, plane, sol = load_cams()
-    raw_pack = list(np.load(NPZ, allow_pickle=True)["frames"])
+    cams, plane, sol = load_cams(args.calib)
+    raw_pack = list(np.load(args.npz, allow_pickle=True)["frames"])
+    normalize_pose_pack_for_calib(raw_pack)
     raw_pack = _keep_every(raw_pack, args.keep_stride)
     stride = _infer_stride(raw_pack)
     pack = copy_pose_pack(raw_pack)
@@ -267,6 +275,12 @@ def main() -> int:
         jump_before = {"L": wrist_jump_stats(frames, LWRIST), "R": wrist_jump_stats(frames, RWRIST)}
         smooth_info = smooth_frames(frames, plane)
         jump_after = {"L": wrist_jump_stats(frames, LWRIST), "R": wrist_jump_stats(frames, RWRIST)}
+
+    for fr in frames:
+        for p in fr.get("persons") or []:
+            xyz = p.get("xyz")
+            if xyz:
+                anchor_xyz_list_to_floor(xyz)
 
     def cam_pub(name: str) -> dict:
         c = cams[name]

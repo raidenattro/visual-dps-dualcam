@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""双路拼接监控的拣货面标注服务。视频只读，标定写本仓 output/calib。"""
+"""双路拣货面标注服务。视频从 output/dualcam 与 data 里选，标定写 output/calib。"""
 
 from __future__ import annotations
 
@@ -14,16 +14,47 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.solve_scene import solve_dual
+from scripts.dualcam_calib_paths import (
+    CALIB_144_24 as CALIB,
+    CALIB_ID,
+    calib_file,
+    migrate_misplaced_144_24,
+    skel_file,
+    stamp_144_24,
+)
+from scripts.dualcam_videos import list_videos, resolve_video
+from scripts.solve_scene import (
+    _wall_reproj_px,
+    _wall_x_spread,
+    snap_solved_walls_parametric,
+    solve_dual,
+)
 
 PAGE = ROOT / "scripts" / "dualcam_annot.html"
 PLAYER = ROOT / "scripts" / "dualcam_player.html"
 GEOM = ROOT / "scripts" / "dualcam_geom.js"
 VENDOR = ROOT / "scripts" / "vendor"
 VIDEO = ROOT / "output" / "dualcam" / "src.mp4"
-CALIB = ROOT / "output" / "calib" / "dual_1-3.json"
-SKEL = ROOT / "output" / "dualcam" / "skel3d.json"
+SKEL_DIR = ROOT / "output" / "dualcam"
+SKEL_PREFERRED = SKEL_DIR / "skel3d_144_24.json"
+SKEL_FALLBACKS = (
+    SKEL_PREFERRED,
+    SKEL_DIR / "skel3d.json",
+    SKEL_DIR / "skel3d_stride2.json",
+)
+# 空壳 skel（三角化 0 人）约几百 KB；完整片通常 >5MB
+MIN_SKEL_BYTES = 5_000_000
 PORT = 8767
+
+
+def _default_skel() -> Path | None:
+    sized = [p for p in SKEL_FALLBACKS if p.is_file() and p.stat().st_size >= MIN_SKEL_BYTES]
+    if sized:
+        return sized[0]
+    for p in SKEL_FALLBACKS:
+        if p.is_file():
+            return p
+    return None
 _VENDOR_TYPES = {".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8"}
 
 
@@ -39,30 +70,109 @@ def _lan_ip() -> str:
 
 
 def _load() -> dict:
-    if not CALIB.is_file():
+    return _read_calib(CALIB)
+
+
+def _read_calib(path: Path) -> dict:
+    if not path.is_file():
         return {}
     try:
-        return json.loads(CALIB.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return {}
+    if path != CALIB:
+        data["calib_path"] = str(path.relative_to(ROOT))
+        return data
+    spread = _wall_x_spread((data.get("solved") or {}).get("walls") or [])
+    fixed = stamp_144_24(_fix_solved_in_payload(data))
+    if spread >= 0.02 and _wall_x_spread((fixed.get("solved") or {}).get("walls") or []) < 0.02:
+        CALIB.write_text(json.dumps(fixed, ensure_ascii=False, indent=2), encoding="utf-8")
+    fixed["calib_path"] = str(CALIB.relative_to(ROOT))
+    return fixed
 
 
-def _save(data: dict) -> None:
-    CALIB.parent.mkdir(parents=True, exist_ok=True)
-    CALIB.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+def _video_sources_from_query(query: str) -> dict | None:
+    qs = parse_qs(query)
+    if not qs:
+        return None
+    return {
+        "mode": (qs.get("mode") or ["stitched"])[0],
+        "src": (qs.get("src") or [None])[0],
+        "L": (qs.get("L") or [None])[0],
+        "R": (qs.get("R") or [None])[0],
+    }
+
+
+def _view_list(body: dict) -> list:
+    views = body.get("views") or {}
+    if isinstance(views, dict) and "L" in views and "R" in views:
+        return [views["L"], views["R"]]
+    return list(views) if isinstance(views, list) else []
+
+
+def _fix_solved_in_payload(body: dict) -> dict:
+    sol = body.get("solved")
+    if not sol or not sol.get("ok"):
+        return body
+    views = _view_list(body)
+    if len(views) != 2:
+        return body
+    spread = _wall_x_spread(sol.get("walls") or [])
+    if spread < 0.02:
+        return body
+    out = dict(body)
+    out["solved"] = snap_solved_walls_parametric(
+        sol, views, float(body.get("aisle") or 2.0)
+    )
+    return out
+
+
+def _drop_absent_wall_meshes(payload: dict) -> dict:
+    """单面墙或反解里没有的墙，不保留层线网格，避免画面还画出墙2。"""
+    meshes = payload.get("slot_meshes") or []
+    if not meshes:
+        return payload
+    keep: set[int] | None = None
+    if payload.get("single_wall") and payload.get("active_wall_id") is not None:
+        keep = {int(payload["active_wall_id"])}
+    else:
+        walls = (payload.get("solved") or {}).get("walls") if isinstance(payload.get("solved"), dict) else None
+        if walls:
+            keep = {int(w["wall_id"]) for w in walls if w.get("wall_id") is not None}
+    if keep is None:
+        return payload
+    payload["slot_meshes"] = [m for m in meshes if int(m.get("wall_id", -1)) in keep]
+    return payload
+
+
+def _save(data: dict) -> Path:
+    path = calib_file(data.get("video_sources"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _drop_absent_wall_meshes(_fix_solved_in_payload(data))
+    if path == CALIB:
+        payload = stamp_144_24(payload)
+    else:
+        payload = dict(payload)
+        payload["calib_id"] = path.stem
+    payload["calib_path"] = str(path.relative_to(ROOT))
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
 
 
 def _skel_path(query: str) -> Path | None:
-    """只允许 output/dualcam/ 下 skel3d*.json；无参数则默认 skel3d.json。"""
-    name = (parse_qs(query).get("skel") or [None])[0]
+    """只允许 output/dualcam/ 下 skel3d*.json。带视频参数时按视频名找，避免回放串到 144/24。"""
+    qs = parse_qs(query)
+    name = (qs.get("skel") or [None])[0]
+    if not name and (qs.get("src") or qs.get("L") or qs.get("R")):
+        return skel_file(_video_sources_from_query(query))
     if not name:
-        return SKEL
+        return _default_skel()
     base = Path(name).name
     if not base.startswith("skel3d") or not base.endswith(".json"):
         return None
-    cand = (SKEL.parent / base).resolve()
+    cand = (SKEL_DIR / base).resolve()
     try:
-        cand.relative_to(SKEL.parent.resolve())
+        cand.relative_to(SKEL_DIR.resolve())
     except ValueError:
         return None
     return cand
@@ -116,18 +226,30 @@ class Handler(BaseHTTPRequestHandler):
             self._stream_file(path, "application/json; charset=utf-8", head_only)
             return
         if u.path == "/api/calib":
-            self._json(_load(), head_only)
+            vs = _video_sources_from_query(u.query)
+            if vs is None:
+                self._json(_load(), head_only)
+                return
+            path = calib_file(vs)
+            data = _read_calib(path)
+            data["calib_path"] = str(path.relative_to(ROOT))
+            self._json(data, head_only)
             return
         if u.path == "/favicon.ico":
             self.send_response(204)
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if u.path == "/api/videos":
+            self._json({"videos": list_videos()}, head_only)
+            return
         if u.path == "/api/video":
-            if not VIDEO.is_file():
+            src = (parse_qs(u.query).get("src") or [None])[0]
+            path = resolve_video(src)
+            if path is None:
                 self.send_error(404, "video missing")
                 return
-            self._file_range(VIDEO, "video/mp4", head_only)
+            self._file_range(path, "video/mp4", head_only)
             return
         self.send_error(404)
 
@@ -136,21 +258,29 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(n) or b"{}")
         if u.path == "/api/calib":
-            _save(body)
-            self._json({"ok": True, "path": str(CALIB.relative_to(ROOT))})
+            path = _save(body)
+            self._json({"ok": True, "path": str(path.relative_to(ROOT))})
             return
         if u.path == "/api/solve":
             views = body.get("views") or {}
             payload = {
                 "aisle": body.get("aisle"),
                 "prior": body.get("prior"),
+                "layout": body.get("layout") or body.get("stereo_layout") or "same_side",
                 "views": [views["L"], views["R"]] if isinstance(views, dict) and "L" in views else views,
             }
             res = solve_dual(payload)
             if res.get("ok"):
+                views = payload["views"]
+                res = snap_solved_walls_parametric(
+                    res, views, float(payload.get("aisle") or 2.0)
+                )
+                res["wall_reproj_px"] = _wall_reproj_px(res["walls"], views, res["cameras"])
                 saved = dict(body)
                 saved["solved"] = res
-                _save(saved)
+                path = _save(saved)
+                res = dict(res)
+                res["path"] = str(path.relative_to(ROOT))
             self._json(res)
             return
         self.send_error(404)
@@ -233,13 +363,25 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> int:
-    if not VIDEO.is_file():
-        print(f"找不到视频：{VIDEO}", file=sys.stderr)
+    vids = list_videos()
+    if not vids:
+        print(f"找不到 mp4：{VIDEO.parent} 或 data/", file=sys.stderr)
+        print("  .venv/bin/python scripts/stitch_dualcam_src.py", file=sys.stderr)
         return 1
+    note = migrate_misplaced_144_24()
+    if note:
+        print(f"migrate        → {note}", file=sys.stderr)
     ip = _lan_ip()
-    print(f"dualcam annot  → http://{ip}:{PORT}/")
+    print(f"dualcam annot  → http://{ip}:{PORT}/   videos={len(vids)}")
+    print(f"calib_id       → {CALIB_ID}")
     print(f"dualcam 3D回放 → http://{ip}:{PORT}/play")
     print(f"               → http://127.0.0.1:{PORT}/play")
+    print(f"calib          → {CALIB.relative_to(ROOT)}")
+    sk = _default_skel()
+    if sk:
+        print(f"skel3d         → {sk.relative_to(ROOT)}")
+    else:
+        print("skel3d         → 缺失（运行 scripts/dump_skel3d.py）", file=sys.stderr)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
     return 0
 

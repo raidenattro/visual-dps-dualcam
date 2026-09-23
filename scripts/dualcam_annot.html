@@ -24,7 +24,11 @@
   .hint { color: #e0b060; min-height: 3.2em; margin: 8px 0; }
   label { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
   label span { width: 112px; color: #bbb; flex-shrink: 0; }
-  input[type=number], input[type=text] { width: 72px; background: #222; color: #ddd; border: 1px solid #444; padding: 2px 4px; }
+  input[type=number], input[type=text], select { width: 72px; background: #222; color: #ddd; border: 1px solid #444; padding: 2px 4px; }
+  select { width: 168px; }
+  select.grow { width: auto; flex: 1; min-width: 0; }
+  .pane video.full { object-fit: contain; object-position: center center; }
+  .same-side-only { display: none; }
   table { border-collapse: collapse; width: 100%; margin: 6px 0; }
   th, td { padding: 3px 4px; text-align: left; font-weight: 400; color: #bbb; }
   tr.active td { background: #24323d; }
@@ -47,34 +51,63 @@
 <div id="app">
   <div id="views">
     <div class="pane on" data-view="L">
-      <span class="tag">左路 · 1-3组-1</span>
+      <span class="tag" id="tagL">左路 · 144</span>
       <video id="vidL" class="L" playsinline muted preload="auto"></video>
       <canvas id="cvL" class="ov"></canvas>
     </div>
     <div class="pane" data-view="R">
-      <span class="tag">右路 · 1-3组-2</span>
+      <span class="tag" id="tagR">右路 · 24</span>
       <video id="vidR" class="R" playsinline muted preload="auto"></video>
       <canvas id="cvR" class="ov"></canvas>
     </div>
   </div>
   <div id="panel">
     <h1>双路拣货面 <a href="/play">3D 回放</a></h1>
-    <div class="muted">每一路都能标<strong>左右两面墙</strong>：墙1 绿色（人伸手那面）、墙2 紫色（对面货架）。点表格或点画面上的墙切换；点哪路画面就标哪路。</div>
+    <div class="muted" id="intro">每一路都能标<strong>左右两面墙</strong>：墙1 绿色（81）、墙2 紫色（82）。点表格或点画面上的墙切换；点哪路画面就标哪路。点序相对本机 ①顶远 ②顶近 ③底近 ④底远。标定只写入 <code id="calibPath">output/calib/dual_144-24.json</code>（勿与 1-3 组 dual_1-3.json 混用）。</div>
+    <label><span>画面</span>
+      <select id="videoMode">
+        <option value="stitched">拼接片（左右半幅）</option>
+        <option value="split">左右各一路文件</option>
+      </select>
+    </label>
+    <label id="rowSrc"><span>视频</span><select id="videoSrc" class="grow"></select></label>
+    <label id="rowSrcL" class="split-only"><span>左路视频</span><select id="videoSrcL" class="grow"></select></label>
+    <label id="rowSrcR" class="split-only"><span>右路视频</span><select id="videoSrcR" class="grow"></select></label>
+    <label><span>机位布局</span>
+      <select id="layout">
+        <option value="opposite">对向（巷道两端对打）</option>
+        <option value="same_side" selected>同侧（同端同向）</option>
+      </select>
+    </label>
+    <label><span>标注墙</span>
+      <input type="checkbox" id="singleWall"> 两路只标同一面
+    </label>
     <div class="hint" id="hint"></div>
     <table>
       <tr><th>墙</th><th>面宽</th><th>面高</th><th>底沿</th><th>L</th><th>R</th></tr>
       <tbody id="rows"></tbody>
     </table>
     <label><span>巷道净宽 m</span><input type="number" id="aisle" step="0.01" value="2.00"></label>
-    <div class="muted" style="margin-top:8px">卷尺初值（先验，可改）。相机高、离近端分左右路，两端可以不同。</div>
+    <div class="muted" style="margin-top:8px" id="priorHint">卷尺初值（先验，可改）。相机高、离近端分左右路，两端可以不同。</div>
     <label><span>左路相机高 m</span><input type="number" id="camHL" step="0.05" value="2.84"></label>
     <label><span>右路相机高 m</span><input type="number" id="camHR" step="0.05" value="2.84"></label>
     <label><span>左路离近端 m</span><input type="number" id="camDistL" step="0.05" value="1.56"></label>
     <label><span>右路离近端 m</span><input type="number" id="camDistR" step="0.05" value="1.56"></label>
+    <label class="same-side-only"><span>左路到81 m</span><input type="number" id="wallDist81L" step="0.05" value=""></label>
+    <label class="same-side-only"><span>左路到82 m</span><input type="number" id="wallDist82L" step="0.05" value=""></label>
+    <label class="same-side-only"><span>右路到81 m</span><input type="number" id="wallDist81R" step="0.05" value=""></label>
+    <label class="same-side-only"><span>右路到82 m</span><input type="number" id="wallDist82R" step="0.05" value=""></label>
     <label><span>俯仰 °</span><input type="number" id="pitch" step="1" value="45"></label>
+    <label><span>画面叠加</span>
+      <input type="checkbox" id="onlyActiveWall" checked> 只显示当前墙
+    </label>
+    <label><span></span>
+      <input type="checkbox" id="hideSolvedOverlay" checked> 隐藏反解空心角（避免与实心点重复）
+    </label>
     <div id="btns">
       <button id="btnUndo">撤销墙角</button>
       <button id="btnClear">清空本墙本路</button>
+      <button id="btnClearView">清空本路全部墙</button>
       <button class="pri" id="btnSolve">1. 反解并对齐</button>
       <button id="btnSave">保存</button>
     </div>
@@ -117,6 +150,7 @@ let activeWall = 0;
 let drag = null;
 let state = {
   aisle: 2.0,
+  layout: 'same_side',
   prior: { camH: 2.84, camDist: 1.56, pitch: 45, yaw: 0 },
   views: {
     L: { name: 'L', image_size: [IW, IH], walls: emptyWalls() },
@@ -124,7 +158,52 @@ let state = {
   },
   slot_meshes: [],
   contact_m: 0,
+  only_active_wall: true,
+  hide_solved_overlay: true,
 };
+
+function onlyActiveWallOn() {
+  return document.getElementById('onlyActiveWall').checked;
+}
+
+function hideSolvedOverlayOn() {
+  return document.getElementById('hideSolvedOverlay').checked;
+}
+
+function syncOverlayPrefs() {
+  state.only_active_wall = onlyActiveWallOn();
+  state.hide_solved_overlay = hideSolvedOverlayOn();
+}
+
+function isSameSide() {
+  return (document.getElementById('layout').value || state.layout) === 'same_side';
+}
+
+function singleWallOn() {
+  return document.getElementById('singleWall').checked;
+}
+
+function activeWallId() {
+  const w = wallsOf('L')[activeWall];
+  return w ? w.wall_id : 1;
+}
+
+function syncLayoutUi() {
+  state.layout = document.getElementById('layout').value || 'opposite';
+  const same = state.layout === 'same_side';
+  document.querySelectorAll('.same-side-only').forEach((el) => {
+    el.style.display = same ? 'flex' : 'none';
+  });
+  document.getElementById('priorHint').textContent = same
+    ? '卷尺初值。同侧除相机高、离近端外，还要填每路到 81/82 的俯视法向距；两侧距之和应等于巷道净宽。点序仍相对本机，近对近，不对调。'
+    : '卷尺初值（先验，可改）。相机高、离近端分左右路，两端可以不同。对向对齐会把右路近端对到左路远端。';
+  const one = singleWallOn();
+  document.getElementById('intro').innerHTML = one
+    ? '左右路都在，但<strong>只标同一面墙</strong>（表格里点选墙1或墙2）。另一面留空，不参与反解。点序相对本机 ①顶远 ②顶近 ③底近 ④底远。'
+    : (same
+      ? '同侧同向：墙1=81（绿）、墙2=82（紫）。两面都标齐会一起对齐；只标同一面也可以反解。点序相对本机 ①顶远 ②顶近 ③底近 ④底远，<strong>近对近</strong>。'
+      : '每一路都能标<strong>左右两面墙</strong>：墙1 绿色（81）、墙2 紫色（82）。点表格或点画面上的墙切换；点哪路画面就标哪路。点序相对本机 ①顶远 ②顶近 ③底近 ④底远。');
+}
 
 function emptyWalls() {
   return [
@@ -161,7 +240,7 @@ function renderRows() {
   const wL = wallsOf('L'), wR = wallsOf('R');
   tb.innerHTML = wL.map((w, i) => `
     <tr class="${i === activeWall ? 'active' : ''} w${w.wall_id}" data-i="${i}">
-      <td>墙${w.wall_id}</td>
+      <td>墙${w.wall_id}${isSameSide() ? (w.wall_id === 1 ? ' · 81' : ' · 82') : ''}</td>
       <td><input type="number" step="0.01" data-k="width" value="${w.width}"></td>
       <td><input type="number" step="0.01" data-k="height" value="${w.height}"></td>
       <td><input type="number" step="0.01" data-k="base" value="${w.base}"></td>
@@ -188,15 +267,28 @@ function renderRows() {
   hint();
 }
 
+function wallReady(v, wallId) {
+  const w = wallsOf(v).find((x) => x.wall_id === wallId);
+  return !!(w && w.quad.length === 4);
+}
+
 function hint() {
   const w = wallsOf(activeView)[activeWall];
   const el = document.getElementById('hint');
   const mesh = meshOf(w.wall_id);
   const side = activeView === 'L' ? '左路' : '右路';
-  if (w.quad.length < 4) {
+  if (singleWallOn() && w.quad.length < 4) {
+    el.textContent = `${side} 墙${w.wall_id}：点 ${HINT[w.quad.length]}。左右路都只标这一面，标满四角再反解。`;
+  } else if (w.quad.length < 4) {
     el.textContent = `${side} 墙${w.wall_id}：点 ${HINT[w.quad.length]}。标完一面后点表格换墙，或直接点另一面已有的角。`;
+  } else if (singleWallOn() && !solved()) {
+    const id = w.wall_id;
+    const miss = ['L', 'R'].filter((v) => !wallReady(v, id));
+    el.textContent = miss.length
+      ? `墙${id} 还差 ${miss.map((v) => (v === 'L' ? '左路' : '右路')).join('、')} 的四角。另一面留空即可。`
+      : `左右路都标齐了墙${id}。点「1. 反解并对齐」。未标的另一面不参与。`;
   } else if (!solved()) {
-    el.textContent = `两路、两面墙角都齐了后点「1. 反解并对齐」，再生成层线并拖齐隔板。`;
+    el.textContent = `当前这面四角已齐。另一面可继续标；只标同一面时勾选「两路只标同一面」再反解。`;
   } else if (!mesh) {
     el.textContent = `当前墙${w.wall_id}。点「生成本墙层线」，再逐条拖分格线对齐隔板。`;
   } else {
@@ -217,6 +309,7 @@ function fitCanvas(cv) {
 
 function drawWalls(c, v, k) {
   wallsOf(v).forEach((w, wi) => {
+    if (onlyActiveWallOn() && wi !== activeWall) return;
     if (!w.quad.length) return;
     const on = v === activeView && wi === activeWall;
     const t = wallTint(w.wall_id);
@@ -256,11 +349,15 @@ function drawWalls(c, v, k) {
 }
 
 function drawSolvedCorners(c, v, k) {
+  if (hideSolvedOverlayOn()) return;
   const sol = solved();
   const cam = camOf(v);
   if (!sol || !cam) return;
-  const order = v === 'R' ? OPP_CORNER : [0, 1, 2, 3];
+  const order = (v === 'R' && !isSameSide()) ? OPP_CORNER : [0, 1, 2, 3];
   for (const w of sol.walls || []) {
+    const wi = wallsOf(v).findIndex((x) => x.wall_id === w.wall_id);
+    if (wi >= 0 && onlyActiveWallOn() && wi !== activeWall) continue;
+    if (wi >= 0 && wallsOf(v)[wi].quad.length === 4) continue;
     const col = wallTint(w.wall_id).on;
     order.forEach((ci, i) => {
       const p = (w.corners || [])[ci];
@@ -287,6 +384,7 @@ function drawMeshes(c, v, k) {
   if (!cam) return;
   const wallId = wallsOf(v)[activeWall].wall_id;
   for (const mesh of state.slot_meshes || []) {
+    if ((singleWallOn() || onlyActiveWallOn()) && mesh.wall_id !== wallId) continue;
     const on = mesh.wall_id === wallId;
     const t = wallTint(mesh.wall_id);
     const rows = mesh.rows, cols = mesh.cols;
@@ -479,7 +577,7 @@ for (const v of ['L', 'R']) {
       return;
     }
     let wi = activeWall;
-    if (wallsOf(v)[wi].quad.length >= 4) {
+    if (!singleWallOn() && wallsOf(v)[wi].quad.length >= 4) {
       const other = incompleteWall(v);
       if (other >= 0) wi = other;
     }
@@ -508,30 +606,100 @@ for (const v of ['L', 'R']) {
   cv.addEventListener('pointerup', () => { drag = null; });
 }
 
-function viewPrior(camH, camDist) {
-  return {
+function numOrBlank(id) {
+  const raw = document.getElementById(id).value;
+  if (raw === '' || raw == null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function viewPrior(camH, camDist, d81, d82) {
+  const prior = {
     camH,
     camDist,
     pitch: Number(document.getElementById('pitch').value),
     yaw: 0,
   };
+  if (d81 != null) {
+    prior.wallDist1 = d81;
+    prior.wallDist81 = d81;
+  }
+  if (d82 != null) {
+    prior.wallDist2 = d82;
+    prior.wallDist82 = d82;
+  }
+  return prior;
+}
+
+function maybeFillAisleFromWallDists() {
+  if (!isSameSide()) return;
+  const a = numOrBlank('wallDist81L'), b = numOrBlank('wallDist82L');
+  if (a == null || b == null) return;
+  document.getElementById('aisle').value = (a + b).toFixed(2);
 }
 
 function collect() {
+  syncLayoutUi();
   state.aisle = Number(document.getElementById('aisle').value);
   const pL = viewPrior(
     Number(document.getElementById('camHL').value),
     Number(document.getElementById('camDistL').value),
+    numOrBlank('wallDist81L'),
+    numOrBlank('wallDist82L'),
   );
   const pR = viewPrior(
     Number(document.getElementById('camHR').value),
     Number(document.getElementById('camDistR').value),
+    numOrBlank('wallDist81R'),
+    numOrBlank('wallDist82R'),
   );
   state.prior = pL;
   state.views.L.prior = pL;
   state.views.R.prior = pR;
   state.contact_m = Number(document.getElementById('contactM').value);
-  return state;
+  syncOverlayPrefs();
+  state.single_wall = singleWallOn();
+  state.active_wall_id = activeWallId();
+  const mode = document.getElementById('videoMode').value || 'stitched';
+  if (mode === 'split') {
+    state.video_sources = {
+      mode: 'split',
+      L: document.getElementById('videoSrcL').value,
+      R: document.getElementById('videoSrcR').value,
+      src: document.getElementById('videoSrcL').value,
+    };
+  } else {
+    const src = document.getElementById('videoSrc').value || 'output/dualcam/src.mp4';
+    const prev = state.video_sources || {};
+    state.video_sources = {
+      mode: 'stitched',
+      src,
+      L: prev.L || 'data/test-144.mp4',
+      R: prev.R || 'data/test-24.mp4',
+    };
+  }
+  state.calib_id = 'dual_144-24';
+  state.views.L.image_size = [IW, IH];
+  state.views.R.image_size = [IW, IH];
+  return payloadForPost();
+}
+
+function payloadForPost() {
+  const body = JSON.parse(JSON.stringify(state));
+  if (!singleWallOn()) {
+    body.single_wall = false;
+    return body;
+  }
+  const id = activeWallId();
+  body.single_wall = true;
+  body.active_wall_id = id;
+  for (const v of ['L', 'R']) {
+    for (const w of body.views[v].walls) {
+      if (w.wall_id !== id) w.quad = [];
+    }
+  }
+  body.slot_meshes = (body.slot_meshes || []).filter((m) => m.wall_id === id);
+  return body;
 }
 
 async function post(path) {
@@ -556,11 +724,35 @@ document.getElementById('btnClear').onclick = () => {
   wallsOf(activeView)[activeWall].quad = [];
   renderRows(); draw();
 };
-document.getElementById('btnSave').onclick = async () => {
+document.getElementById('btnClearView').onclick = () => {
+  for (const w of wallsOf(activeView)) w.quad = [];
+  state.solved = null;
+  renderRows(); draw();
+  document.getElementById('msg').textContent = `${activeView === 'L' ? '左路' : '右路'} 全部墙角已清空（含反解叠层）。`;
+};
+document.getElementById('onlyActiveWall').addEventListener('change', () => {
+  syncOverlayPrefs();
+  draw();
+});
+document.getElementById('hideSolvedOverlay').addEventListener('change', () => {
+  syncOverlayPrefs();
+  draw();
+});
+  document.getElementById('btnSave').onclick = async () => {
   const res = await post('/api/calib');
+  if (res.ok && res.path) document.getElementById('calibPath').textContent = res.path;
   document.getElementById('msg').textContent = res.ok ? `已存 ${res.path}` : (res.error || '保存失败');
 };
 document.getElementById('btnSolve').onclick = async () => {
+  if (singleWallOn()) {
+    const id = activeWallId();
+    const miss = ['L', 'R'].filter((v) => !wallReady(v, id));
+    if (miss.length) {
+      document.getElementById('msg').textContent =
+        `墙${id} 还没标满：${miss.map((v) => (v === 'L' ? '左路' : '右路')).join('、')}。左右路都要有这一面的四角。`;
+      return;
+    }
+  }
   document.getElementById('msg').textContent = '求解中…';
   const res = await post('/api/solve');
   if (!res.ok) {
@@ -568,18 +760,33 @@ document.getElementById('btnSolve').onclick = async () => {
     return;
   }
   state.solved = res;
-  for (const m of [...(state.slot_meshes || [])]) {
+  if (res.path) document.getElementById('calibPath').textContent = res.path;
+  const kept = [];
+  for (const m of state.slot_meshes || []) {
     const wall = wallById(res, m.wall_id);
     if (!wall) continue;
-    putMesh(meshFromRowYs(m.wall_id, wall.corners, rowYsFromMesh(m), m.cols));
+    kept.push(putMesh(meshFromRowYs(m.wall_id, wall.corners, rowYsFromMesh(m), m.cols)));
   }
+  state.slot_meshes = kept;
   const a = res.per_view.L, b = res.per_view.R;
+  const rp = res.wall_reproj_px || {};
+  const fmtRp = (side) => {
+    const m = rp[side] || {};
+    const parts = Object.keys(m).sort().map((k) => `墙${k} ${m[k]}px`);
+    return parts.length ? parts.join(' · ') : '—';
+  };
+  let extra = '';
+  const r2 = (rp.R || {})[2];
+  if (r2 != null && r2 > 40) {
+    extra = `\n⚠ 右路墙2 3D 与标注偏差 ${r2}px：请核对 82 四角、到82法向距，或删层线后重生成。`;
+  }
   document.getElementById('msg').textContent =
-    `左路残差 ${a.resid_px}px · 右路 ${b.resid_px}px\n` +
-    `对齐误差 ${res.align_rms_m} m · 尺度 ${res.align_scale}\n` +
+    `布局 ${res.layout || state.layout} · 单路残差 L ${a.resid_px}px · R ${b.resid_px}px\n` +
+    `对齐 ${res.align_rms_m} m · 尺度 ${res.align_scale}` +
+    ((res.align_wall_ids || []).length === 1 ? ` · 只用墙${res.align_wall_ids[0]}` : '') + `\n` +
+    `3D重投影 L：${fmtRp('L')} · R：${fmtRp('R')}\n` +
     `左相机高 ${res.cameras.L.camH} m · 右 ${res.cameras.R.camH} m\n` +
-    `空心圈=反解矩形墙投回来的角（墙色）。实心点=你标的。` +
-    `模型按面宽×面高的竖直面拟合，残差十几像素套不进圈是正常的，不用死磕。`;
+    `以实心点为准；反解空心角默认已隐藏。${extra}`;
   hint(); draw();
 };
 document.getElementById('btnGen').onclick = () => {
@@ -659,6 +866,107 @@ document.getElementById('btnPlay').onclick = () => {
   }
 };
 
+function fillVideoSelect(sel, videos, preferred) {
+  const paths = videos.map((v) => v.path);
+  const cur = preferred && paths.includes(preferred) ? preferred : (paths[0] || '');
+  sel.innerHTML = paths.map((p) => `<option value="${p}">${p}</option>`).join('');
+  if (cur) sel.value = cur;
+}
+
+function videoUrl(rel) {
+  return '/api/video?src=' + encodeURIComponent(rel || 'output/dualcam/src.mp4');
+}
+
+function applyVideo() {
+  const split = document.getElementById('videoMode').value === 'split';
+  document.querySelectorAll('.split-only').forEach((el) => {
+    el.style.display = split ? 'flex' : 'none';
+  });
+  document.getElementById('rowSrc').style.display = split ? 'none' : 'flex';
+  vidL.classList.toggle('full', split);
+  vidR.classList.toggle('full', split);
+  vidL.classList.toggle('L', !split);
+  vidR.classList.toggle('R', !split);
+  const left = split
+    ? document.getElementById('videoSrcL').value
+    : document.getElementById('videoSrc').value;
+  const right = split
+    ? document.getElementById('videoSrcR').value
+    : document.getElementById('videoSrc').value;
+  const ul = videoUrl(left);
+  const ur = videoUrl(right);
+  if (vidL.getAttribute('src') !== ul) vidL.src = ul;
+  if (vidR.getAttribute('src') !== ur) vidR.src = ur;
+  if (applyVideo.ready) {
+    writeVideoPref();
+    reloadCalibForVideo();
+  }
+}
+
+function calibQuery() {
+  const mode = document.getElementById('videoMode').value || 'stitched';
+  const q = new URLSearchParams();
+  q.set('mode', mode);
+  if (mode === 'split') {
+    q.set('L', document.getElementById('videoSrcL').value);
+    q.set('R', document.getElementById('videoSrcR').value);
+  } else {
+    q.set('src', document.getElementById('videoSrc').value || 'output/dualcam/src.mp4');
+  }
+  return q.toString();
+}
+
+const VIDEO_PREF_KEY = 'dualcam-video-sources';
+
+function readVideoPref() {
+  try {
+    return JSON.parse(localStorage.getItem(VIDEO_PREF_KEY) || 'null');
+  } catch (e) {
+    return null;
+  }
+}
+
+function writeVideoPref() {
+  const mode = document.getElementById('videoMode').value || 'stitched';
+  const vs = mode === 'split'
+    ? {
+      mode: 'split',
+      L: document.getElementById('videoSrcL').value,
+      R: document.getElementById('videoSrcR').value,
+      src: document.getElementById('videoSrcL').value,
+    }
+    : {
+      mode: 'stitched',
+      src: document.getElementById('videoSrc').value || 'output/dualcam/src.mp4',
+    };
+  localStorage.setItem(VIDEO_PREF_KEY, JSON.stringify(vs));
+  return vs;
+}
+
+function blankWalls() {
+  for (const v of ['L', 'R']) {
+    for (const w of wallsOf(v)) w.quad = [];
+  }
+  state.solved = null;
+  state.slot_meshes = [];
+}
+
+async function reloadCalibForVideo() {
+  const data = await fetch('/api/calib?' + calibQuery()).then((r) => r.json()).catch(() => ({}));
+  if (data.calib_path) document.getElementById('calibPath').textContent = data.calib_path;
+  if (data.views) {
+    restoreForm(data);
+    document.getElementById('msg').textContent = `已换视频，读入 ${data.calib_path || '标定'}`;
+  } else {
+    blankWalls();
+    renderRows();
+    hint();
+    draw();
+    document.getElementById('msg').textContent =
+      `已换视频。这路还没有标定，墙角已清空。保存将写入 ${data.calib_path || '新文件'}，不会改 dual_144-24.json。`;
+  }
+}
+
 vidL.addEventListener('seeked', () => { syncRight(true); draw(); });
 vidL.addEventListener('error', () => {
   const e = vidL.error;
@@ -670,26 +978,95 @@ vidR.addEventListener('error', () => {
 });
 window.addEventListener('resize', () => { draw(); });
 
-(async () => {
-  const saved = await fetch('/api/calib').then((r) => r.json()).catch(() => ({}));
-  if (saved && saved.views) {
-    state = saved;
-    if (!Array.isArray(state.slot_meshes)) state.slot_meshes = [];
-    if (saved.aisle) document.getElementById('aisle').value = saved.aisle;
-    const p = saved.prior || {};
-    const pL = (saved.views.L && saved.views.L.prior) || p;
-    const pR = (saved.views.R && saved.views.R.prior) || p;
-    if (pL.camH) document.getElementById('camHL').value = pL.camH;
-    if (pR.camH) document.getElementById('camHR').value = pR.camH;
-    if (pL.camDist || p.camDist) document.getElementById('camDistL').value = pL.camDist || p.camDist;
-    if (pR.camDist || p.camDist) document.getElementById('camDistR').value = pR.camDist || p.camDist;
-    if (pL.pitch || p.pitch) document.getElementById('pitch').value = pL.pitch || p.pitch;
-    if (saved.contact_m != null) document.getElementById('contactM').value = saved.contact_m;
-    const m = (state.slot_meshes || [])[0];
-    if (m) {
-      document.getElementById('nLayers').value = String(m.n_layers || m.rows || 4);
-      document.getElementById('nCols').value = String(m.cols || 4);
+function restoreForm(saved) {
+  state = saved;
+  if (!state.views) return;
+  if (!Array.isArray(state.slot_meshes)) state.slot_meshes = [];
+  if (saved.single_wall && saved.active_wall_id != null) {
+    state.slot_meshes = state.slot_meshes.filter((m) => m.wall_id === saved.active_wall_id);
+  }
+  if (!state.views.L) state.views.L = { name: 'L', image_size: [IW, IH], walls: emptyWalls() };
+  if (!state.views.R) state.views.R = { name: 'R', image_size: [IW, IH], walls: emptyWalls() };
+  if (saved.aisle) document.getElementById('aisle').value = saved.aisle;
+  const p = saved.prior || {};
+  const pL = (saved.views.L && saved.views.L.prior) || p;
+  const pR = (saved.views.R && saved.views.R.prior) || p;
+  if (pL.camH) document.getElementById('camHL').value = pL.camH;
+  if (pR.camH) document.getElementById('camHR').value = pR.camH;
+  if (pL.camDist || p.camDist) document.getElementById('camDistL').value = pL.camDist || p.camDist;
+  if (pR.camDist || p.camDist) document.getElementById('camDistR').value = pR.camDist || p.camDist;
+  if (pL.pitch || p.pitch) document.getElementById('pitch').value = pL.pitch || p.pitch;
+  const layoutRaw = saved.layout || saved.stereo_layout || 'same_side';
+  document.getElementById('layout').value =
+    (layoutRaw === 'same_side' || layoutRaw === 'same') ? 'same_side' : 'opposite';
+  const wallDistOf = (pr, walls, id, keys) => {
+    for (const k of keys) {
+      if (pr && pr[k]) return pr[k];
     }
+    if (pr && pr.wallDists && (pr.wallDists[id] || pr.wallDists[String(id)])) {
+      return pr.wallDists[id] || pr.wallDists[String(id)];
+    }
+    const w = (walls || []).find((x) => x.wall_id === id);
+    return w && w.normal_dist;
+  };
+  const d81 = (pr, walls) => wallDistOf(pr, walls, 1, ['wallDist81', 'wallDist1']);
+  const d82 = (pr, walls) => wallDistOf(pr, walls, 2, ['wallDist82', 'wallDist2']);
+  const wL = saved.views.L && saved.views.L.walls;
+  const wR = saved.views.R && saved.views.R.walls;
+  document.getElementById('wallDist81L').value = d81(pL, wL) || '';
+  document.getElementById('wallDist82L').value = d82(pL, wL) || '';
+  document.getElementById('wallDist81R').value = d81(pR, wR) || '';
+  document.getElementById('wallDist82R').value = d82(pR, wR) || '';
+  if (saved.contact_m != null) document.getElementById('contactM').value = saved.contact_m;
+  if (saved.only_active_wall != null) {
+    document.getElementById('onlyActiveWall').checked = !!saved.only_active_wall;
+  }
+  document.getElementById('singleWall').checked = !!saved.single_wall;
+  if (saved.active_wall_id != null && wL) {
+    const idx = wL.findIndex((w) => w.wall_id === saved.active_wall_id);
+    if (idx >= 0) activeWall = idx;
+  }
+  if (saved.hide_solved_overlay != null) {
+    document.getElementById('hideSolvedOverlay').checked = !!saved.hide_solved_overlay;
+  }
+  if (saved.calib_path) document.getElementById('calibPath').textContent = saved.calib_path;
+  syncOverlayPrefs();
+  const m = (state.slot_meshes || [])[0];
+  if (m) {
+    document.getElementById('nLayers').value = String(m.n_layers || m.rows || 4);
+    document.getElementById('nCols').value = String(m.cols || 4);
+  }
+  syncLayoutUi();
+  renderRows();
+  hint();
+  draw();
+}
+
+(async () => {
+  const videos = await fetch('/api/videos').then((r) => r.json()).then((j) => j.videos || []).catch(() => []);
+  const pref = readVideoPref() || { mode: 'stitched', src: 'output/dualcam/src.mp4' };
+  const split = pref.mode === 'split';
+  document.getElementById('videoMode').value = split ? 'split' : 'stitched';
+  fillVideoSelect(document.getElementById('videoSrc'), videos, pref.src || 'output/dualcam/src.mp4');
+  fillVideoSelect(document.getElementById('videoSrcL'), videos, pref.L || pref.src || 'output/dualcam/src.mp4');
+  fillVideoSelect(document.getElementById('videoSrcR'), videos, pref.R || pref.src || 'output/dualcam/src.mp4');
+  document.getElementById('layout').addEventListener('change', () => {
+    syncLayoutUi();
+    renderRows();
+    draw();
+  });
+  document.getElementById('singleWall').addEventListener('change', () => {
+    state.single_wall = singleWallOn();
+    syncLayoutUi();
+    hint();
+    draw();
+  });
+  document.getElementById('videoMode').addEventListener('change', applyVideo);
+  for (const id of ['videoSrc', 'videoSrcL', 'videoSrcR']) {
+    document.getElementById(id).addEventListener('change', applyVideo);
+  }
+  for (const id of ['wallDist81L', 'wallDist82L']) {
+    document.getElementById(id).addEventListener('change', maybeFillAisleFromWallDists);
   }
   document.getElementById('nLayers').addEventListener('change', () => {
     const w = wallsOf('L')[activeWall];
@@ -701,9 +1078,14 @@ window.addEventListener('resize', () => { draw(); });
     if (solved() && meshOf(w.wall_id)) applyMeshKeepRows(w.wall_id, nCols());
     hint(); draw();
   });
+  const data = await fetch('/api/calib?' + calibQuery()).then((r) => r.json()).catch(() => ({}));
+  if (data.views) restoreForm(data);
+  else if (data.calib_path) document.getElementById('calibPath').textContent = data.calib_path;
+  syncLayoutUi();
   renderRows();
-  vidL.src = '/api/video';
-  vidR.src = '/api/video';
+  applyVideo();
+  applyVideo.ready = true;
+  writeVideoPref();
   draw();
 })();
 </script>

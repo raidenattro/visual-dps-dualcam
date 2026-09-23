@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
-CALIB = ROOT / "output/calib/dual_1-3.json"
+CALIB = ROOT / "output/calib/dual_144-24.json"
 VIDEO = ROOT / "output/dualcam/src.mp4"
 OUT = ROOT / "output/dualcam"
 MODELS = Path("/home/hqit/workspace/visual-dps-0817-deploy/weights/rtmpose_onnx")
@@ -19,9 +19,14 @@ LWRIST, RWRIST = 9, 10
 KPT_MIN = 0.3
 
 
-def load_cams() -> tuple[dict, dict, dict]:
-    data = json.loads(CALIB.read_text(encoding="utf-8"))
+def load_cams(calib_path: Path | None = None) -> tuple[dict, dict, dict]:
+    global _aisle_box, _layout
+    path = Path(calib_path) if calib_path else CALIB
+    data = json.loads(path.read_text(encoding="utf-8"))
     sol = data["solved"]
+    layout = str(data.get("layout") or data.get("stereo_layout") or "").lower()
+    _layout = layout
+    _aisle_box = AISLE_AABB_SAME_SIDE if layout in ("same_side", "same") else AISLE_AABB
     cams = {}
     for name, c in sol["cameras"].items():
         cams[name] = {
@@ -141,13 +146,20 @@ def signed_x(p: np.ndarray, plane: dict) -> float:
     return float((p - plane["p0"]) @ plane["n"])
 
 
-def infer_video(stride: int, max_keep: int = 0) -> dict:
+def infer_video(
+    stride: int,
+    max_keep: int = 0,
+    *,
+    video_path: Path | None = None,
+    det_size: tuple[int, int] = (640, 640),
+) -> dict:
+    """对 src.mp4 左右半幅分别跑检测+姿态；坐标系为各路 1280×720（与标定一致）。"""
     from rtmlib.tools.object_detection.rtmdet import RTMDet
     from rtmlib.tools.pose_estimation.rtmpose import RTMPose
 
     det = RTMDet(
-        onnx_model=str(MODELS / "rtmdet_nano/end2end.onnx"),
-        model_input_size=(320, 320),
+        onnx_model=str(MODELS / "rtmdet_m/end2end.onnx"),
+        model_input_size=det_size,
         backend="onnxruntime",
         device="cuda",
     )
@@ -175,7 +187,8 @@ def infer_video(stride: int, max_keep: int = 0) -> dict:
             s = s.reshape(1, -1)
         return k, s
 
-    cap = cv2.VideoCapture(str(VIDEO))
+    vpath = video_path or VIDEO
+    cap = cv2.VideoCapture(str(vpath))
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     frames = []
@@ -185,9 +198,12 @@ def infer_video(stride: int, max_keep: int = 0) -> dict:
         if not ok:
             break
         if i % stride == 0:
-            left, right = fr[:, :1280], fr[:, 1280:]
+            half = fr.shape[1] // 2
+            left, right = fr[:, :half], fr[:, half : half * 2]
             kl, sl = one(left)
             kr, sr = one(right)
+            kl = _scale_kpts_to_calib(kl, left.shape[1], left.shape[0])
+            kr = _scale_kpts_to_calib(kr, right.shape[1], right.shape[0])
             frames.append({
                 "i": i,
                 "t": i / fps,
@@ -215,6 +231,133 @@ PREFER_PX = 90.0
 DUPLICATE_M = 0.40  # 两个 3D 躯干近于此则只留缝更小的（双检）
 # 巷道 AABB：墙 x=±1、货架高 2.2、进深 z=0~2.2。挡住镜头前幽灵和棚顶误检。
 AISLE_AABB = {"x": (-1.35, 1.35), "y": (0.50, 1.65), "z": (-0.12, 2.50)}
+# 同侧双机基线短，三角化 Y 误差大；配对阶段放宽，避免 paired=0
+AISLE_AABB_SAME_SIDE = {"x": (-1.45, 1.45), "y": (-0.15, 3.55), "z": (-2.5, 4.5)}
+HALF_W = 1280  # 拼接片半幅宽；标定 image_size 为 1280×720
+HALF_H = 720
+
+
+def _scale_kpts_to_calib(k: np.ndarray, src_w: int, src_h: int) -> np.ndarray:
+    """半幅原生分辨率上的关键点缩到标定 image_size（1280×720）。"""
+    if k.size == 0 or (src_w == HALF_W and src_h == HALF_H):
+        return k
+    out = np.asarray(k, np.float32).copy()
+    out[..., 0] *= HALF_W / float(src_w)
+    out[..., 1] *= HALF_H / float(src_h)
+    return out
+_aisle_box = AISLE_AABB
+_layout = ""
+WORLD_FLOOR_Y = 0.0  # 与 solved 墙底、播放器 GridHelper 一致
+_FOOT_ANCHOR_KPTS = (15, 16, 13, 14)
+# 贴地参考高度只采纳合理范围内的点，避免单点飞点把整段骨架平移到地下/天上
+_ANCHOR_Y_LO, _ANCHOR_Y_HI = -0.8, 2.6
+
+
+def shift_stitch_uv(k: np.ndarray) -> np.ndarray:
+    """2560 拼接片上偶发漏检到邻路半幅：仅对 u≥HALF_W 的点减半幅，避免整帧平移误伤 u∈[0,1280)。"""
+    if k.size == 0:
+        return np.asarray(k, float)
+    out = np.asarray(k, float).copy()
+    u = out[..., 0]
+    out[..., 0] = np.where(u >= HALF_W, u - HALF_W, u)
+    return out
+
+
+def normalize_pose_pack_for_calib(pack: list) -> None:
+    """poses npz 从拼接片导出时，把误入邻路半幅的 u 收回到各路 1280×720 标定坐标。"""
+    for fr in pack:
+        lk = fr["L"]["k"]
+        rk = fr["R"]["k"]
+        fr["L"] = {
+            **fr["L"],
+            "k": np.stack([shift_stitch_uv(k) for k in lk], axis=0) if len(lk) else lk,
+        }
+        fr["R"] = {
+            **fr["R"],
+            "k": np.stack([shift_stitch_uv(k) for k in rk], axis=0) if len(rk) else rk,
+        }
+
+
+def pose_in_calib_frame(
+    k,
+    s,
+    w: float = HALF_W,
+    h: float = HALF_H,
+    min_in_frac: float = 0.55,
+    max_u_span_frac: float = 0.72,
+) -> bool:
+    """剔除跨拼接缝/出画的 2D 框，避免误配对与巨大 overlay。"""
+    k = np.asarray(k, float)
+    s = np.asarray(s, float)
+    m = s >= KPT_MIN
+    if int(np.sum(m)) < PAIR_MIN_VIS:
+        return False
+    u, v = k[m, 0], k[m, 1]
+    in_box = (u >= -40) & (u <= w + 40) & (v >= -40) & (v <= h + 40)
+    if float(np.mean(in_box)) < min_in_frac:
+        return False
+    if float(np.max(u) - np.min(u)) > max_u_span_frac * w:
+        return False
+    return True
+
+
+def _round_xyz(p: np.ndarray) -> list:
+    return [round(float(v), 3) for v in p]
+
+
+def _floor_anchor_shift(raw3: list, floor_y: float) -> float | None:
+    def _ok_y(y: float) -> bool:
+        return _ANCHOR_Y_LO <= y <= _ANCHOR_Y_HI
+
+    cands = [
+        float(raw3[i][1])
+        for i in _FOOT_ANCHOR_KPTS
+        if raw3[i] is not None and _ok_y(float(raw3[i][1]))
+    ]
+    if not cands:
+        cands = [
+            float(raw3[i][1])
+            for i in range(17)
+            if raw3[i] is not None and _ok_y(float(raw3[i][1]))
+        ]
+    if not cands:
+        all_y = [float(raw3[i][1]) for i in range(17) if raw3[i] is not None]
+        if not all_y:
+            return None
+        ref = min(all_y)
+    else:
+        ref = min(cands)
+    return float(floor_y) - ref
+
+
+def _apply_floor_shift(raw3: list, xyz: list | None, shift: float, floor_y: float) -> None:
+    for i in range(17):
+        if raw3[i] is None:
+            if xyz is not None and i < len(xyz):
+                xyz[i] = None
+            continue
+        p = np.asarray(raw3[i], float) + np.array([0.0, shift, 0.0])
+        p[1] = max(float(p[1]), float(floor_y))
+        raw3[i] = p
+        if xyz is not None and i < len(xyz):
+            xyz[i] = _round_xyz(p)
+
+
+def anchor_person_to_floor(raw3: list, xyz: list, floor_y: float = WORLD_FLOOR_Y) -> None:
+    """整段骨架刚性平移 Y，使脚/最低点落在地面（不改变 XZ 与骨长）。"""
+    shift = _floor_anchor_shift(raw3, floor_y)
+    if shift is None:
+        return
+    _apply_floor_shift(raw3, xyz, shift, floor_y)
+
+
+def anchor_xyz_list_to_floor(xyz: list, floor_y: float = WORLD_FLOOR_Y) -> None:
+    """平滑后仅有 xyz 列表时再次贴地。"""
+    raw3 = [None if not xyz or i >= len(xyz) or not xyz[i] else np.asarray(xyz[i], float) for i in range(17)]
+    shift = _floor_anchor_shift(raw3, floor_y)
+    if shift is None:
+        return
+    _apply_floor_shift(raw3, xyz, shift, floor_y)
 
 
 def _torso_xy(k, s) -> np.ndarray | None:
@@ -236,6 +379,8 @@ def nms_indices(k, s, dist_px: float = NMS_TORSO_PX) -> list[int]:
     kept: list[int] = []
     for i in order:
         if _nvis(s[i]) < PAIR_MIN_VIS or xy[i] is None:
+            continue
+        if not pose_in_calib_frame(k[i], s[i]):
             continue
         if any(
             float(np.linalg.norm(xy[i] - xy[j])) < dist_px
@@ -281,7 +426,7 @@ def _torso_xyz(kl, sl, kr, sr, cams: dict) -> np.ndarray | None:
 def in_aisle(p: np.ndarray | None) -> bool:
     if p is None:
         return False
-    for ax, (lo, hi) in AISLE_AABB.items():
+    for ax, (lo, hi) in _aisle_box.items():
         v = float(p[{"x": 0, "y": 1, "z": 2}[ax]])
         if v < lo or v > hi:
             return False
@@ -459,9 +604,49 @@ def overlays(rows: list[dict], cams: dict, plane: dict, n: int = 6) -> None:
     cap.release()
 
 
+def _audit_pose_uv(pack: dict) -> dict:
+    """检查 L/R 是否落在半幅标定坐标内。"""
+    stats: dict[str, dict] = {}
+    for side, w in (("L", HALF_W), ("R", HALF_W)):
+        us, vs = [], []
+        for fr in pack["frames"]:
+            for k in fr[side]["k"]:
+                if len(k):
+                    us.extend(k[:, 0].tolist())
+                    vs.extend(k[:, 1].tolist())
+        if not us:
+            stats[side] = {"n": 0}
+            continue
+        u = np.asarray(us, float)
+        v = np.asarray(vs, float)
+        stats[side] = {
+            "n": int(len(u)),
+            "u_max": round(float(np.max(u)), 1),
+            "frac_u_gt_half": round(float(np.mean(u > w + 2)), 4),
+            "frac_v_oob": round(float(np.mean((v < -5) | (v > HALF_H + 5))), 4),
+        }
+    return stats
+
+
 def main() -> int:
-    stride = int(sys.argv[1]) if len(sys.argv) > 1 else 5
-    max_keep = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+    import argparse
+
+    ap = argparse.ArgumentParser(description="双路 2D 姿态提取 / 三角化抽样评估")
+    ap.add_argument("--stride", type=int, default=5, help="源视频隔几帧提一次，1=全帧")
+    ap.add_argument("--max-frames", type=int, default=0, help="最多保留多少提姿态帧，0=不限")
+    ap.add_argument("--video", type=Path, default=VIDEO, help="2560×720 拼接 src.mp4")
+    ap.add_argument(
+        "--out-npz",
+        type=Path,
+        default=None,
+        help="写出 npz（默认 stride=1 → poses_test_144_24.npz，否则 poses_5fps.npz）",
+    )
+    ap.add_argument("--skip-analyze", action="store_true", help="只提姿态，不做三角化报告")
+    args = ap.parse_args()
+    out_npz = args.out_npz
+    if out_npz is None:
+        out_npz = OUT / ("poses_test_144_24.npz" if args.stride <= 1 else "poses_5fps.npz")
+
     cams, plane, sol = load_cams()
     print(
         f"calib L {sol['per_view']['L']['resid_px']}px  "
@@ -469,8 +654,22 @@ def main() -> int:
         f"align {sol['align_rms_m']}m  wall1 x={plane['x']}",
         flush=True,
     )
-    pack = infer_video(stride, max_keep)
-    np.savez_compressed(OUT / "poses_5fps.npz", frames=np.array(pack["frames"], dtype=object))
+    print(f"infer {args.video} stride={args.stride} → {out_npz}", flush=True)
+    pack = infer_video(args.stride, args.max_frames, video_path=args.video)
+    audit = _audit_pose_uv(pack)
+    print("pose_uv_audit", json.dumps(audit, ensure_ascii=False), flush=True)
+    if audit.get("L", {}).get("frac_u_gt_half", 0) > 0.01:
+        print(
+            "警告：左路仍有大量 u>1280，请确认未在整幅拼接片上跑 L（应 fr[:,:1280]）",
+            file=sys.stderr,
+        )
+    if not pack["frames"]:
+        print("错误：未读到任何视频帧，未写入 npz（请先检查 src.mp4 是否损坏）", file=sys.stderr)
+        return 2
+    np.savez_compressed(out_npz, frames=np.array(pack["frames"], dtype=object))
+    print(f"wrote {out_npz}  pose_frames={len(pack['frames'])}", flush=True)
+    if args.skip_analyze:
+        return 0
     rows = analyze(pack, cams, plane)
     (OUT / "lift_rows.json").write_text(
         json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8"
