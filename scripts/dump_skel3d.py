@@ -34,6 +34,7 @@ from scripts.dualcam_lift import (
     pick_pairs,
     signed_x,
 )
+from scripts.plane_contact import PlaneContact
 from scripts.skel3d_smooth import (
     assign_tracks,
     copy_pose_pack,
@@ -152,6 +153,53 @@ def _lift_person(
     }
 
 
+def attach_plane_contact(frames: list[dict], pc: PlaneContact) -> dict:
+    """给每个人挂 `pc` 字段：两腕经单应落到墙面的重合距离 / 落点 / 货格。
+
+    用平滑后的 2D（Lsm/Rsm），held 帧复用上一帧不重算。
+    返回重合距离的分布统计：按三角化有向距离 dL/dR 分「贴墙 (<0.10)」「巷道 (>0.40)」两组，
+    用来定 τ——贴墙组 p90 应明显小于巷道组 p10。
+    """
+    near: list[float] = []
+    far: list[float] = []
+    n_contact = 0
+    for fr in frames:
+        for p in fr.get("persons") or []:
+            if p.get("held"):
+                continue
+            kl = p.get("Lsm") or p.get("L")
+            kr = p.get("Rsm") or p.get("R")
+            res = pc.person(kl, p.get("sL"), kr, p.get("sR"))
+            p["pc"] = res
+            for j, dkey in ((LWRIST, "dL"), (RWRIST, "dR")):
+                r = res.get(str(j))
+                if not r or r.get("dist") is None:
+                    continue
+                if r.get("contact"):
+                    n_contact += 1
+                d3 = p.get(dkey)
+                if d3 is None:
+                    continue
+                if d3 < 0.10:
+                    near.append(r["dist"])
+                elif d3 > 0.40:
+                    far.append(r["dist"])
+
+    def _q(a: list[float]) -> dict:
+        if not a:
+            return {"n": 0}
+        arr = np.asarray(a, float)
+        return {
+            "n": int(arr.size),
+            "p10": round(float(np.percentile(arr, 10)), 3),
+            "p50": round(float(np.percentile(arr, 50)), 3),
+            "p90": round(float(np.percentile(arr, 90)), 3),
+            "le_tau": round(float(np.mean(arr <= pc.tau)), 3),
+        }
+
+    return {"tau": pc.tau, "n_contact": n_contact, "near_wall": _q(near), "aisle": _q(far)}
+
+
 def _prefer_of(persons: list[dict]) -> list[tuple]:
     out = []
     for p in persons:
@@ -181,6 +229,7 @@ def main() -> int:
     ap.add_argument("--calib", type=Path, default=CALIB, help="双路标定 JSON")
     ap.add_argument("--npz", type=Path, default=NPZ, help="两路 2D 姿态 npz")
     ap.add_argument("--out", type=Path, default=None, help="写出路径，默认 output/dualcam/skel3d_144_24.json")
+    ap.add_argument("--tau", type=float, default=0.15, help="单应腕点两路落点重合阈值（米）")
     args = ap.parse_args()
     if args.keep_stride < 1:
         print("--keep-stride 必须 >= 1", file=sys.stderr)
@@ -282,6 +331,10 @@ def main() -> int:
             if xyz:
                 anchor_xyz_list_to_floor(xyz)
 
+    # 单应腕点：与三角化并行的另一路判定，只依赖两路墙四角
+    pc = PlaneContact.from_calib(json.loads(Path(args.calib).read_text(encoding="utf-8")), tau=args.tau)
+    pc_stats = attach_plane_contact(frames, pc) if pc.walls else None
+
     def cam_pub(name: str) -> dict:
         c = cams[name]
         return {
@@ -307,6 +360,7 @@ def main() -> int:
         "n_people": n_people,
         "smooth2d": smooth2d_info,
         "smooth": smooth_info,
+        "plane_contact": {**pc.describe(), "stats": pc_stats} if pc.walls else None,
         "frames": frames,
     }
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -315,6 +369,15 @@ def main() -> int:
         f"wrote {out}  frames={len(frames)} paired={n_paired} people={n_people} "
         f"stride={stride}  {out.stat().st_size / 1e6:.1f}MB"
     )
+    if pc_stats:
+        nw, ai = pc_stats["near_wall"], pc_stats["aisle"]
+        print(
+            f"plane_contact walls={pc.wall_ids} tau={pc.tau}  contacts={pc_stats['n_contact']}  "
+            f"贴墙组 n={nw.get('n')} p50={nw.get('p50')} p90={nw.get('p90')} ≤τ={nw.get('le_tau')}  "
+            f"巷道组 n={ai.get('n')} p10={ai.get('p10')} p50={ai.get('p50')} ≤τ={ai.get('le_tau')}"
+        )
+    else:
+        print("plane_contact: 两路没有同一面墙的四角，跳过")
     if smooth2d_info:
         print(
             f"smooth2d tracks={smooth2d_info['n_tracks']}  "
