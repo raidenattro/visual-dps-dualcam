@@ -63,7 +63,8 @@
   </div>
   <div id="panel">
     <h1>双路拣货面 <a href="/play">3D 回放</a></h1>
-    <div class="muted" id="intro">每一路都能标<strong>左右两面墙</strong>：墙1 绿色（81）、墙2 紫色（82）。点表格或点画面上的墙切换；点哪路画面就标哪路。点序相对本机 ①顶远 ②顶近 ③底近 ④底远。标定只写入 <code id="calibPath">output/calib/dual_144-24.json</code>（勿与 1-3 组 dual_1-3.json 混用）。</div>
+    <div class="muted" id="intro">每一路都能标<strong>左右两面墙</strong>：墙1 绿色（81）、墙2 紫色（82）。点表格或点画面上的墙切换；点哪路画面就标哪路。点序相对本机 ①顶远 ②顶近 ③底近 ④底远。</div>
+    <div class="muted">标定文件 <code id="calibPath">output/calib/dual_144-24.json</code></div>
     <label><span>画面</span>
       <select id="videoMode">
         <option value="stitched">拼接片（左右半幅）</option>
@@ -203,6 +204,11 @@ function syncLayoutUi() {
     : (same
       ? '同侧同向：墙1=81（绿）、墙2=82（紫）。两面都标齐会一起对齐；只标同一面也可以反解。点序相对本机 ①顶远 ②顶近 ③底近 ④底远，<strong>近对近</strong>。'
       : '每一路都能标<strong>左右两面墙</strong>：墙1 绿色（81）、墙2 紫色（82）。点表格或点画面上的墙切换；点哪路画面就标哪路。点序相对本机 ①顶远 ②顶近 ③底近 ④底远。');
+}
+
+function setCalibPath(path) {
+  const el = document.getElementById('calibPath');
+  if (el && path) el.textContent = path;
 }
 
 function emptyWalls() {
@@ -357,7 +363,6 @@ function drawSolvedCorners(c, v, k) {
   for (const w of sol.walls || []) {
     const wi = wallsOf(v).findIndex((x) => x.wall_id === w.wall_id);
     if (wi >= 0 && onlyActiveWallOn() && wi !== activeWall) continue;
-    if (wi >= 0 && wallsOf(v)[wi].quad.length === 4) continue;
     const col = wallTint(w.wall_id).on;
     order.forEach((ci, i) => {
       const p = (w.corners || [])[ci];
@@ -488,7 +493,8 @@ function putMesh(mesh) {
   const i = (state.slot_meshes || []).findIndex((m) => m.wall_id === mesh.wall_id);
   if (i < 0) state.slot_meshes = [...(state.slot_meshes || []), mesh];
   else state.slot_meshes[i] = mesh;
-  if (mesh.wall_id === wallsOf('L')[activeWall].wall_id) {
+  const active = wallsOf('L')[activeWall];
+  if (active && mesh.wall_id === active.wall_id) {
     document.getElementById('nLayers').value = String(mesh.n_layers || mesh.rows);
     document.getElementById('nCols').value = String(mesh.cols);
   }
@@ -740,35 +746,14 @@ document.getElementById('hideSolvedOverlay').addEventListener('change', () => {
 });
   document.getElementById('btnSave').onclick = async () => {
   const res = await post('/api/calib');
-  if (res.ok && res.path) document.getElementById('calibPath').textContent = res.path;
+  if (res.ok && res.path) setCalibPath(res.path);
   document.getElementById('msg').textContent = res.ok ? `已存 ${res.path}` : (res.error || '保存失败');
 };
-document.getElementById('btnSolve').onclick = async () => {
-  if (singleWallOn()) {
-    const id = activeWallId();
-    const miss = ['L', 'R'].filter((v) => !wallReady(v, id));
-    if (miss.length) {
-      document.getElementById('msg').textContent =
-        `墙${id} 还没标满：${miss.map((v) => (v === 'L' ? '左路' : '右路')).join('、')}。左右路都要有这一面的四角。`;
-      return;
-    }
-  }
-  document.getElementById('msg').textContent = '求解中…';
-  const res = await post('/api/solve');
-  if (!res.ok) {
-    document.getElementById('msg').textContent = res.error || '失败';
-    return;
-  }
-  state.solved = res;
-  if (res.path) document.getElementById('calibPath').textContent = res.path;
-  const kept = [];
-  for (const m of state.slot_meshes || []) {
-    const wall = wallById(res, m.wall_id);
-    if (!wall) continue;
-    kept.push(putMesh(meshFromRowYs(m.wall_id, wall.corners, rowYsFromMesh(m), m.cols)));
-  }
-  state.slot_meshes = kept;
-  const a = res.per_view.L, b = res.per_view.R;
+function solveSummary(res) {
+  const pv = res.per_view || {};
+  const a = pv.L || {};
+  const b = pv.R || {};
+  const cams = res.cameras || {};
   const rp = res.wall_reproj_px || {};
   const fmtRp = (side) => {
     const m = rp[side] || {};
@@ -780,14 +765,58 @@ document.getElementById('btnSolve').onclick = async () => {
   if (r2 != null && r2 > 40) {
     extra = `\n⚠ 右路墙2 3D 与标注偏差 ${r2}px：请核对 82 四角、到82法向距，或删层线后重生成。`;
   }
-  document.getElementById('msg').textContent =
-    `布局 ${res.layout || state.layout} · 单路残差 L ${a.resid_px}px · R ${b.resid_px}px\n` +
-    `对齐 ${res.align_rms_m} m · 尺度 ${res.align_scale}` +
-    ((res.align_wall_ids || []).length === 1 ? ` · 只用墙${res.align_wall_ids[0]}` : '') + `\n` +
+  const walls = (res.align_wall_ids || []).length === 1 ? ` · 只用墙${res.align_wall_ids[0]}` : '';
+  return `布局 ${res.layout || state.layout} · 单路残差 L ${a.resid_px}px · R ${b.resid_px}px\n` +
+    `对齐 ${res.align_rms_m} m · 尺度 ${res.align_scale}${walls}\n` +
     `3D重投影 L：${fmtRp('L')} · R：${fmtRp('R')}\n` +
-    `左相机高 ${res.cameras.L.camH} m · 右 ${res.cameras.R.camH} m\n` +
-    `以实心点为准；反解空心角默认已隐藏。${extra}`;
-  hint(); draw();
+    `左相机高 ${cams.L && cams.L.camH} m · 右 ${cams.R && cams.R.camH} m\n` +
+    `空心圆是反解投回的角，实心点是你点的角。${extra}`;
+}
+
+document.getElementById('btnSolve').onclick = async () => {
+  if (singleWallOn()) {
+    const id = activeWallId();
+    const miss = ['L', 'R'].filter((v) => !wallReady(v, id));
+    if (miss.length) {
+      document.getElementById('msg').textContent =
+        `墙${id} 还没标满：${miss.map((v) => (v === 'L' ? '左路' : '右路')).join('、')}。左右路都要有这一面的四角。`;
+      return;
+    }
+  }
+  const hintEl = document.getElementById('hint');
+  const msgEl = document.getElementById('msg');
+  hintEl.textContent = '求解中…';
+  msgEl.textContent = '求解中…';
+  try {
+    const res = await post('/api/solve');
+    if (!res.ok) {
+      const err = res.error || '失败';
+      hintEl.textContent = err;
+      msgEl.textContent = err;
+      return;
+    }
+    state.solved = res;
+    if (res.path) setCalibPath(res.path);
+    const summary = solveSummary(res);
+    hintEl.textContent = summary;
+    msgEl.textContent = summary;
+    document.getElementById('hideSolvedOverlay').checked = false;
+    syncOverlayPrefs();
+    const kept = [];
+    for (const m of state.slot_meshes || []) {
+      const wall = wallById(res, m.wall_id);
+      if (!wall || !wall.corners) continue;
+      kept.push(putMesh(meshFromRowYs(m.wall_id, wall.corners, rowYsFromMesh(m), m.cols)));
+    }
+    state.slot_meshes = kept;
+    hint();
+    hintEl.textContent = summary + '\n' + hintEl.textContent;
+    draw();
+  } catch (e) {
+    const err = '反解结果没画出来：' + (e && e.message ? e.message : e);
+    hintEl.textContent = err;
+    msgEl.textContent = err;
+  }
 };
 document.getElementById('btnGen').onclick = () => {
   const sol = solved();
@@ -953,7 +982,7 @@ function blankWalls() {
 
 async function reloadCalibForVideo() {
   const data = await fetch('/api/calib?' + calibQuery()).then((r) => r.json()).catch(() => ({}));
-  if (data.calib_path) document.getElementById('calibPath').textContent = data.calib_path;
+  if (data.calib_path) setCalibPath(data.calib_path);
   if (data.views) {
     restoreForm(data);
     document.getElementById('msg').textContent = `已换视频，读入 ${data.calib_path || '标定'}`;
@@ -1029,7 +1058,7 @@ function restoreForm(saved) {
   if (saved.hide_solved_overlay != null) {
     document.getElementById('hideSolvedOverlay').checked = !!saved.hide_solved_overlay;
   }
-  if (saved.calib_path) document.getElementById('calibPath').textContent = saved.calib_path;
+  if (saved.calib_path) setCalibPath(saved.calib_path);
   syncOverlayPrefs();
   const m = (state.slot_meshes || [])[0];
   if (m) {
@@ -1080,7 +1109,7 @@ function restoreForm(saved) {
   });
   const data = await fetch('/api/calib?' + calibQuery()).then((r) => r.json()).catch(() => ({}));
   if (data.views) restoreForm(data);
-  else if (data.calib_path) document.getElementById('calibPath').textContent = data.calib_path;
+  else if (data.calib_path) setCalibPath(data.calib_path);
   syncLayoutUi();
   renderRows();
   applyVideo();
