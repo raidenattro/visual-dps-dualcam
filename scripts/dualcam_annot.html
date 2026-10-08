@@ -89,35 +89,35 @@
       <tbody id="rows"></tbody>
     </table>
     <label><span>巷道净宽 m</span><input type="number" id="aisle" step="0.01" value="2.00"></label>
-    <div class="muted" style="margin-top:8px" id="priorHint">卷尺初值（先验，可改）。相机高、离近端分左右路，两端可以不同。</div>
-    <label><span>左路相机高 m</span><input type="number" id="camHL" step="0.05" value="2.84"></label>
-    <label><span>右路相机高 m</span><input type="number" id="camHR" step="0.05" value="2.84"></label>
-    <label><span>左路离近端 m</span><input type="number" id="camDistL" step="0.05" value="1.56"></label>
-    <label><span>右路离近端 m</span><input type="number" id="camDistR" step="0.05" value="1.56"></label>
+    <div class="muted solve-only" style="margin-top:8px" id="priorHint">卷尺初值（先验，可改）。相机高、离近端分左右路，两端可以不同。</div>
+    <label class="solve-only"><span>左路相机高 m</span><input type="number" id="camHL" step="0.05" value="2.84"></label>
+    <label class="solve-only"><span>右路相机高 m</span><input type="number" id="camHR" step="0.05" value="2.84"></label>
+    <label class="solve-only"><span>左路离近端 m</span><input type="number" id="camDistL" step="0.05" value="1.56"></label>
+    <label class="solve-only"><span>右路离近端 m</span><input type="number" id="camDistR" step="0.05" value="1.56"></label>
     <label class="same-side-only"><span>左路到81 m</span><input type="number" id="wallDist81L" step="0.05" value=""></label>
     <label class="same-side-only"><span>左路到82 m</span><input type="number" id="wallDist82L" step="0.05" value=""></label>
     <label class="same-side-only"><span>右路到81 m</span><input type="number" id="wallDist81R" step="0.05" value=""></label>
     <label class="same-side-only"><span>右路到82 m</span><input type="number" id="wallDist82R" step="0.05" value=""></label>
-    <label><span>俯仰 °</span><input type="number" id="pitch" step="1" value="45"></label>
+    <label class="solve-only"><span>俯仰 °</span><input type="number" id="pitch" step="1" value="45"></label>
     <label><span>画面叠加</span>
       <input type="checkbox" id="onlyActiveWall" checked> 只显示当前墙
     </label>
-    <label><span></span>
+    <label class="solve-only"><span></span>
       <input type="checkbox" id="hideSolvedOverlay" checked> 隐藏反解空心角（避免与实心点重复）
     </label>
     <div id="btns">
       <button id="btnUndo">撤销墙角</button>
       <button id="btnClear">清空本墙本路</button>
       <button id="btnClearView">清空本路全部墙</button>
-      <button class="pri" id="btnSolve">1. 反解并对齐</button>
+      <button class="pri solve-only" id="btnSolve">1. 反解并对齐</button>
       <button id="btnSave">保存</button>
     </div>
     <hr class="sep"/>
-    <div class="muted">反解后生成本墙层线，再<strong>逐条拖分格线</strong>对齐隔板。各层高度独立，不再等距；列仍沿墙面均分。</div>
+    <div class="muted" id="layerHelp">反解后生成本墙层线，再<strong>逐条拖分格线</strong>对齐隔板。各层高度独立，不再等距；列仍沿墙面均分。</div>
     <label><span>层数</span><input type="number" id="nLayers" min="1" max="8" step="1" value="4"></label>
     <label><span>列数</span><input type="number" id="nCols" min="1" max="8" step="1" value="4"></label>
-    <label><span>报警阈值 m</span><input type="number" id="contactM" step="0.01" value="0"></label>
-    <div class="muted">腕点到墙的有向距离 <strong>小于</strong> 该值才报警。0 = 伸进墙面；正数（如 0.10）= 离墙还有余量也报。</div>
+    <label class="solve-only"><span>报警阈值 m</span><input type="number" id="contactM" step="0.01" value="0"></label>
+    <div class="muted solve-only">腕点到墙的有向距离 <strong>小于</strong> 该值才报警。0 = 伸进墙面；正数（如 0.10）= 离墙还有余量也报。</div>
     <div id="btns">
       <button class="pri" id="btnGen">2. 生成本墙层线</button>
       <button id="btnGenBoth">两墙都生成</button>
@@ -135,8 +135,9 @@
 </div>
 <script type="module">
 import {
-  makeLayerMesh, meshCells, meshFromRowYs, moveLayerRow, pointInPolygon,
-  projectPix, rayPlane, rowYsFromMesh, vertIndex, wallById, wallPlane,
+  applyH, colZsFromMesh, equalColZs, equalRowYs, fitHomography, makeLayerMesh,
+  meshCells, meshFromGrid, meshFromRowYs, moveLayerCol, moveLayerRow, nominalWall, pointInPolygon,
+  projectPix, rayPlane, rowYsFromMesh, vertIndex, wallById, wallPlane, wallRectDst, wallYSpan,
 } from '/dualcam_geom.js';
 
 const IW = 1280, IH = 720;
@@ -179,6 +180,7 @@ function syncOverlayPrefs() {
 function isSameSide() {
   return (document.getElementById('layout').value || state.layout) === 'same_side';
 }
+function sameSideOn() { return isSameSide(); }
 
 function singleWallOn() {
   return document.getElementById('singleWall').checked;
@@ -193,16 +195,28 @@ function syncLayoutUi() {
   state.layout = document.getElementById('layout').value || 'opposite';
   const same = state.layout === 'same_side';
   document.querySelectorAll('.same-side-only').forEach((el) => {
-    el.style.display = same ? 'flex' : 'none';
+    el.style.display = 'none';
   });
-  document.getElementById('priorHint').textContent = same
-    ? '卷尺初值。同侧除相机高、离近端外，还要填每路到 81/82 的俯视法向距；两侧距之和应等于巷道净宽。点序仍相对本机，近对近，不对调。'
-    : '卷尺初值（先验，可改）。相机高、离近端分左右路，两端可以不同。对向对齐会把右路近端对到左路远端。';
+  document.querySelectorAll('.solve-only').forEach((el) => {
+    el.style.display = same ? 'none' : '';
+  });
+  const hintEl = document.getElementById('priorHint');
+  if (hintEl) {
+    hintEl.textContent = same
+      ? ''
+      : '卷尺初值（先验，可改）。相机高、离近端分左右路，两端可以不同。对向对齐会把右路近端对到左路远端。';
+  }
+  const help = document.getElementById('layerHelp');
+  if (help) {
+    help.innerHTML = same
+      ? '四角标齐后生成本墙格子。行线和列线都在画面上<strong>逐条拖</strong>到隔板，不经过反解。'
+      : '反解后生成本墙层线，再<strong>逐条拖分格线</strong>对齐隔板。各层高度独立，不再等距；列仍沿墙面均分。';
+  }
   const one = singleWallOn();
   document.getElementById('intro').innerHTML = one
-    ? '左右路都在，但<strong>只标同一面墙</strong>（表格里点选墙1或墙2）。另一面留空，不参与反解。点序相对本机 ①顶远 ②顶近 ③底近 ④底远。'
+    ? '左右路都在，但<strong>只标同一面墙</strong>（表格里点选墙1或墙2）。另一面留空。点序相对本机 ①顶远 ②顶近 ③底近 ④底远。'
     : (same
-      ? '同侧同向：墙1=81（绿）、墙2=82（紫）。两面都标齐会一起对齐；只标同一面也可以反解。点序相对本机 ①顶远 ②顶近 ③底近 ④底远，<strong>近对近</strong>。'
+      ? '同侧同向：墙1=81（绿）、墙2=82（紫）。点满四个角即可生成格子。点序相对本机 ①顶远 ②顶近 ③底近 ④底远，<strong>近对近</strong>。'
       : '每一路都能标<strong>左右两面墙</strong>：墙1 绿色（81）、墙2 紫色（82）。点表格或点画面上的墙切换；点哪路画面就标哪路。点序相对本机 ①顶远 ②顶近 ③底近 ④底远。');
 }
 
@@ -223,6 +237,50 @@ function solved() { return (state.solved && state.solved.ok) ? state.solved : nu
 function camOf(v) { return solved() && solved().cameras[v]; }
 function meshOf(wallId) {
   return (state.slot_meshes || []).find((m) => m.wall_id === wallId) || null;
+}
+
+function specOf(wallId) {
+  for (const v of ['L', 'R']) {
+    const w = wallsOf(v).find((x) => x.wall_id === wallId);
+    if (w) return w;
+  }
+  return null;
+}
+
+function aisleNow() {
+  return Number(document.getElementById('aisle').value) || state.aisle || 2;
+}
+
+function nominalOf(wallId) {
+  const spec = specOf(wallId);
+  if (!spec) return null;
+  return nominalWall(wallId, spec.width, spec.height, spec.base, aisleNow());
+}
+
+function wallCornersFor(wallId) {
+  if (sameSideOn()) {
+    const w = nominalOf(wallId);
+    return w && w.corners;
+  }
+  const sol = solved();
+  const wall = sol && wallById(sol, wallId);
+  return wall && wall.corners;
+}
+
+function hToWall(v, wallId) {
+  const w = wallsOf(v).find((x) => x.wall_id === wallId);
+  if (!w || w.quad.length !== 4) return null;
+  return fitHomography(w.quad, wallRectDst(w.width, w.height, w.base));
+}
+
+function hToPixel(v, wallId) {
+  const w = wallsOf(v).find((x) => x.wall_id === wallId);
+  if (!w || w.quad.length !== 4) return null;
+  return fitHomography(wallRectDst(w.width, w.height, w.base), w.quad);
+}
+
+function projectAnnot(v, wallId, xyz) {
+  return applyH(hToPixel(v, wallId), [xyz[2], xyz[1]]);
 }
 
 function wallTint(wallId) {
@@ -355,7 +413,7 @@ function drawWalls(c, v, k) {
 }
 
 function drawSolvedCorners(c, v, k) {
-  if (hideSolvedOverlayOn()) return;
+  if (sameSideOn() || hideSolvedOverlayOn()) return;
   const sol = solved();
   const cam = camOf(v);
   if (!sol || !cam) return;
@@ -384,27 +442,41 @@ function drawSolvedCorners(c, v, k) {
   }
 }
 
-function drawMeshes(c, v, k) {
+function displayMesh(mesh) {
+  if (!sameSideOn()) return mesh;
+  const corners = wallCornersFor(mesh.wall_id);
+  if (!corners) return mesh;
+  return meshFromGrid(mesh.wall_id, corners, rowYsFromMesh(mesh), colZsFromMesh(mesh, corners));
+}
+
+function meshPixel(v, xyz, wallId) {
+  if (sameSideOn()) return projectAnnot(v, wallId, xyz);
   const cam = camOf(v);
-  if (!cam) return;
+  return cam ? projectPix(xyz, cam) : null;
+}
+
+function drawMeshes(c, v, k) {
+  if (!sameSideOn() && !camOf(v)) return;
   const wallId = wallsOf(v)[activeWall].wall_id;
-  for (const mesh of state.slot_meshes || []) {
+  for (const raw of state.slot_meshes || []) {
+    const mesh = displayMesh(raw);
     if ((singleWallOn() || onlyActiveWallOn()) && mesh.wall_id !== wallId) continue;
     const on = mesh.wall_id === wallId;
     const t = wallTint(mesh.wall_id);
     const rows = mesh.rows, cols = mesh.cols;
-    // 列线：均分，只作参考
+    // 列线：同侧可逐条拖。内部分隔用亮黄，和行线的蓝/紫分开。
     for (let j = 0; j <= cols; j++) {
+      const inner = j > 0 && j < cols;
       c.beginPath();
       let started = false;
       for (let i = 0; i <= rows; i++) {
-        const uv = projectPix(mesh.vertices[vertIndex(rows, cols, i, j)], cam);
+        const uv = meshPixel(v, mesh.vertices[vertIndex(rows, cols, i, j)], mesh.wall_id);
         if (!uv) continue;
         const x = uv[0] * k, y = uv[1] * k;
         if (!started) { c.moveTo(x, y); started = true; } else c.lineTo(x, y);
       }
-      c.strokeStyle = on ? 'rgba(180,180,180,.35)' : 'rgba(120,120,120,.2)';
-      c.lineWidth = 1;
+      c.strokeStyle = inner ? (on ? '#ffe08a' : 'rgba(255,224,138,.45)') : (on ? t.on : t.off);
+      c.lineWidth = inner ? (on ? 2.6 : 1.6) : (on ? 1.4 : 1);
       c.stroke();
     }
     // 行线：墙上的层分格线
@@ -413,7 +485,7 @@ function drawMeshes(c, v, k) {
       c.beginPath();
       let started = false;
       for (let j = 0; j <= cols; j++) {
-        const uv = projectPix(mesh.vertices[vertIndex(rows, cols, i, j)], cam);
+        const uv = meshPixel(v, mesh.vertices[vertIndex(rows, cols, i, j)], mesh.wall_id);
         if (!uv) continue;
         const x = uv[0] * k, y = uv[1] * k;
         if (!started) { c.moveTo(x, y); started = true; } else c.lineTo(x, y);
@@ -424,8 +496,8 @@ function drawMeshes(c, v, k) {
     }
     const cells = meshCells(mesh);
     for (const cell of cells) {
-      const a = projectPix(cell.corners[0], cam);
-      const b = projectPix(cell.corners[2], cam);
+      const a = meshPixel(v, cell.corners[0], mesh.wall_id);
+      const b = meshPixel(v, cell.corners[2], mesh.wall_id);
       if (!a || !b) continue;
       c.fillStyle = on ? t.slot : t.off;
       c.font = '10px sans-serif';
@@ -466,17 +538,25 @@ function distToSeg(px, py, ax, ay, bx, by) {
 }
 
 function hitLayerLine(v, x, y) {
-  const cam = camOf(v);
-  if (!cam) return null;
+  if (!sameSideOn() && !camOf(v)) return null;
   let best = null, bestD = 14;
-  for (const mesh of state.slot_meshes || []) {
+  for (const raw of state.slot_meshes || []) {
+    const mesh = displayMesh(raw);
     const rows = mesh.rows, cols = mesh.cols;
     for (let r = 1; r < rows; r++) {
-      const a = projectPix(mesh.vertices[vertIndex(rows, cols, r, 0)], cam);
-      const b = projectPix(mesh.vertices[vertIndex(rows, cols, r, cols)], cam);
+      const a = meshPixel(v, mesh.vertices[vertIndex(rows, cols, r, 0)], mesh.wall_id);
+      const b = meshPixel(v, mesh.vertices[vertIndex(rows, cols, r, cols)], mesh.wall_id);
       if (!a || !b) continue;
       const d = distToSeg(x, y, a[0], a[1], b[0], b[1]);
-      if (d < bestD) { bestD = d; best = { wallId: mesh.wall_id, r }; }
+      if (d < bestD) { bestD = d; best = { wallId: mesh.wall_id, axis: 'row', index: r }; }
+    }
+    if (!sameSideOn()) continue;
+    for (let c = 1; c < cols; c++) {
+      const a = meshPixel(v, mesh.vertices[vertIndex(rows, cols, 0, c)], mesh.wall_id);
+      const b = meshPixel(v, mesh.vertices[vertIndex(rows, cols, rows, c)], mesh.wall_id);
+      if (!a || !b) continue;
+      const d = distToSeg(x, y, a[0], a[1], b[0], b[1]);
+      if (d < bestD) { bestD = d; best = { wallId: mesh.wall_id, axis: 'col', index: c }; }
     }
   }
   return best;
@@ -510,26 +590,32 @@ function syncInputsFromMesh() {
 }
 
 function applyMesh(wallId, layers, cols) {
-  const sol = solved();
-  const wall = sol && wallById(sol, wallId);
-  if (!wall) return null;
-  return putMesh(makeLayerMesh(wallId, wall.corners, 0, layers, cols));
+  const corners = wallCornersFor(wallId);
+  if (!corners) return null;
+  return putMesh(makeLayerMesh(wallId, corners, 0, layers, cols));
 }
 
 function applyMeshKeepRows(wallId, cols) {
-  const sol = solved();
-  const wall = sol && wallById(sol, wallId);
+  const corners = wallCornersFor(wallId);
   const mesh = meshOf(wallId);
-  if (!wall || !mesh) return applyMesh(wallId, nLayers(), cols);
-  return putMesh(meshFromRowYs(wallId, wall.corners, rowYsFromMesh(mesh), cols));
+  if (!corners || !mesh) return applyMesh(wallId, nLayers(), cols);
+  return putMesh(meshFromGrid(wallId, corners, rowYsFromMesh(mesh), equalColZs(corners, cols)));
 }
 
-function dragRowLine(wallId, r, p) {
-  const sol = solved();
-  const wall = sol && wallById(sol, wallId);
+function applyMeshKeepCols(wallId, layers) {
+  const corners = wallCornersFor(wallId);
   const mesh = meshOf(wallId);
-  if (!wall || !mesh || !p) return null;
-  return putMesh(moveLayerRow(mesh, wall.corners, r, p[1]));
+  if (!corners || !mesh) return applyMesh(wallId, layers, nCols());
+  const [yBot, yTop] = wallYSpan(corners);
+  return putMesh(meshFromGrid(wallId, corners, equalRowYs(yBot, yTop, layers), colZsFromMesh(mesh, corners)));
+}
+
+function dragGridLine(wallId, axis, index, zy) {
+  const corners = wallCornersFor(wallId);
+  const mesh = meshOf(wallId);
+  if (!corners || !mesh || !zy) return null;
+  if (axis === 'col') return putMesh(moveLayerCol(mesh, corners, index, zy[0]));
+  return putMesh(moveLayerRow(mesh, corners, index, zy[1]));
 }
 
 function hitWallCorner(v, x, y) {
@@ -563,7 +649,7 @@ for (const v of ['L', 'R']) {
     const hl = hitLayerLine(v, x, y);
     if (hl) {
       setActiveWall(wallIndexById(hl.wallId));
-      drag = { kind: 'line', view: v, r: hl.r, wallId: hl.wallId };
+      drag = { kind: 'line', view: v, axis: hl.axis || 'row', index: hl.index, wallId: hl.wallId };
       cv.setPointerCapture(e.pointerId);
       renderRows(); hint(); draw();
       return;
@@ -598,13 +684,18 @@ for (const v of ['L', 'R']) {
     if (drag.kind === 'wall') {
       wallsOf(v)[activeWall].quad[drag.i] = [x, y];
     } else if (drag.kind === 'line') {
-      const sol = solved();
-      const cam = camOf(v);
-      const wall = sol && wallById(sol, drag.wallId);
-      if (!sol || !cam || !wall) return;
-      const { p0, n } = wallPlane(wall.corners);
-      const p = rayPlane(x, y, cam, p0, n);
-      if (p) dragRowLine(drag.wallId, drag.r, p);
+      if (sameSideOn()) {
+        const zy = applyH(hToWall(v, drag.wallId), [x, y]);
+        if (zy) dragGridLine(drag.wallId, drag.axis, drag.index, zy);
+      } else {
+        const sol = solved();
+        const cam = camOf(v);
+        const wall = sol && wallById(sol, drag.wallId);
+        if (!sol || !cam || !wall) return;
+        const { p0, n } = wallPlane(wall.corners);
+        const p = rayPlane(x, y, cam, p0, n);
+        if (p) dragGridLine(drag.wallId, 'row', drag.index, [0, p[1]]);
+      }
       hint();
     }
     draw();
@@ -818,20 +909,49 @@ document.getElementById('btnSolve').onclick = async () => {
     msgEl.textContent = err;
   }
 };
+function quadReady(wallId) {
+  return ['L', 'R'].filter((v) => {
+    const w = wallsOf(v).find((x) => x.wall_id === wallId);
+    return w && w.quad.length === 4;
+  });
+}
+
 document.getElementById('btnGen').onclick = () => {
-  const sol = solved();
   const w = wallsOf('L')[activeWall];
-  const wall = sol && wallById(sol, w.wall_id);
-  if (!wall) {
+  if (!w) return;
+  if (sameSideOn()) {
+    if (!quadReady(w.wall_id).length) {
+      document.getElementById('msg').textContent = '先在至少一路点满这面墙的四个角。';
+      return;
+    }
+  } else if (!wallCornersFor(w.wall_id)) {
     document.getElementById('msg').textContent = '先点「1. 反解并对齐」。层线必须长在 3D 墙上。';
     return;
   }
   const mesh = upsertMesh(w.wall_id);
-  document.getElementById('msg').textContent =
-    `墙${w.wall_id}：${mesh.n_layers} 层 × ${mesh.cols} 列。拖每条分格线对齐隔板。`;
+  if (!mesh) {
+    document.getElementById('msg').textContent = '格子没有生成。';
+    return;
+  }
+  document.getElementById('msg').textContent = sameSideOn()
+    ? `墙${w.wall_id}：${mesh.n_layers} 层 × ${mesh.cols} 列。拖行线和列线对齐隔板。`
+    : `墙${w.wall_id}：${mesh.n_layers} 层 × ${mesh.cols} 列。拖每条分格线对齐隔板。`;
   hint(); draw();
 };
 document.getElementById('btnGenBoth').onclick = () => {
+  if (sameSideOn()) {
+    const names = [];
+    for (const w of wallsOf('L')) {
+      if (!quadReady(w.wall_id).length) continue;
+      upsertMesh(w.wall_id);
+      names.push(`墙${w.wall_id}`);
+    }
+    document.getElementById('msg').textContent = names.length
+      ? `${names.join('、')} 已生成格子。拖行线和列线对齐隔板。`
+      : '还没有一面墙点满四个角。';
+    hint(); draw();
+    return;
+  }
   const sol = solved();
   if (!sol) {
     document.getElementById('msg').textContent = '先点「1. 反解并对齐」。';
@@ -1099,12 +1219,15 @@ function restoreForm(saved) {
   }
   document.getElementById('nLayers').addEventListener('change', () => {
     const w = wallsOf('L')[activeWall];
-    if (solved() && meshOf(w.wall_id)) applyMesh(w.wall_id, nLayers(), nCols());
+    if (meshOf(w.wall_id) && wallCornersFor(w.wall_id)) {
+      if (sameSideOn()) applyMeshKeepCols(w.wall_id, nLayers());
+      else applyMesh(w.wall_id, nLayers(), nCols());
+    }
     hint(); draw();
   });
   document.getElementById('nCols').addEventListener('change', () => {
     const w = wallsOf('L')[activeWall];
-    if (solved() && meshOf(w.wall_id)) applyMeshKeepRows(w.wall_id, nCols());
+    if (meshOf(w.wall_id) && wallCornersFor(w.wall_id)) applyMeshKeepRows(w.wall_id, nCols());
     hint(); draw();
   });
   const data = await fetch('/api/calib?' + calibQuery()).then((r) => r.json()).catch(() => ({}));

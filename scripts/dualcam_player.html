@@ -99,8 +99,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import {
-  contactSlots, makeLayerMesh, meshCells, meshFromRowYs, projectCorners,
-  pointInPolygon, rowYsFromMesh, DEFAULT_LAYER_PITCH, DEFAULT_CONTACT_M,
+  applyH, cellAtZy, colZsFromMesh, contactSlots, fitHomography, makeLayerMesh,
+  meshCells, meshFromGrid, meshFromRowYs, nominalWall, projectCorners,
+  pointInPolygon, rowYsFromMesh, wallRectDst, DEFAULT_LAYER_PITCH, DEFAULT_CONTACT_M,
 } from '/dualcam_geom.js';
 
 const boot = document.getElementById('boot');
@@ -226,17 +227,23 @@ const wallMat = [
   new THREE.MeshPhongMaterial({ color: 0x3d8a5a, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }),
   new THREE.MeshPhongMaterial({ color: 0x2f6f9f, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }),
 ];
-for (const w of sceneWalls) {
+const solvedVis = [];
+const camVis = [];
+function addWallSheet(w, bucket) {
   const c = w.corners;
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute([
     ...c[0], ...c[1], ...c[2], ...c[0], ...c[2], ...c[3],
   ], 3));
-  scene.add(new THREE.Mesh(geo, wallMat[w.wall_id === 1 ? 0 : 1]));
+  const sheet = new THREE.Mesh(geo, wallMat[w.wall_id === 1 ? 0 : 1]);
+  scene.add(sheet);
   const lg = new THREE.BufferGeometry();
   lg.setAttribute('position', new THREE.Float32BufferAttribute([...c[0], ...c[1], ...c[1], ...c[2], ...c[2], ...c[3], ...c[3], ...c[0]], 3));
-  scene.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: w.wall_id === 1 ? 0x5c8 : 0x6af })));
+  const edge = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: w.wall_id === 1 ? 0x5c8 : 0x6af }));
+  scene.add(edge);
+  bucket.push(sheet, edge);
 }
+for (const w of sceneWalls) addWallSheet(w, solvedVis);
 
 function addCam(cam, color) {
   const g = new THREE.Group();
@@ -245,6 +252,7 @@ function addCam(cam, color) {
   g.add(ball);
   g.add(new THREE.ArrowHelper(new THREE.Vector3(...cam.fwd), new THREE.Vector3(...cam.C), 0.55, color, 0.12, 0.08));
   scene.add(g);
+  camVis.push(g);
 }
 addCam(projCams.L, 0xffcc66);
 addCam(projCams.R, 0xff8866);
@@ -275,6 +283,7 @@ inpContact.addEventListener('input', () => {
 chkWrist.addEventListener('change', () => {
   wristMode = chkWrist.checked;
   syncThrInput();
+  applyAnnotScene();
   lastIdx = -1;
   lastPaintSig = null;
   show(vid.currentTime || 0);
@@ -319,6 +328,70 @@ for (const mesh of slotMeshes) {
   }
 }
 
+const sameSide = CALIB.layout === 'same_side';
+function useAnnotGrid() { return sameSide && wristMode; }
+function calibWallSpec(wallId, side) {
+  const names = side ? [side] : ['L', 'R'];
+  for (const name of names) {
+    const walls = (((CALIB.views || {})[name] || {}).walls) || [];
+    const w = walls.find((x) => x.wall_id === wallId);
+    if (w) return w;
+  }
+  return null;
+}
+const annotWalls = [];
+const annotMeshes = [];
+const annotSlotObjs = [];
+const annotVis = [];
+if (sameSide) {
+  const aisle = Number(CALIB.aisle) || 2;
+  const ids = new Set();
+  for (const m of CALIB.slot_meshes || []) ids.add(m.wall_id);
+  for (const side of ['L', 'R']) {
+    for (const w of (((CALIB.views || {})[side] || {}).walls) || []) {
+      if ((w.quad || []).length === 4) ids.add(w.wall_id);
+    }
+  }
+  for (const id of [...ids].sort((a, b) => a - b)) {
+    const spec = calibWallSpec(id);
+    if (!spec) continue;
+    const wall = nominalWall(id, spec.width || 2.2, spec.height || 2, spec.base || 0, aisle);
+    annotWalls.push(wall);
+    const raw = (CALIB.slot_meshes || []).find((m) => m.wall_id === id);
+    annotMeshes.push(raw
+      ? meshFromGrid(id, wall.corners, rowYsFromMesh(raw), colZsFromMesh(raw, wall.corners))
+      : makeLayerMesh(id, wall.corners, DEFAULT_LAYER_PITCH, 4, 4));
+  }
+  for (const w of annotWalls) addWallSheet(w, annotVis);
+  for (const mesh of annotMeshes) {
+    for (const cell of meshCells(mesh)) {
+      const c = cell.corners;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute([
+        ...c[0], ...c[1], ...c[2], ...c[0], ...c[2], ...c[3],
+      ], 3));
+      const fill = new THREE.Mesh(geo, idleFill);
+      scene.add(fill);
+      const lg = new THREE.BufferGeometry();
+      lg.setAttribute('position', new THREE.Float32BufferAttribute(
+        [...c[0], ...c[1], ...c[1], ...c[2], ...c[2], ...c[3], ...c[3], ...c[0]], 3));
+      const line = new THREE.LineSegments(lg, idleLine);
+      scene.add(line);
+      annotSlotObjs.push({ key: `${mesh.wall_id}:${cell.box_id}`, fill, line });
+      annotVis.push(fill, line);
+    }
+  }
+}
+function applyAnnotScene() {
+  const on = useAnnotGrid();
+  for (const o of solvedVis) o.visible = !on;
+  for (const o of camVis) o.visible = !on;
+  for (const s of slotObjs) { s.fill.visible = !on; s.line.visible = !on; }
+  for (const o of annotVis) o.visible = on;
+  for (const s of annotSlotObjs) { s.fill.visible = on; s.line.visible = on; }
+}
+applyAnnotScene();
+
 function personsOf(fr) {
   if (!fr) return [];
   if (Array.isArray(fr.persons)) return fr.persons;
@@ -361,12 +434,30 @@ function wristContactOk(person, idx, hit) {
   return false;
 }
 
+/** 落点中点落在当前标定的哪一格。货格可以晚于骨架补上，不能只用 dump 里当时的 cell。 */
+function cellOfLanding(wallId, zy) {
+  const meshes = slotMeshes.filter((m) => m.wall_id === wallId);
+  const w = pcWalls.get(wallId);
+  if (!meshes.length || !w || !zy) return null;
+  const p = [w.x, zy[1], w.z_near + zy[0]];
+  const hit = contactSlots(p, meshes, solved, 1e9)[0];
+  return hit ? hit.box_id : null;
+}
+
 /** 腕点模式：pc[j] = {wall, zy:[z,y], zyL, zyR, dist, sgn, in, cell}。重合距离 ≤τ 且落在格内才算碰。 */
 function pcHit(person, idx) {
   const r = person.pc && person.pc[String(idx)];
   if (!r || r.dist == null || !r.in) return null;
-  const on = r.dist <= tau && !!r.cell;
-  return { wall_id: r.wall, box_id: r.cell, d: r.dist, sgn: r.sgn, zy: r.zy, zyL: r.zyL, zyR: r.zyR, on };
+  let cell = r.cell;
+  if (useAnnotGrid()) {
+    const mesh = annotMeshes.find((m) => m.wall_id === r.wall);
+    const hit = mesh && cellAtZy(mesh, r.zy);
+    cell = hit ? hit.box_id : null;
+  } else if (slotMeshes.some((m) => m.wall_id === r.wall)) {
+    cell = cellOfLanding(r.wall, r.zy);
+  }
+  const on = r.dist <= tau && !!cell;
+  return { wall_id: r.wall, box_id: cell, d: r.dist, sgn: r.sgn, zy: r.zy, zyL: r.zyL, zyR: r.zyR, on };
 }
 
 function frameHitsPc(fr) {
@@ -406,10 +497,10 @@ function frameHits(fr) {
 
 let lastPaintSig = null;
 function paintSlots(keys) {
-  const sig = [...keys].sort().join(',');
+  const sig = (useAnnotGrid() ? 'a:' : 's:') + [...keys].sort().join(',');
   if (sig === lastPaintSig) return;
   lastPaintSig = sig;
-  for (const s of slotObjs) {
+  for (const s of (useAnnotGrid() ? annotSlotObjs : slotObjs)) {
     const on = keys.has(s.key);
     s.fill.material = on ? alarmFill : idleFill;
     s.line.material = on ? alarmLine : idleLine;
@@ -452,40 +543,123 @@ for (let p = 0; p < MAX_PERSONS; p++) {
   skelPeople.push({ g, joints, boneAttr, boneGeo, jointMat, boneMat });
 }
 
-// 腕点模式的 3D 对象：每人每腕一个落点球 + 一条 L/R 落点连线（长度即重合距离）
+// 腕点模式：中点（红/灰）+ 左路落点 + 右路落点 + 连线。文字标明哪只手、哪一路。
 const landGeo = new THREE.SphereGeometry(0.05, 10, 10);
+const sideGeo = new THREE.SphereGeometry(0.032, 10, 10);
 const landMats = {
   on: new THREE.MeshBasicMaterial({ color: 0xff3344 }),
-  off: new THREE.MeshBasicMaterial({ color: 0x9a9a9a }),
+  off: new THREE.MeshBasicMaterial({ color: 0xb0b0b0 }),
+  L: new THREE.MeshBasicMaterial({ color: 0x7ec8ff }),
+  R: new THREE.MeshBasicMaterial({ color: 0xffd56a }),
 };
 const landLineMats = {
   on: new THREE.LineBasicMaterial({ color: 0xff8899 }),
-  off: new THREE.LineBasicMaterial({ color: 0x777777 }),
+  off: new THREE.LineBasicMaterial({ color: 0xdddddd }),
 };
+function makeTextSprite(text, color) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 64;
+  const g = canvas.getContext('2d');
+  g.font = 'bold 36px sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillStyle = color;
+  g.fillText(text, 128, 32);
+  const tex = new THREE.CanvasTexture(canvas);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+  sp.scale.set(0.46, 0.115, 1);
+  sp.visible = false;
+  return sp;
+}
+const HAND_NAME = { 9: '左腕', 10: '右腕' };
 const landPeople = [];
 for (let p = 0; p < MAX_PERSONS; p++) {
   const g = new THREE.Group();
   const wrists = {};
   for (const idx of [9, 10]) {
+    const hand = HAND_NAME[idx];
     const ball = new THREE.Mesh(landGeo, landMats.off);
-    ball.visible = false;
-    g.add(ball);
+    const ballL = new THREE.Mesh(sideGeo, landMats.L);
+    const ballR = new THREE.Mesh(sideGeo, landMats.R);
+    ball.visible = ballL.visible = ballR.visible = false;
     const attr = new THREE.Float32BufferAttribute(new Float32Array(6), 3);
     const lg = new THREE.BufferGeometry();
     lg.setAttribute('position', attr);
     const line = new THREE.LineSegments(lg, landLineMats.off);
     line.visible = false;
-    g.add(line);
-    wrists[idx] = { ball, line, attr };
+    const labMid = makeTextSprite(hand, '#ff6677');
+    const labL = makeTextSprite(hand + '·左路', '#7ec8ff');
+    const labR = makeTextSprite(hand + '·右路', '#ffd56a');
+    g.add(ball, ballL, ballR, line, labMid, labL, labR);
+    wrists[idx] = { ball, ballL, ballR, line, attr, labMid, labL, labR };
   }
   g.visible = false;
   scene.add(g);
   landPeople.push({ g, wrists });
 }
 function wallPoint(wallId, zy) {
+  if (!zy) return null;
+  if (useAnnotGrid()) {
+    const w = annotWalls.find((x) => x.wall_id === wallId);
+    if (!w) return null;
+    return [w.corners[0][0], zy[1], zy[0]];
+  }
   const w = pcWalls.get(wallId);
   if (!w) return null;
   return [w.x, zy[1], w.z_near + zy[0]];
+}
+
+function wallRect(wallId) {
+  if (useAnnotGrid()) {
+    const w = annotWalls.find((x) => x.wall_id === wallId);
+    if (!w) return null;
+    const zs = w.corners.map((p) => p[2]);
+    const ys = w.corners.map((p) => p[1]);
+    return {
+      x: w.corners[0][0],
+      z0: Math.min(...zs), z1: Math.max(...zs),
+      y0: Math.min(...ys), y1: Math.max(...ys),
+    };
+  }
+  const w = pcWalls.get(wallId);
+  if (!w) return null;
+  return {
+    x: w.x,
+    z0: w.z_near, z1: w.z_near + w.width,
+    y0: w.base, y1: w.base + w.height,
+  };
+}
+
+function hideWristMarks(o) {
+  o.ball.visible = false;
+  o.ballL.visible = false;
+  o.ballR.visible = false;
+  o.line.visible = false;
+  o.labMid.visible = false;
+  o.labL.visible = false;
+  o.labR.visible = false;
+}
+
+function putLabeled(mesh, label, p, dy) {
+  if (!p) {
+    mesh.visible = false;
+    label.visible = false;
+    return;
+  }
+  mesh.visible = true;
+  mesh.position.set(p[0], p[1], p[2]);
+  label.visible = true;
+  label.position.set(p[0], p[1] + dy, p[2]);
+}
+
+/** 落点离货架太远就不画，避免外推到摄像头背后把画面撑飞。 */
+function nearShelf(wallId, p) {
+  const rect = wallRect(wallId);
+  if (!rect || !p) return false;
+  const m = 0.8;
+  return p[2] >= rect.z0 - m && p[2] <= rect.z1 + m
+    && p[1] >= rect.y0 - m && p[1] <= rect.y1 + m;
 }
 
 function draw3dPc(fr) {
@@ -499,12 +673,16 @@ function draw3dPc(fr) {
       const o = slot.wrists[idx];
       const h = pcHit(person, idx);
       const mid = h && wallPoint(h.wall_id, h.zy);
-      if (!mid) { o.ball.visible = false; o.line.visible = false; continue; }
-      o.ball.visible = true;
-      o.ball.position.set(mid[0], mid[1], mid[2]);
+      if (!mid) { hideWristMarks(o); continue; }
       o.ball.material = h.on ? landMats.on : landMats.off;
-      const a = wallPoint(h.wall_id, h.zyL), b = wallPoint(h.wall_id, h.zyR);
-      if (a && b) {
+      putLabeled(o.ball, o.labMid, mid, 0.1);
+      const a = wallPoint(h.wall_id, h.zyL);
+      const b = wallPoint(h.wall_id, h.zyR);
+      const showL = nearShelf(h.wall_id, a);
+      const showR = nearShelf(h.wall_id, b);
+      putLabeled(o.ballL, o.labL, showL ? a : null, 0.12);
+      putLabeled(o.ballR, o.labR, showR ? b : null, 0.12);
+      if (showL && showR) {
         o.attr.array.set([...a, ...b]);
         o.attr.needsUpdate = true;
         o.line.material = h.on ? landLineMats.on : landLineMats.off;
@@ -516,18 +694,34 @@ function draw3dPc(fr) {
   }
 }
 
-const slotProj = { L: [], R: [] };
-for (const side of ['L', 'R']) {
-  const cam = projCams[side];
-  for (const mesh of slotMeshes) {
+function pushProj(bucket, meshes, project) {
+  for (const mesh of meshes) {
     for (const cell of meshCells(mesh)) {
-      slotProj[side].push({
+      bucket.push({
         key: `${mesh.wall_id}:${cell.box_id}`,
         label: `墙${mesh.wall_id} ${cell.box_id}`,
-        poly: cam ? projectCorners(cell.corners, cam) : null,
+        poly: project(mesh.wall_id, cell.corners),
       });
     }
   }
+}
+const slotProj = { L: [], R: [] };
+const slotProjAnnot = { L: [], R: [] };
+for (const side of ['L', 'R']) {
+  const cam = projCams[side];
+  pushProj(slotProj[side], slotMeshes, (_id, corners) => (cam ? projectCorners(corners, cam) : null));
+  pushProj(slotProjAnnot[side], annotMeshes, (wallId, corners) => {
+    const spec = calibWallSpec(wallId, side);
+    const quad = spec && spec.quad;
+    if (!quad || quad.length !== 4) return null;
+    const H = fitHomography(wallRectDst(spec.width, spec.height, spec.base), quad);
+    if (!H) return null;
+    const poly = corners.map((p) => applyH(H, [p[2], p[1]]));
+    return poly.every(Boolean) ? poly : null;
+  });
+}
+function activeProj(side) {
+  return (useAnnotGrid() ? slotProjAnnot : slotProj)[side];
 }
 
 function resize3d() {
@@ -588,7 +782,7 @@ function draw3d(fr, keys, wristHits) {
 
 function drawSlots2d(ctx, w, h, side, keys) {
   const sx = w / 1280, sy = h / 720;
-  for (const cell of slotProj[side]) {
+  for (const cell of activeProj(side)) {
     const poly = cell.poly;
     if (!poly) continue;
     const alarm = keys.has(cell.key);
