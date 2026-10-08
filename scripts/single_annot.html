@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>单路货架标注</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; color: #ddd; font: 14px/1.4 sans-serif; }
+  #app { display: grid; grid-template-columns: 1fr 280px; height: 100%; }
+  #stage { position: relative; background: #000; min-width: 0; }
+  video, canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  video { object-fit: contain; }
+  canvas { cursor: crosshair; }
+  #panel { border-left: 1px solid #333; padding: 14px; overflow: auto; }
+  h1 { margin: 0 0 8px; font-size: 16px; }
+  h1 a { font-size: 13px; font-weight: 400; color: #9ad; }
+  .muted { color: #888; }
+  label { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+  label span { width: 72px; color: #bbb; }
+  input, select { background: #222; color: #ddd; border: 1px solid #444; padding: 3px 6px; }
+  select { width: 100%; }
+  button { background: #2a2a2a; color: #eee; border: 1px solid #444; padding: 6px 10px; cursor: pointer; margin-right: 6px; }
+  button.pri { background: #2a4a3a; border-color: #5c8; }
+  #hint { color: #e0b060; min-height: 2.8em; }
+  #msg { color: #9ad; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <video id="vid" playsinline muted></video>
+    <canvas id="cv"></canvas>
+  </div>
+  <div id="panel">
+    <h1>单路货架 <a id="playLink" href="/dwell">播放</a></h1>
+    <p class="muted">点四个角，再填行数、列数。四角齐了之后，行线、列线都可以拖。</p>
+    <label><span>视频</span><select id="videoSrc"></select></label>
+    <p id="hint">依次点 ①顶远 ②顶近 ③底近 ④底远</p>
+    <label><span>行数</span><input id="rows" type="number" min="1" max="8" value="4"></label>
+    <label><span>列数</span><input id="cols" type="number" min="1" max="8" value="4"></label>
+    <label><span>面宽 m</span><input id="width" type="number" step="0.01" value="2.2"></label>
+    <label><span>面高 m</span><input id="height" type="number" step="0.01" value="2.0"></label>
+    <p class="muted">宽高只用来把像素换成米，默认 2.2×2.0。点序和双路相同。</p>
+    <p>
+      <button id="undo">撤销一点</button>
+      <button id="clear">清空四角</button>
+      <button class="pri" id="save">保存</button>
+    </p>
+    <p id="msg"></p>
+  </div>
+</div>
+<script type="module">
+import { applyH, fitHomography, wallRectDst } from '/dualcam_geom.js';
+
+const HINT = ['① 顶远', '② 顶近', '③ 底近', '④ 底远'];
+const vid = document.getElementById('vid');
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+let quad = [];
+let rowYs = [];
+let colZs = [];
+let drag = null;
+let video = 'output/dualcam/94-left.mp4';
+
+function nums() {
+  return {
+    rows: Math.max(1, Math.min(8, Number(document.getElementById('rows').value) || 4)),
+    cols: Math.max(1, Math.min(8, Number(document.getElementById('cols').value) || 4)),
+    width: Number(document.getElementById('width').value) || 2.2,
+    height: Number(document.getElementById('height').value) || 2.0,
+  };
+}
+
+function playHref() {
+  document.getElementById('playLink').href = '/dwell?src=' + encodeURIComponent(video);
+}
+
+async function loadVideos() {
+  const data = await fetch('/api/videos').then((r) => r.json());
+  const sel = document.getElementById('videoSrc');
+  const q = new URLSearchParams(location.search).get('src');
+  const pref = q || 'output/dualcam/94-left.mp4';
+  for (const v of data.videos || []) {
+    const o = document.createElement('option');
+    o.value = v.path;
+    o.textContent = v.label;
+    if (v.path === pref) o.selected = true;
+    sel.appendChild(o);
+  }
+  if (![...sel.options].some((o) => o.selected) && sel.options.length) sel.selectedIndex = 0;
+  video = sel.value || pref;
+  playHref();
+}
+
+async function loadCalib() {
+  const data = await fetch('/api/single-calib?src=' + encodeURIComponent(video)).then((r) => r.json());
+  quad = (data.quad || []).map((p) => [Number(p[0]), Number(p[1])]);
+  if (data.rows) document.getElementById('rows').value = data.rows;
+  if (data.cols) document.getElementById('cols').value = data.cols;
+  if (data.width) document.getElementById('width').value = data.width;
+  if (data.height) document.getElementById('height').value = data.height;
+  const { rows, cols } = nums();
+  rowYs = Array.isArray(data.row_ys) && data.row_ys.length === rows + 1 ? data.row_ys.map(Number) : [];
+  colZs = Array.isArray(data.col_zs) && data.col_zs.length === cols + 1 ? data.col_zs.map(Number) : [];
+  ensureBounds();
+  hint();
+  draw();
+}
+
+function hint() {
+  const el = document.getElementById('hint');
+  el.textContent = quad.length < 4
+    ? ('下一点 ' + HINT[quad.length])
+    : '四角已齐。拖角点改墙，拖中间的行线、列线改格子。';
+}
+
+function ensureBounds() {
+  const { rows, cols, width, height } = nums();
+  if (rowYs.length !== rows + 1) {
+    rowYs = [];
+    for (let r = 0; r <= rows; r++) rowYs.push(height * (1 - r / rows));
+  }
+  if (colZs.length !== cols + 1) {
+    colZs = [];
+    for (let c = 0; c <= cols; c++) colZs.push(width * (1 - c / cols));
+  }
+  rowYs[0] = height;
+  rowYs[rowYs.length - 1] = 0;
+  colZs[0] = width;
+  colZs[colZs.length - 1] = 0;
+}
+
+function hom() {
+  if (quad.length < 4) return { H: null, Hinv: null };
+  const { width, height } = nums();
+  const dst = wallRectDst(width, height, 0);
+  return { H: fitHomography(quad, dst), Hinv: fitHomography(dst, quad) };
+}
+
+function segAt(kind, i) {
+  const { width, height } = nums();
+  const { Hinv } = hom();
+  if (!Hinv) return null;
+  if (kind === 'row') return [applyH(Hinv, [0, rowYs[i]]), applyH(Hinv, [width, rowYs[i]])];
+  return [applyH(Hinv, [colZs[i], 0]), applyH(Hinv, [colZs[i], height])];
+}
+
+function distToSeg(px, py, a, b) {
+  const vx = b[0] - a[0], vy = b[1] - a[1];
+  const l2 = vx * vx + vy * vy || 1;
+  let t = ((px - a[0]) * vx + (py - a[1]) * vy) / l2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (a[0] + t * vx), py - (a[1] + t * vy));
+}
+
+function hitLine(p) {
+  let best = null;
+  let bestD = 18;
+  for (let r = 1; r < rowYs.length - 1; r++) {
+    const seg = segAt('row', r);
+    if (!seg || !seg[0] || !seg[1]) continue;
+    const d = distToSeg(p[0], p[1], seg[0], seg[1]);
+    if (d < bestD) { bestD = d; best = { kind: 'row', i: r }; }
+  }
+  for (let c = 1; c < colZs.length - 1; c++) {
+    const seg = segAt('col', c);
+    if (!seg || !seg[0] || !seg[1]) continue;
+    const d = distToSeg(p[0], p[1], seg[0], seg[1]);
+    if (d < bestD) { bestD = d; best = { kind: 'col', i: c }; }
+  }
+  return best;
+}
+
+function moveLine(kind, i, p) {
+  const { H } = hom();
+  const zy = H ? applyH(H, p) : null;
+  if (!zy) return;
+  const gap = 0.03;
+  if (kind === 'row') {
+    const hi = rowYs[i - 1] - gap;
+    const lo = rowYs[i + 1] + gap;
+    rowYs[i] = hi < lo ? 0.5 * (rowYs[i - 1] + rowYs[i + 1]) : Math.min(hi, Math.max(lo, zy[1]));
+  } else {
+    const a = colZs[i - 1], b = colZs[i + 1];
+    const hi = Math.max(a, b) - gap;
+    const lo = Math.min(a, b) + gap;
+    colZs[i] = hi < lo ? 0.5 * (a + b) : Math.min(hi, Math.max(lo, zy[0]));
+  }
+}
+
+function pictureRect() {
+  const r = vid.getBoundingClientRect();
+  const vw = vid.videoWidth || 854;
+  const vh = vid.videoHeight || 480;
+  const scale = Math.min(r.width / vw, r.height / vh);
+  const w = vw * scale;
+  const h = vh * scale;
+  return {
+    left: r.left + (r.width - w) / 2,
+    top: r.top + (r.height - h) / 2,
+    width: w,
+    height: h,
+    vw,
+    vh,
+  };
+}
+
+function fit() {
+  const stage = document.getElementById('stage').getBoundingClientRect();
+  const p = pictureRect();
+  cv.style.left = (p.left - stage.left) + 'px';
+  cv.style.top = (p.top - stage.top) + 'px';
+  cv.style.width = p.width + 'px';
+  cv.style.height = p.height + 'px';
+  cv.width = p.vw;
+  cv.height = p.vh;
+}
+
+function toImg(e) {
+  const p = pictureRect();
+  return [
+    (e.clientX - p.left) / p.width * p.vw,
+    (e.clientY - p.top) / p.height * p.vh,
+  ];
+}
+
+function gridLines() {
+  if (quad.length < 4) return [];
+  ensureBounds();
+  const lines = [];
+  for (let r = 0; r < rowYs.length; r++) {
+    const seg = segAt('row', r);
+    if (seg && seg[0] && seg[1]) lines.push({ kind: 'row', i: r, seg, inner: r > 0 && r < rowYs.length - 1 });
+  }
+  for (let c = 0; c < colZs.length; c++) {
+    const seg = segAt('col', c);
+    if (seg && seg[0] && seg[1]) lines.push({ kind: 'col', i: c, seg, inner: c > 0 && c < colZs.length - 1 });
+  }
+  return lines;
+}
+
+function draw() {
+  fit();
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  for (const line of gridLines()) {
+    const [a, b] = line.seg;
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1]);
+    ctx.lineTo(b[0], b[1]);
+    ctx.lineWidth = line.inner ? 3 : 1;
+    ctx.strokeStyle = !line.inner ? 'rgba(120,200,255,.35)' : (line.kind === 'col' ? '#ffe14a' : '#7ec8ff');
+    ctx.stroke();
+  }
+  if (quad.length) {
+    ctx.beginPath();
+    quad.forEach((p, i) => { if (i === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]); });
+    if (quad.length === 4) ctx.closePath();
+    ctx.strokeStyle = '#5cf08a';
+    ctx.stroke();
+  }
+  quad.forEach((p, i) => {
+    ctx.beginPath();
+    ctx.arc(p[0], p[1], 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#5cf08a';
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = '16px sans-serif';
+    ctx.fillText(String(i + 1), p[0] + 8, p[1] - 8);
+  });
+}
+
+cv.addEventListener('pointerdown', (e) => {
+  const p = toImg(e);
+  const hit = quad.findIndex((q) => Math.hypot(q[0] - p[0], q[1] - p[1]) < 14);
+  if (hit >= 0) { drag = { kind: 'corner', i: hit }; cv.setPointerCapture(e.pointerId); return; }
+  const line = quad.length === 4 ? hitLine(p) : null;
+  if (line) { drag = line; cv.setPointerCapture(e.pointerId); return; }
+  if (quad.length < 4) { quad.push(p); hint(); draw(); }
+});
+cv.addEventListener('pointermove', (e) => {
+  const p = toImg(e);
+  if (!drag) {
+    cv.style.cursor = (quad.length === 4 && hitLine(p)) ? 'grab' : 'crosshair';
+    return;
+  }
+  if (drag.kind === 'corner') quad[drag.i] = p;
+  else moveLine(drag.kind, drag.i, p);
+  draw();
+});
+cv.addEventListener('pointerup', () => { drag = null; });
+document.getElementById('undo').onclick = () => { quad.pop(); rowYs = []; colZs = []; hint(); draw(); };
+document.getElementById('clear').onclick = () => { quad = []; rowYs = []; colZs = []; hint(); draw(); };
+document.getElementById('rows').oninput = () => { rowYs = []; ensureBounds(); draw(); };
+document.getElementById('cols').oninput = () => { colZs = []; ensureBounds(); draw(); };
+document.getElementById('width').oninput = () => { rowYs = []; colZs = []; ensureBounds(); draw(); };
+document.getElementById('height').oninput = () => { rowYs = []; colZs = []; ensureBounds(); draw(); };
+document.getElementById('videoSrc').onchange = async () => {
+  video = document.getElementById('videoSrc').value;
+  playHref();
+  vid.src = '/api/video?src=' + encodeURIComponent(video);
+  await loadCalib();
+};
+document.getElementById('save').onclick = async () => {
+  const msg = document.getElementById('msg');
+  if (quad.length !== 4) { msg.textContent = '先点齐四个角'; return; }
+  const { rows, cols, width, height } = nums();
+  const res = await fetch('/api/single-calib', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      video,
+      image_size: [vid.videoWidth, vid.videoHeight],
+      quad, rows, cols, width, height, base: 0,
+      row_ys: rowYs, col_zs: colZs,
+    }),
+  }).then((r) => r.json());
+  msg.textContent = res.ok ? ('已保存 ' + res.path) : (res.error || '保存失败');
+};
+vid.addEventListener('loadeddata', () => { fit(); draw(); });
+window.addEventListener('resize', draw);
+await loadVideos();
+vid.src = '/api/video?src=' + encodeURIComponent(video);
+await loadCalib();
+</script>
+</body>
+</html>

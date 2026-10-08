@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>单路播放</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; color: #ddd; font: 14px/1.4 sans-serif; }
+  #wrap { position: relative; height: calc(100% - 64px); background: #000; }
+  video, canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  video { object-fit: contain; }
+  canvas { pointer-events: none; }
+  #bar { height: 64px; display: flex; gap: 16px; align-items: center; padding: 0 12px; background: #1b1b1b; }
+  #hud { min-width: 320px; }
+  a { color: #9ad; }
+  .on { color: #ff6677; }
+  input[type="range"] { width: 140px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <video id="vid" controls playsinline></video>
+  <canvas id="ov"></canvas>
+</div>
+<div id="bar">
+  <div id="hud">加载中…</div>
+  <label>τ <span id="tauLab"></span>
+    <input id="tau" type="range" min="4" max="80" step="1" value="20">
+  </label>
+  <a id="annot" href="/single">标注四角</a>
+  <span class="muted" id="hint" style="color:#888"></span>
+</div>
+<script type="module">
+import { applyH, fitHomography, wallRectDst } from '/dualcam_geom.js';
+
+const q = new URLSearchParams(location.search);
+const video = q.get('src') || 'output/dualcam/94-left.mp4';
+const stem = video.split('/').pop().replace(/\.mp4$/i, '');
+const dwellName = q.get('dwell') || ('dwell_' + stem + '.json');
+document.getElementById('annot').href = '/single?src=' + encodeURIComponent(video);
+
+const DATA = await fetch('/api/dwell?name=' + encodeURIComponent(dwellName)).then((r) => {
+  if (!r.ok) throw new Error('没有停留结果');
+  return r.json();
+});
+const CALIB = await fetch('/api/single-calib?src=' + encodeURIComponent(video)).then((r) => r.json()).catch(() => ({}));
+const quad = (CALIB.quad || []).map((p) => [Number(p[0]), Number(p[1])]);
+const wallW = Number(CALIB.width) || 2.2;
+const wallH = Number(CALIB.height) || 2.0;
+const rows = Number(CALIB.rows) || 4;
+const cols = Number(CALIB.cols) || 4;
+const rowYs = (Array.isArray(CALIB.row_ys) && CALIB.row_ys.length === rows + 1)
+  ? CALIB.row_ys.map(Number)
+  : Array.from({ length: rows + 1 }, (_, i) => wallH * (1 - i / rows));
+const colZs = (Array.isArray(CALIB.col_zs) && CALIB.col_zs.length === cols + 1)
+  ? CALIB.col_zs.map(Number)
+  : Array.from({ length: cols + 1 }, (_, i) => wallW * (1 - i / cols));
+const hasShelf = quad.length === 4;
+const dst = hasShelf ? wallRectDst(wallW, wallH, Number(CALIB.base) || 0) : null;
+const H = hasShelf ? fitHomography(quad, dst) : null;
+const Hinv = hasShelf ? fitHomography(dst, quad) : null;
+const unit = H ? 'm' : 'px';
+
+const vid = document.getElementById('vid');
+const ov = document.getElementById('ov');
+const ctx = ov.getContext('2d');
+vid.src = '/api/video?src=' + encodeURIComponent(DATA.video || video);
+const tauInput = document.getElementById('tau');
+if (unit === 'm') {
+  tauInput.min = '0.05'; tauInput.max = '0.40'; tauInput.step = '0.01'; tauInput.value = '0.15';
+}
+function tau() { return Number(tauInput.value); }
+function syncLab() {
+  document.getElementById('tauLab').textContent = tau().toFixed(unit === 'm' ? 2 : 0) + unit;
+}
+syncLab();
+document.getElementById('hint').textContent = H
+  ? `Δ=${DATA.delta_s}s · 红=这 ${DATA.lag_frames} 帧里墙面位移 ≤ τ，并标出所在格`
+  : '还没有四角，先去标注。现在 τ 是像素。';
+tauInput.addEventListener('input', () => { syncLab(); paint(vid.currentTime || 0); });
+
+function frameIndex(t) {
+  const n = DATA.frames.length;
+  if (!n) return 0;
+  const idx = Math.round(Number(t) * DATA.fps);
+  return Math.max(0, Math.min(n - 1, idx));
+}
+function frameAt(t) {
+  return DATA.frames[frameIndex(t)];
+}
+function pictureRect() {
+  const r = vid.getBoundingClientRect();
+  const vw = vid.videoWidth || DATA.width || 854;
+  const vh = vid.videoHeight || DATA.height || 480;
+  const scale = Math.min(r.width / vw, r.height / vh);
+  const w = vw * scale;
+  const h = vh * scale;
+  return {
+    left: r.left + (r.width - w) / 2,
+    top: r.top + (r.height - h) / 2,
+    width: w,
+    height: h,
+    vw,
+    vh,
+  };
+}
+let fitted = '';
+function fit() {
+  const wrap = document.getElementById('wrap').getBoundingClientRect();
+  const p = pictureRect();
+  const key = [p.left, p.top, p.width, p.height, p.vw, p.vh].join(',');
+  if (key === fitted) return;
+  fitted = key;
+  ov.style.left = (p.left - wrap.left) + 'px';
+  ov.style.top = (p.top - wrap.top) + 'px';
+  ov.style.width = p.width + 'px';
+  ov.style.height = p.height + 'px';
+  if (ov.width !== p.vw) ov.width = p.vw;
+  if (ov.height !== p.vh) ov.height = p.vh;
+}
+function shift(uv, u0) {
+  if (!u0) return null;
+  if (H) {
+    const a = applyH(H, uv);
+    const b = applyH(H, u0);
+    if (!a || !b) return null;
+    return Math.hypot(a[0] - b[0], a[1] - b[1]);
+  }
+  return Math.hypot(uv[0] - u0[0], uv[1] - u0[1]);
+}
+function bandIndex(v, bounds) {
+  for (let i = 0; i < bounds.length - 1; i++) {
+    const hi = Math.max(bounds[i], bounds[i + 1]);
+    const lo = Math.min(bounds[i], bounds[i + 1]);
+    if (v <= hi + 1e-4 && v >= lo - 1e-4) return i;
+  }
+  return -1;
+}
+function cellOf(zy) {
+  if (!zy) return null;
+  const row = bandIndex(zy[1], rowYs);
+  const col = bandIndex(zy[0], colZs);
+  if (row < 0 || col < 0) return null;
+  return `r${row}c${col}`;
+}
+function drawGrid(hot) {
+  if (!Hinv) return;
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(120,200,255,.45)';
+  ctx.beginPath();
+  for (const y of rowYs) {
+    const a = applyH(Hinv, [colZs[colZs.length - 1], y]);
+    const b = applyH(Hinv, [colZs[0], y]);
+    if (!a || !b) continue;
+    ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
+  }
+  for (const z of colZs) {
+    const a = applyH(Hinv, [z, rowYs[rowYs.length - 1]]);
+    const b = applyH(Hinv, [z, rowYs[0]]);
+    if (!a || !b) continue;
+    ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
+  }
+  ctx.stroke();
+  if (!hot) return;
+  const [row, col] = hot.slice(1).split('c').map(Number);
+  const poly = [
+    [colZs[col + 1], rowYs[row]],
+    [colZs[col], rowYs[row]],
+    [colZs[col], rowYs[row + 1]],
+    [colZs[col + 1], rowYs[row + 1]],
+  ].map((p) => applyH(Hinv, p));
+  if (poly.some((p) => !p)) return;
+  ctx.beginPath();
+  poly.forEach((p, i) => { if (i === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]); });
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(255,50,60,.35)';
+  ctx.fill();
+  ctx.strokeStyle = '#ff4455';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+let hudText = '';
+function paint(t) {
+  fit();
+  ctx.clearRect(0, 0, ov.width, ov.height);
+  const fr = frameAt(t);
+  if (!fr) return;
+  const thr = tau();
+  const ons = [];
+  let hot = null;
+  for (const p of fr.people || []) {
+    const k = p.k || [];
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(180,220,255,.85)';
+    for (const [a, b] of DATA.edges) {
+      if (!k[a] || !k[b] || k[a][2] < DATA.kpt_min || k[b][2] < DATA.kpt_min) continue;
+      ctx.beginPath();
+      ctx.moveTo(k[a][0], k[a][1]);
+      ctx.lineTo(k[b][0], k[b][1]);
+      ctx.stroke();
+    }
+    for (const j of [9, 10]) {
+      const pt = k[j];
+      const w = (p.w || {})[String(j)];
+      if (!pt || pt[2] < DATA.kpt_min || !w) continue;
+      const d = shift([pt[0], pt[1]], w.u0);
+      const on = d != null && d <= thr;
+      if (w.u0) {
+        ctx.strokeStyle = on ? '#ff8899' : '#888';
+        ctx.beginPath();
+        ctx.moveTo(w.u0[0], w.u0[1]);
+        ctx.lineTo(pt[0], pt[1]);
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.arc(pt[0], pt[1], on ? 7 : 5, 0, Math.PI * 2);
+      ctx.fillStyle = on ? '#ff3344' : '#bbbbbb';
+      ctx.fill();
+      if (d != null) {
+        const cell = on && H ? cellOf(applyH(H, [pt[0], pt[1]])) : null;
+        if (cell) hot = cell;
+        const name = (j === 9 ? '左' : '右') + d.toFixed(unit === 'm' ? 2 : 0) + unit;
+        ctx.fillStyle = on ? '#ff99a6' : '#ccc';
+        ctx.font = '14px sans-serif';
+        ctx.fillText(cell ? `${name} ${cell}` : name, pt[0] + 8, pt[1] - 6);
+        if (on) ons.push((j === 9 ? '左腕' : '右腕') + (cell ? ' ' + cell : '') + ' ' + d.toFixed(unit === 'm' ? 2 : 0) + unit);
+      }
+    }
+  }
+  drawGrid(hot);
+  const nextHud = `${(fr.people || []).length} 人 · t=${(fr.t || 0).toFixed(2)}s` +
+    (ons.length ? `<br><span class="on">停住 ${ons.join(' · ')}</span>` : '<br>停住 无');
+  if (nextHud !== hudText) {
+    hudText = nextHud;
+    document.getElementById('hud').innerHTML = nextHud;
+  }
+}
+let shown = -1;
+function paintMedia(t) {
+  const idx = frameIndex(t);
+  if (idx === shown && !vid.paused) return;
+  shown = idx;
+  paint(t);
+}
+let watching = false;
+function watchFrames() {
+  if (watching) return;
+  watching = true;
+  if (vid.requestVideoFrameCallback) {
+    const tick = (_now, meta) => {
+      paintMedia(meta.mediaTime);
+      vid.requestVideoFrameCallback(tick);
+    };
+    vid.requestVideoFrameCallback(tick);
+  } else {
+    const tick = () => {
+      paintMedia(vid.currentTime || 0);
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+}
+vid.addEventListener('seeked', () => { shown = -1; paintMedia(vid.currentTime || 0); });
+vid.addEventListener('loadeddata', () => { fitted = ''; shown = -1; paintMedia(vid.currentTime || 0); watchFrames(); });
+if (vid.readyState >= 2) { fitted = ''; shown = -1; paintMedia(vid.currentTime || 0); watchFrames(); }
+window.addEventListener('resize', () => { fitted = ''; paint(vid.currentTime || 0); });
+document.addEventListener('keydown', (e) => {
+  if (e.target.matches('input')) return;
+  if (e.code === 'Space') { e.preventDefault(); vid.paused ? vid.play() : vid.pause(); }
+  if (e.code === 'ArrowRight') vid.currentTime = Math.min(vid.duration || 0, vid.currentTime + 2);
+  if (e.code === 'ArrowLeft') vid.currentTime = Math.max(0, vid.currentTime - 2);
+});
+</script>
+</body>
+</html>

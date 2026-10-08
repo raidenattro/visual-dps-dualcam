@@ -32,6 +32,9 @@ from scripts.solve_scene import (
 
 PAGE = ROOT / "scripts" / "dualcam_annot.html"
 PLAYER = ROOT / "scripts" / "dualcam_player.html"
+DWELL_PLAYER = ROOT / "scripts" / "dwell_player.html"
+SINGLE_PAGE = ROOT / "scripts" / "single_annot.html"
+SINGLE_VIDEO = "output/dualcam/94-left.mp4"
 GEOM = ROOT / "scripts" / "dualcam_geom.js"
 VENDOR = ROOT / "scripts" / "vendor"
 VIDEO = ROOT / "output" / "dualcam" / "src.mp4"
@@ -56,6 +59,77 @@ def _default_skel() -> Path | None:
             return p
     return None
 _VENDOR_TYPES = {".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8"}
+
+
+def _single_stem(src: str) -> str:
+    stem = Path(src).stem
+    chars = [c if c.isalnum() or c in "-_." else "_" for c in stem]
+    return ("".join(chars).strip("._") or "video")[:80]
+
+
+def _single_calib_path(src: str | None) -> Path | None:
+    """单路货架标定：output/calib/single_<视频名>.json。视频必须在允许目录里。"""
+    video = resolve_video(src or SINGLE_VIDEO)
+    if video is None:
+        return None
+    rel = video.resolve().relative_to(ROOT).as_posix()
+    return ROOT / "output" / "calib" / f"single_{_single_stem(rel)}.json"
+
+
+def _read_single_calib(src: str | None) -> dict:
+    path = _single_calib_path(src)
+    if path is None or not path.is_file():
+        return {"video": src or SINGLE_VIDEO, "quad": [], "rows": 4, "cols": 4, "width": 2.2, "height": 2.0, "base": 0.0}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        data = {}
+    data["calib_path"] = str(path.relative_to(ROOT))
+    data["video"] = src or data.get("video") or SINGLE_VIDEO
+    return data
+
+
+def _split_bounds(raw, n: int, lo: float, hi: float) -> list[float]:
+    """行界或列界。长度不对就按均分回退，首尾钉在墙边上。"""
+    if isinstance(raw, list) and len(raw) == n:
+        vals = [float(v) for v in raw]
+    else:
+        vals = [hi + (lo - hi) * i / (n - 1) for i in range(n)] if n > 1 else [hi]
+    vals[0] = hi
+    vals[-1] = lo
+    return [round(v, 4) for v in vals]
+
+
+def _save_single_calib(body: dict) -> Path:
+    src = str(body.get("video") or SINGLE_VIDEO)
+    path = _single_calib_path(src)
+    if path is None:
+        raise ValueError("视频不在 output/dualcam 或 data 里")
+    quad = body.get("quad") or []
+    if len(quad) != 4:
+        raise ValueError("需要 4 个墙角")
+    rows = int(body.get("rows") or 4)
+    cols = int(body.get("cols") or 4)
+    if not (1 <= rows <= 8 and 1 <= cols <= 8):
+        raise ValueError("行列数要在 1 到 8")
+    width = float(body.get("width") or 2.2)
+    height = float(body.get("height") or 2.0)
+    payload = {
+        "kind": "single_shelf",
+        "video": src,
+        "image_size": body.get("image_size") or [],
+        "width": width,
+        "height": height,
+        "base": float(body.get("base") or 0.0),
+        "rows": rows,
+        "cols": cols,
+        "quad": [[float(p[0]), float(p[1])] for p in quad],
+        "row_ys": _split_bounds(body.get("row_ys"), rows + 1, 0.0, height),
+        "col_zs": _split_bounds(body.get("col_zs"), cols + 1, 0.0, width),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
 
 
 def _lan_ip() -> str:
@@ -197,6 +271,14 @@ class Handler(BaseHTTPRequestHandler):
             raw = PLAYER.read_bytes()
             self._bytes(raw, "text/html; charset=utf-8", head_only)
             return
+        if u.path == "/dwell":
+            raw = DWELL_PLAYER.read_bytes()
+            self._bytes(raw, "text/html; charset=utf-8", head_only)
+            return
+        if u.path == "/single":
+            raw = SINGLE_PAGE.read_bytes()
+            self._bytes(raw, "text/html; charset=utf-8", head_only)
+            return
         if u.path == "/dualcam_geom.js":
             raw = GEOM.read_bytes()
             self._bytes(raw, "text/javascript; charset=utf-8", head_only)
@@ -217,6 +299,25 @@ class Handler(BaseHTTPRequestHandler):
                 return
             ctype = _VENDOR_TYPES.get(path.suffix, "application/octet-stream")
             self._stream_file(path, ctype, head_only, cache="public, max-age=86400")
+            return
+        if u.path == "/api/single-calib":
+            src = (parse_qs(u.query).get("src") or [SINGLE_VIDEO])[0]
+            if resolve_video(src) is None:
+                self.send_error(404, "video missing")
+                return
+            self._json(_read_single_calib(src), head_only)
+            return
+        if u.path == "/api/dwell":
+            name = (parse_qs(u.query).get("name") or ["dwell_94-left.json"])[0]
+            base = Path(name).name
+            if not base.startswith("dwell_") or not base.endswith(".json"):
+                self.send_error(404, "dwell missing")
+                return
+            path = SKEL_DIR / base
+            if not path.is_file():
+                self.send_error(404, "dwell missing")
+                return
+            self._stream_file(path, "application/json; charset=utf-8", head_only)
             return
         if u.path == "/api/skel3d":
             path = _skel_path(u.query)
@@ -257,6 +358,14 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         n = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(n) or b"{}")
+        if u.path == "/api/single-calib":
+            try:
+                path = _save_single_calib(body)
+            except ValueError as exc:
+                self._json({"ok": False, "error": str(exc)})
+                return
+            self._json({"ok": True, "path": str(path.relative_to(ROOT))})
+            return
         if u.path == "/api/calib":
             path = _save(body)
             self._json({"ok": True, "path": str(path.relative_to(ROOT))})
@@ -375,6 +484,8 @@ def main() -> int:
     print(f"dualcam annot  → http://{ip}:{PORT}/   videos={len(vids)}")
     print(f"calib_id       → {CALIB_ID}")
     print(f"dualcam 3D回放 → http://{ip}:{PORT}/play")
+    print(f"单路标注       → http://{ip}:{PORT}/single")
+    print(f"单路播放       → http://{ip}:{PORT}/dwell")
     print(f"               → http://127.0.0.1:{PORT}/play")
     print(f"calib          → {CALIB.relative_to(ROOT)}")
     sk = _default_skel()
