@@ -46,13 +46,21 @@ DURATION_RAW="${2:-${DURATION:-forever}}"
 LOGICAL_SHARDS="${POSE_LOGICAL_SHARD_COUNT:-16}"
 REDIS_CONTAINER="${REDIS_CONTAINER:-visual-dps-redis}"
 GROUP="${POSE_STREAM_GROUP:-event-workers}"
+GROUP_LEGACY="${POSE_STREAM_GROUP_LEGACY:-event-workers-legacy}"
 PREFIX="${POSE_STREAM_KEY_PREFIX:-pose:stream}"
 WORKER_A="${WORKER_A:-visual-dps-event-worker}"
 WORKER_B="${WORKER_B:-visual-dps-event-worker-b}"
+WORKER_LEGACY="${WORKER_LEGACY:-visual-dps-event-worker-legacy}"
 A_START="${EVENT_WORKER_SHARD_START:-0}"
 A_END="${EVENT_WORKER_SHARD_END:-7}"
 B_START="${EVENT_WORKER_B_SHARD_START:-8}"
 B_END="${EVENT_WORKER_B_SHARD_END:-15}"
+L_START="${EVENT_WORKER_LEGACY_SHARD_START:-0}"
+L_END="${EVENT_WORKER_LEGACY_SHARD_END:-15}"
+# 表格角标（与 compose 中 3D a/b + legacy 一致）
+LABEL_3D_A="${LAG_MONITOR_LABEL_3D_A:-3D-a}"
+LABEL_3D_B="${LAG_MONITOR_LABEL_3D_B:-3D-b}"
+LABEL_LEGACY="${LAG_MONITOR_LABEL_LEGACY:-LEG}"
 WARN_LAG="${LAG_MONITOR_WARN:-50}"
 CRIT_LAG="${LAG_MONITOR_CRIT:-500}"
 LOG_DIR="${LOG_DIR:-$ROOT/logs}"
@@ -99,19 +107,42 @@ parse_xinfo() {
 
 declare -a CUR_LAG CUR_PENDING CUR_XLEN CUR_READ
 declare -a PREV_LAG PREV_PENDING PREV_XLEN PREV_READ
+declare -a LEG_LAG LEG_PENDING LEG_XLEN LEG_READ
+declare -a LEG_PREV_LAG LEG_PREV_PENDING LEG_PREV_XLEN LEG_PREV_READ
 
-snapshot() {
-  local sid raw xl sl sp sr
+# 从 Redis stream 读取指定 consumer group 的 lag/pending（双路 3D 与 legacy 各一组）
+snapshot_group() {
+  local group="$1"
+  local -n out_lag="$2"
+  local -n out_pending="$3"
+  local -n out_xlen="$4"
+  local -n out_read="$5"
+  local sid raw xl sl sp sr block
   for ((sid = 0; sid < LOGICAL_SHARDS; sid++)); do
     raw="$(redis_cmd XINFO GROUPS "${PREFIX}:${sid}" 2>/dev/null || true)"
-    read -r sl sp sr <<<"$(printf '%s\n' "$raw" | parse_xinfo)"
+    sl=0
+    sp=0
+    sr=0
+    block="$(printf '%s\n' "$raw" | awk -v g="$group" '
+      $0 == "name" { getline n; if (n == g) ing=1; else ing=0; next }
+      ing && /^pending$/ { getline v; if (v ~ /^[0-9]+$/) p=v }
+      ing && /^lag$/ { getline v; if (v ~ /^[0-9]+$/) l=v }
+      ing && /^entries-read$/ { getline v; if (v ~ /^[0-9]+$/) r=v }
+      END { printf "%s %s %s\n", l+0, p+0, r+0 }
+    ')"
+    read -r sl sp sr <<<"$block"
     xl="$(redis_cmd XLEN "${PREFIX}:${sid}" 2>/dev/null | tail -n1 || true)"
     [[ "$xl" =~ ^[0-9]+$ ]] || xl=0
-    CUR_LAG[sid]="$sl"
-    CUR_PENDING[sid]="$sp"
-    CUR_XLEN[sid]="$xl"
-    CUR_READ[sid]="$sr"
+    out_lag[sid]="$sl"
+    out_pending[sid]="$sp"
+    out_xlen[sid]="$xl"
+    out_read[sid]="$sr"
   done
+}
+
+snapshot() {
+  snapshot_group "$GROUP" CUR_LAG CUR_PENDING CUR_XLEN CUR_READ
+  snapshot_group "$GROUP_LEGACY" LEG_LAG LEG_PENDING LEG_XLEN LEG_READ
 }
 
 infer_count() {
@@ -119,16 +150,19 @@ infer_count() {
     | grep -c '^visual-dps-infer' || true
 }
 
-# 输出: cpu_a cpu_b
+# 输出: cpu_3d_a cpu_3d_b cpu_legacy
 worker_cpus() {
-  docker_cmd stats --no-stream --format '{{.Name}} {{.CPUPerc}}' "$WORKER_A" "$WORKER_B" 2>/dev/null \
-    | awk -v a="$WORKER_A" -v b="$WORKER_B" '
+  docker_cmd stats --no-stream --format '{{.Name}} {{.CPUPerc}}' \
+    "$WORKER_A" "$WORKER_B" "$WORKER_LEGACY" 2>/dev/null \
+    | awk -v a="$WORKER_A" -v b="$WORKER_B" -v l="$WORKER_LEGACY" '
         $1 == a { ga = $2 }
         $1 == b { gb = $2 }
+        $1 == l { gl = $2 }
         END {
           if (ga == "") ga = "-"
           if (gb == "") gb = "-"
-          print ga, gb
+          if (gl == "") gl = "-"
+          print ga, gb, gl
         }'
 }
 
@@ -151,20 +185,26 @@ emit() {
   printf '%s\n' "$line" >>"$LOG_FILE"
 }
 
-# worker 汇总一行 + 其下每个 shard 一行
+# worker 汇总一行 + 其下每个 shard 一行（lag 数组由调用方传入：3D 或 legacy）
 emit_worker() {
   local now="$1" name="$2" start="$3" end="$4" cpu="$5" baseline="$6" dt="$7"
+  local -n lag_arr="${8:-CUR_LAG}"
+  local -n pend_arr="${9:-CUR_PENDING}"
+  local -n xlen_arr="${10:-CUR_XLEN}"
+  local -n read_arr="${11:-CUR_READ}"
+  local -n plag_arr="${12:-PREV_LAG}"
+  local -n pread_arr="${13:-PREV_READ}"
   local sid lag=0 pending=0 xlen=0 read=0 prev_lag=0 prev_read=0
   local dr dl consume ingress flag shard_lbl
   local s_lag s_pending s_xlen s_read s_prev_lag s_prev_read s_dr s_dl s_consume s_ingress s_flag
 
   for ((sid = start; sid <= end; sid++)); do
-    lag=$((lag + CUR_LAG[sid]))
-    pending=$((pending + CUR_PENDING[sid]))
-    xlen=$((xlen + CUR_XLEN[sid]))
-    read=$((read + CUR_READ[sid]))
-    prev_lag=$((prev_lag + PREV_LAG[sid]))
-    prev_read=$((prev_read + PREV_READ[sid]))
+    lag=$((lag + lag_arr[sid]))
+    pending=$((pending + pend_arr[sid]))
+    xlen=$((xlen + xlen_arr[sid]))
+    read=$((read + read_arr[sid]))
+    prev_lag=$((prev_lag + plag_arr[sid]))
+    prev_read=$((prev_read + pread_arr[sid]))
   done
   dr=$((read - prev_read))
   dl=$((lag - prev_lag))
@@ -186,12 +226,12 @@ emit_worker() {
   emit "$LINE"
 
   for ((sid = start; sid <= end; sid++)); do
-    s_lag="${CUR_LAG[sid]}"
-    s_pending="${CUR_PENDING[sid]}"
-    s_xlen="${CUR_XLEN[sid]}"
-    s_read="${CUR_READ[sid]}"
-    s_prev_lag="${PREV_LAG[sid]}"
-    s_prev_read="${PREV_READ[sid]}"
+    s_lag="${lag_arr[sid]}"
+    s_pending="${pend_arr[sid]}"
+    s_xlen="${xlen_arr[sid]}"
+    s_read="${read_arr[sid]}"
+    s_prev_lag="${plag_arr[sid]}"
+    s_prev_read="${pread_arr[sid]}"
     s_dr=$((s_read - s_prev_read))
     s_dl=$((s_lag - s_prev_lag))
     (( s_dr < 0 )) && s_dr=0
@@ -219,6 +259,10 @@ copy_prev() {
     PREV_PENDING[sid]="${CUR_PENDING[sid]:-0}"
     PREV_XLEN[sid]="${CUR_XLEN[sid]:-0}"
     PREV_READ[sid]="${CUR_READ[sid]:-0}"
+    LEG_PREV_LAG[sid]="${LEG_LAG[sid]:-0}"
+    LEG_PREV_PENDING[sid]="${LEG_PENDING[sid]:-0}"
+    LEG_PREV_XLEN[sid]="${LEG_XLEN[sid]:-0}"
+    LEG_PREV_READ[sid]="${LEG_READ[sid]:-0}"
   done
 }
 
@@ -231,9 +275,11 @@ copy_prev() {
   echo "  log:    $LOG_FILE"
   echo "  start:  $START"
   echo "  every:  ${INTERVAL}s   duration: $DUR_TXT"
-  echo "  redis:  $REDIS_CONTAINER   group: $GROUP"
-  echo "  worker A: $WORKER_A   shards ${A_START}-${A_END}"
-  echo "  worker B: $WORKER_B   shards ${B_START}-${B_END}"
+  echo "  redis:  $REDIS_CONTAINER"
+  echo "  3D group: $GROUP   legacy group: $GROUP_LEGACY"
+  echo "  ${LABEL_3D_A}: $WORKER_A   shards ${A_START}-${A_END}  (${EVENT_WORKER_CONSUMER_NAME:-worker-a})"
+  echo "  ${LABEL_3D_B}: $WORKER_B   shards ${B_START}-${B_END}  (${EVENT_WORKER_B_CONSUMER_NAME:-worker-b})"
+  echo "  ${LABEL_LEGACY}: $WORKER_LEGACY   shards ${L_START}-${L_END}  (event_worker_legacy)"
   echo "  stream: ${PREFIX}:0-$((LOGICAL_SHARDS - 1))"
   echo "  consume=worker msg/s  ingress=produce msg/s  d_lag=lag delta this period"
   echo "============================================================"
@@ -248,18 +294,26 @@ init_prev() {
     PREV_PENDING[sid]=0
     PREV_XLEN[sid]=0
     PREV_READ[sid]=0
+    LEG_PREV_LAG[sid]=0
+    LEG_PREV_PENDING[sid]=0
+    LEG_PREV_XLEN[sid]=0
+    LEG_PREV_READ[sid]=0
   done
 }
 
 emit_tick() {
   local baseline="$1" dt="$2"
-  local now infer cpu_a cpu_b
+  local now infer cpu_a cpu_b cpu_l
   now="$(date '+%Y-%m-%d %H:%M:%S')"
   infer="$(infer_count)"
-  read -r cpu_a cpu_b <<<"$(worker_cpus)"
+  read -r cpu_a cpu_b cpu_l <<<"$(worker_cpus)"
   emit "---- ${now}  infer=${infer} ----"
-  emit_worker "$now" "A" "$A_START" "$A_END" "$cpu_a" "$baseline" "$dt"
-  emit_worker "$now" "B" "$B_START" "$B_END" "$cpu_b" "$baseline" "$dt"
+  emit_worker "$now" "$LABEL_3D_A" "$A_START" "$A_END" "$cpu_a" "$baseline" "$dt" \
+    CUR_LAG CUR_PENDING CUR_XLEN CUR_READ PREV_LAG PREV_READ
+  emit_worker "$now" "$LABEL_3D_B" "$B_START" "$B_END" "$cpu_b" "$baseline" "$dt" \
+    CUR_LAG CUR_PENDING CUR_XLEN CUR_READ PREV_LAG PREV_READ
+  emit_worker "$now" "$LABEL_LEGACY" "$L_START" "$L_END" "$cpu_l" "$baseline" "$dt" \
+    LEG_LAG LEG_PENDING LEG_XLEN LEG_READ LEG_PREV_LAG LEG_PREV_READ
 }
 
 init_prev
