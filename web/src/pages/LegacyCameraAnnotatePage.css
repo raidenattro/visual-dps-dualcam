@@ -95,10 +95,36 @@
   color: var(--text);
 }
 
+.legacy-shelf-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+  min-height: 32px;
+}
+
+.legacy-shelf-tab {
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid #3a4a58;
+  background: #1a242c;
+  color: #c7d6e2;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.legacy-shelf-tab.active {
+  border-color: #00d4aa;
+  color: #072018;
+  background: #00d4aa;
+}
+
 .legacy-annotate-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  margin-bottom: 10px;
 }
 
 .legacy-btn {

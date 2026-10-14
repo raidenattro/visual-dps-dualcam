@@ -20,6 +20,8 @@ const CELL_POLYGON_INSET = 0.08;
 const DEFAULT_CANVAS_W = 854;
 const DEFAULT_CANVAS_H = 480;
 const GRAB_HEIGHT = 720;
+/** 单路 2D：同一摄像头最多两个货架 */
+export const LEGACY_MAX_SHELVES = 2;
 
 /** 缩略图/抓帧失败时 Image 可能 complete 但 naturalWidth=0（broken），不可 drawImage */
 function isDrawableImage(img) {
@@ -53,6 +55,20 @@ function createDefaultShelfCorners(frameW, frameH, marginRatio = 0.12) {
     [w - mx, my],
     [w - mx, h - my],
     [mx, h - my],
+  ];
+}
+
+/** 第 2 个货架默认落在画面右半，避免和第一个外框重合 */
+function createShelfCornersForIndex(frameW, frameH, index) {
+  if (index <= 0) return createDefaultShelfCorners(frameW, frameH);
+  const w = Math.max(1, Number(frameW) || 1);
+  const h = Math.max(1, Number(frameH) || 1);
+  const my = h * 0.16;
+  return [
+    [w * 0.52, my],
+    [w * 0.9, my],
+    [w * 0.9, h - my],
+    [w * 0.52, h - my],
   ];
 }
 
@@ -118,6 +134,7 @@ export function useAnnotateTool(canvasRef, options = {}) {
   });
   const activeShelfIndexRef = useRef(-1);
   const autoSaveTimerRef = useRef(null);
+  const shelfNameSaveTimerRef = useRef(null);
   const autoSaveRef = useRef({ immediate: async () => ({ ok: true }), schedule: () => {} });
   const coordSpaceRef = useRef({ w: 0, h: 0 });
   const annotationSizeRef = useRef(null);
@@ -444,8 +461,44 @@ export function useAnnotateTool(canvasRef, options = {}) {
 
   const drawShelfOutline = useCallback(() => {
     const annCtx = getCtx();
+    const annCvs = getCanvas();
+    if (!annCtx) return;
+    const active = String(selectedShelfCodeRef.current || '').trim();
+    const others = shelvesRef.current;
+    if (others.length > 1 && annCvs) {
+      const fw = Number(annCvs.width) || coordSpaceRef.current.w || DEFAULT_CANVAS_W;
+      const fh = Number(annCvs.height) || coordSpaceRef.current.h || DEFAULT_CANVAS_H;
+      const annSize = annotationSizeRef.current;
+      for (const shelf of others) {
+        const code = String(shelf?.shelf_code || '').trim();
+        if (!code || code === active) continue;
+        const raw = shelf.shelf_corners;
+        if (!Array.isArray(raw) || raw.length < 3) continue;
+        const pts = mapPointsToVideoFrame(raw, null, annSize, fw, fh);
+        annCtx.save();
+        annCtx.lineWidth = 2;
+        annCtx.setLineDash([6, 4]);
+        annCtx.strokeStyle = 'rgba(62, 200, 255, 0.95)';
+        annCtx.beginPath();
+        annCtx.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length; i++) {
+          annCtx.lineTo(Number(pts[i][0]), Number(pts[i][1]));
+        }
+        annCtx.closePath();
+        annCtx.stroke();
+        annCtx.setLineDash([]);
+        const label = String(shelf.shelf_name || code);
+        annCtx.font = 'bold 14px sans-serif';
+        annCtx.fillStyle = 'rgba(62, 200, 255, 0.95)';
+        annCtx.textAlign = 'left';
+        annCtx.textBaseline = 'top';
+        annCtx.fillText(label, Number(pts[0][0]) + 8, Number(pts[0][1]) + 8);
+        annCtx.restore();
+      }
+    }
+
     const shelfPoints = shelfPointsRef.current;
-    if (!annCtx || !Array.isArray(shelfPoints) || shelfPoints.length === 0) return;
+    if (!Array.isArray(shelfPoints) || shelfPoints.length === 0) return;
     annCtx.lineWidth = 3;
     annCtx.strokeStyle = '#2ecc71';
     annCtx.beginPath();
@@ -462,7 +515,7 @@ export function useAnnotateTool(canvasRef, options = {}) {
       annCtx.arc(p[0], p[1], 6, 0, Math.PI * 2);
       annCtx.fill();
     }
-  }, [getCtx]);
+  }, [getCtx, getCanvas]);
 
   const drawAnnotationBoxes = useCallback(
     (ann, options) => {
@@ -666,14 +719,12 @@ export function useAnnotateTool(canvasRef, options = {}) {
         shelfPointsRef.current = createDefaultShelfCorners(fw, fh);
         refreshPerspectiveFromShelf();
       }
-      const code =
-        String(fixedCameraRef.current?.name || fixedCameraRef.current?.id || 'DEFAULT').trim() ||
-        'DEFAULT';
+      const code = '1';
       if (embedded && !shelvesRef.current.length) {
         const corners = shelfPointsRef.current.map((p) => [...p]);
         const stub = {
           shelf_code: code,
-          shelf_name: code,
+          shelf_name: '货架1',
           shelf_corners: corners,
           grid_shape: [gridRowsRef.current, gridColsRef.current],
           boxes: [],
@@ -682,12 +733,11 @@ export function useAnnotateTool(canvasRef, options = {}) {
         setShelves([stub]);
         activeShelfIndexRef.current = 0;
         setSelectedShelfCode(code);
-        setCameraName((prev) => prev || code);
       }
       coordSpaceRef.current = { w: fw, h: fh };
       setCanSave(!!mInvRef.current);
     },
-    [embedded, refreshPerspectiveFromShelf, setCameraName],
+    [embedded, refreshPerspectiveFromShelf],
   );
 
   const renderFrameAndEnterAnnotating = useCallback(
@@ -1089,7 +1139,8 @@ export function useAnnotateTool(canvasRef, options = {}) {
   const makeShelfPayload = useCallback(
     (shelfCode) => {
       const code = String(shelfCode || '').trim();
-      const existing = shelves.find((s) => String(s.shelf_code || '').trim() === code);
+      const fromRef = shelvesRef.current.find((s) => String(s.shelf_code || '').trim() === code);
+      const existing = fromRef || shelves.find((s) => String(s.shelf_code || '').trim() === code);
       return {
         shelf_code: code,
         shelf_id: String(existing?.shelf_id || '').trim(),
@@ -1943,6 +1994,10 @@ export function useAnnotateTool(canvasRef, options = {}) {
     return { ok: true, skipped: true };
   }, [embedded, autoSaveAnnotations]);
 
+  useEffect(() => () => {
+    if (shelfNameSaveTimerRef.current) clearTimeout(shelfNameSaveTimerRef.current);
+  }, []);
+
   useEffect(() => {
     autoSaveRef.current = {
       immediate: autoSaveAnnotations,
@@ -1975,6 +2030,8 @@ export function useAnnotateTool(canvasRef, options = {}) {
       const list = flushCurrentShelfToMemory();
       const idx = list.findIndex((s) => String(s.shelf_code || '').trim() === nextCode);
       activeShelfIndexRef.current = idx;
+      shelvesRef.current = list;
+      selectedShelfCodeRef.current = nextCode;
       setSelectedShelfCode(nextCode);
       setCameraName(nextCode);
       if (idx >= 0) {
@@ -2016,6 +2073,7 @@ export function useAnnotateTool(canvasRef, options = {}) {
 
       const removedIdx = shelves.findIndex((s) => String(s.shelf_code || '').trim() === code);
       const nextShelves = shelves.filter((s) => String(s.shelf_code || '').trim() !== code);
+      shelvesRef.current = nextShelves;
       setShelves(nextShelves);
       setSelectedCell(null);
 
@@ -2038,6 +2096,7 @@ export function useAnnotateTool(canvasRef, options = {}) {
         if (nextIdx >= nextShelves.length) nextIdx = nextShelves.length - 1;
         const nextShelf = nextShelves[nextIdx];
         activeShelfIndexRef.current = nextIdx;
+        selectedShelfCodeRef.current = nextShelf.shelf_code || '';
         setSelectedShelfCode(nextShelf.shelf_code || '');
         setCameraName(nextShelf.shelf_code || '');
         loadShelfIntoEditor(nextShelf);
@@ -2065,6 +2124,24 @@ export function useAnnotateTool(canvasRef, options = {}) {
     ],
   );
 
+  const renameSelectedShelf = useCallback((rawName) => {
+    const code = String(selectedShelfCodeRef.current || '').trim();
+    if (!code) return;
+    const name = String(rawName ?? '');
+    const next = shelvesRef.current.map((shelf) => {
+      if (String(shelf.shelf_code || '').trim() !== code) return shelf;
+      return { ...shelf, shelf_name: name };
+    });
+    shelvesRef.current = next;
+    setShelves(next);
+    if (!embedded) return;
+    if (shelfNameSaveTimerRef.current) clearTimeout(shelfNameSaveTimerRef.current);
+    shelfNameSaveTimerRef.current = setTimeout(() => {
+      shelfNameSaveTimerRef.current = null;
+      void autoSaveRef.current.immediate();
+    }, 400);
+  }, [embedded]);
+
   const createShelfFromDrawer = useCallback(
     async ({ shelf_id, shelf_code, shelf_name }) => {
       const code = String(shelf_code || '').trim();
@@ -2072,6 +2149,10 @@ export function useAnnotateTool(canvasRef, options = {}) {
       const id = String(shelf_id || '').trim();
       if (!code) {
         alert('请填写货架编码');
+        return { ok: false };
+      }
+      if (shelves.length >= LEGACY_MAX_SHELVES) {
+        alert(`单路最多 ${LEGACY_MAX_SHELVES} 个货架`);
         return { ok: false };
       }
       if (shelves.some((s) => String(s.shelf_code || '').trim() === code)) {
@@ -2086,16 +2167,26 @@ export function useAnnotateTool(canvasRef, options = {}) {
       const frameW = Number(annCvs?.width) || coordSpaceRef.current.w || DEFAULT_CANVAS_W;
       const frameH = Number(annCvs?.height) || coordSpaceRef.current.h || DEFAULT_CANVAS_H;
       const baseList = persisted.nextShelves ?? shelves;
+      if (baseList.length >= LEGACY_MAX_SHELVES) {
+        alert(`单路最多 ${LEGACY_MAX_SHELVES} 个货架`);
+        return { ok: false };
+      }
+      if (baseList.some((s) => String(s.shelf_code || '').trim() === code)) {
+        alert(`货架编码重复：${code}`);
+        return { ok: false };
+      }
 
       const stub = {
         shelf_code: code,
         shelf_id: id,
         shelf_name: name,
-        shelf_corners: createDefaultShelfCorners(frameW, frameH),
+        shelf_corners: createShelfCornersForIndex(frameW, frameH, baseList.length),
         grid_shape: [gridRows, gridCols],
         boxes: [],
       };
       const nextShelves = [...baseList, stub];
+      shelvesRef.current = nextShelves;
+      selectedShelfCodeRef.current = code;
       setShelves(nextShelves);
       activeShelfIndexRef.current = nextShelves.length - 1;
       setSelectedShelfCode(code);
@@ -2107,9 +2198,7 @@ export function useAnnotateTool(canvasRef, options = {}) {
         setStatus('货架已创建，但自动保存失败，请稍后重试。', 'err');
         return { ok: false };
       }
-      if (!embedded) {
-        setStatus(`已创建并保存货架「${name || code}」。`, 'ok');
-      }
+      setStatus(`已添加货架「${name || code}」。拖绿色四角对准货架后生成货位。`, 'ok');
       return { ok: true };
     },
     [
@@ -2530,6 +2619,7 @@ export function useAnnotateTool(canvasRef, options = {}) {
     setSelectedShelfCode,
     switchShelfTab,
     deleteSelectedShelf,
+    renameSelectedShelf,
     createShelfFromDrawer,
     boxEditorCells,
     selectedBoxCell,

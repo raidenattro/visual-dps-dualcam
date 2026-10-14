@@ -2,12 +2,24 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import AnnotateControls from '../components/AnnotateControls.jsx';
 import AnnotateStatusText from '../components/AnnotateStatusText.jsx';
-import { useAnnotateTool } from '../features/annotate/useAnnotateTool.js';
+import { LEGACY_MAX_SHELVES, useAnnotateTool } from '../features/annotate/useAnnotateTool.js';
 import { apiGet } from '../api/client.js';
 import { cameraMonitorPath } from '../lib/aisleNavigation.js';
 import { formatUserError } from '../lib/userFacingText.js';
 import '../pages/AnnotatePage.css';
 import './LegacyCameraAnnotatePage.css';
+
+function nextShelfDraft(shelves) {
+  const used = new Set((shelves || []).map((s) => String(s.shelf_code || '').trim()));
+  const n = (shelves || []).length + 1;
+  let code = String(n);
+  if (used.has(code)) code = `s${n}`;
+  return {
+    shelf_id: code,
+    shelf_code: code,
+    shelf_name: `货架${n}`,
+  };
+}
 
 function groupedIdSet(aisles) {
   const ids = new Set();
@@ -113,7 +125,8 @@ export default function LegacyCameraAnnotatePage() {
       <header className="legacy-annotate-header">
         <h1 className="page-title">单路 2D 货框标注</h1>
         <p className="legacy-annotate-lead">
-          四角定外框。生成货位后拖蓝色行线、黄色列线，一次改整行或整列。单击货格改编号。
+          同一路最多两个货架。点标签切换；第二个货架默认出现在画面右侧，拖绿色四角对准后再生成货位。
+          行线、列线只改当前货架。
         </p>
       </header>
 
@@ -142,13 +155,63 @@ export default function LegacyCameraAnnotatePage() {
 
           {fixedCamera ? (
             <div className="legacy-annotate-op-block">
-              <div className="group-title">货架与保存</div>
+              <div className="group-title">货架（最多 {LEGACY_MAX_SHELVES} 个）</div>
+              <div className="legacy-shelf-tabs" role="tablist" aria-label="货架切换">
+                {(tool.shelves || []).map((shelf) => {
+                  const code = String(shelf.shelf_code || '').trim();
+                  if (!code) return null;
+                  const active = code === String(tool.selectedShelfCode || '').trim();
+                  const label = String(shelf.shelf_name || '').trim() || code;
+                  return (
+                    <button
+                      key={code}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      className={`legacy-shelf-tab${active ? ' active' : ''}`}
+                      onClick={() => tool.switchShelfTab(code)}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="legacy-annotate-actions">
+                <button
+                  type="button"
+                  className="legacy-btn primary"
+                  disabled={(tool.shelves || []).length >= LEGACY_MAX_SHELVES}
+                  onClick={() => {
+                    const draft = nextShelfDraft(tool.shelves);
+                    void tool.createShelfFromDrawer(draft);
+                  }}
+                >
+                  + 添加货架
+                </button>
+                {(tool.shelves || []).length >= 2 ? (
+                  <button
+                    type="button"
+                    className="legacy-btn ghost"
+                    onClick={() => {
+                      void tool.deleteSelectedShelf();
+                    }}
+                  >
+                    删除当前货架
+                  </button>
+                ) : null}
+              </div>
               <label className="legacy-annotate-field-inline">
                 货架名称
                 <input
                   type="text"
-                  value={tool.cameraName}
-                  onChange={(e) => tool.setCameraName(e.target.value)}
+                  value={
+                    (tool.shelves || []).find(
+                      (s) => String(s.shelf_code || '').trim() === String(tool.selectedShelfCode || '').trim(),
+                    )?.shelf_name ?? ''
+                  }
+                  placeholder="货架1"
+                  disabled={!tool.selectedShelfCode}
+                  onChange={(e) => tool.renameSelectedShelf(e.target.value)}
                 />
               </label>
               <div className="legacy-annotate-actions">
