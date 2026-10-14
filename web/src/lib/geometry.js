@@ -68,6 +68,28 @@ export function getPointDist(a, b) {
   return Math.hypot(a[0] - b[0], a[1] - b[1]);
 }
 
+/** 同一列在各行上的地图 x，取平均，便于整列共用一条线。 */
+export function columnDividerX(layerColXs, index) {
+  let sum = 0;
+  let count = 0;
+  for (const row of layerColXs || []) {
+    const x = row?.[index];
+    if (Number.isFinite(x)) {
+      sum += x;
+      count += 1;
+    }
+  }
+  return count ? sum / count : null;
+}
+
+/** 把分割线夹在左右（或上下）邻居之间，避免两线交叉。 */
+export function clampGridDivider(value, prev, next, gap) {
+  const lo = Math.min(prev, next) + gap;
+  const hi = Math.max(prev, next) - gap;
+  if (!(hi > lo)) return (Number(prev) + Number(next)) / 2;
+  return Math.min(hi, Math.max(lo, value));
+}
+
 /** 射线法判断点是否在多边形内 */
 export function pointInPolygon(point, polygon) {
   if (!Array.isArray(polygon) || polygon.length < 3) return false;

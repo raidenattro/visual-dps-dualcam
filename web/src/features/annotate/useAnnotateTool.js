@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { apiDelete, apiGet, apiPost, thumbnailUrl } from '../../api/client.js';
 import {
+  clampGridDivider,
+  columnDividerX,
+  getDist,
   getPerspectiveTransform,
   getPointDist,
   insetConvexQuad,
@@ -265,6 +268,101 @@ export function useAnnotateTool(canvasRef, options = {}) {
     [getGridExtent, computeCellPolyFromGrid],
   );
 
+  /** 行线、列线或外框变了之后，按网格重算全部货框，不再保留单格变形。 */
+  const rebuildCellsFromGrid = useCallback(() => {
+    const { rows, cols } = getGridExtent();
+    const next = new Map();
+    for (let i = 0; i < rows; i++) {
+      for (let j = 0; j < cols; j++) {
+        const key = getCellKey(i, j);
+        if (deletedCellsRef.current.has(key)) continue;
+        const poly = computeCellPolyFromGrid(i, j);
+        if (poly) next.set(key, poly);
+      }
+    }
+    cellPolygonsRef.current = next;
+  }, [getGridExtent, computeCellPolyFromGrid]);
+
+  const innerGridLines = useCallback(() => {
+    const mInv = mInvRef.current;
+    const ys = layerYsRef.current;
+    const colXs = layerColXsRef.current;
+    if (!mInv || ys.length < 2) return [];
+    const lines = [];
+    for (let i = 1; i < ys.length - 1; i++) {
+      lines.push({
+        type: 'row-line',
+        index: i,
+        seg: [
+          perspectiveTransform([0, ys[i]], mInv),
+          perspectiveTransform([MAP_W, ys[i]], mInv),
+        ],
+      });
+    }
+    let colCount = 0;
+    for (const row of colXs) {
+      if (row?.length > 1) colCount = Math.max(colCount, row.length - 1);
+    }
+    for (let j = 1; j < colCount; j++) {
+      const x = columnDividerX(colXs, j);
+      if (x == null) continue;
+      lines.push({
+        type: 'col-line',
+        index: j,
+        seg: [
+          perspectiveTransform([x, 0], mInv),
+          perspectiveTransform([x, MAP_H], mInv),
+        ],
+      });
+    }
+    return lines;
+  }, []);
+
+  const hitInnerGridLine = useCallback(
+    (x, y, hitPx) => {
+      let best = null;
+      let bestDist = hitPx;
+      for (const line of innerGridLines()) {
+        const d = getDist([x, y], line.seg[0], line.seg[1]);
+        if (d < bestDist) {
+          bestDist = d;
+          best = line;
+        }
+      }
+      return best;
+    },
+    [innerGridLines],
+  );
+
+  const moveGridLine = useCallback(
+    (drag, canvasPt) => {
+      const mFwd = mFwdRef.current;
+      if (!mFwd) return;
+      const flat = perspectiveTransform(canvasPt, mFwd);
+      const gap = 12;
+      if (drag.type === 'row-line') {
+        const ys = layerYsRef.current;
+        const i = drag.index;
+        if (i <= 0 || i >= ys.length - 1) return;
+        ys[i] = clampGridDivider(flat[1], ys[i - 1], ys[i + 1], gap);
+      } else if (drag.type === 'col-line') {
+        const colXs = layerColXsRef.current;
+        const j = drag.index;
+        const prev = columnDividerX(colXs, j - 1);
+        const next = columnDividerX(colXs, j + 1);
+        if (prev == null || next == null) return;
+        const x = clampGridDivider(flat[0], prev, next, gap);
+        for (const row of colXs) {
+          if (row && j < row.length) row[j] = x;
+        }
+      } else {
+        return;
+      }
+      rebuildCellsFromGrid();
+    },
+    [rebuildCellsFromGrid],
+  );
+
   const markUnmappedCellsDeleted = useCallback(() => {
     deletedCellsRef.current = new Set();
     const { rows, cols } = getGridExtent();
@@ -430,7 +528,6 @@ export function useAnnotateTool(canvasRef, options = {}) {
     annCtx.font = 'bold 16px Arial';
 
     const { rows: extentRows, cols: extentCols } = getGridExtent();
-    const handleR = 5;
     const selRow = selectedCell?.rowIdx;
     const selCol = selectedCell?.colIdx;
     const drag = dragTargetRef.current;
@@ -440,14 +537,9 @@ export function useAnnotateTool(canvasRef, options = {}) {
         const poly = getCellPoly(i, j);
         if (!poly || poly.length < 4) continue;
 
-        const isSelected =
-          (selRow === i && selCol === j) ||
-          (drag &&
-            (drag.type === 'cell-body' || drag.type === 'cell-corner') &&
-            drag.row === i &&
-            drag.col === j);
+        const isSelected = selRow === i && selCol === j;
         annCtx.strokeStyle = isSelected ? '#00d4aa' : 'rgba(241, 196, 15, 0.45)';
-        annCtx.lineWidth = isSelected ? 2.5 : 1.5;
+        annCtx.lineWidth = isSelected ? 2 : 1;
         if (isSelected) {
           annCtx.fillStyle = 'rgba(0, 212, 170, 0.12)';
           annCtx.beginPath();
@@ -467,23 +559,26 @@ export function useAnnotateTool(canvasRef, options = {}) {
         annCtx.closePath();
         annCtx.stroke();
 
-        if (!isSelected) continue;
-
-        annCtx.fillStyle = '#e67e22';
-        for (const pt of poly) {
-          annCtx.beginPath();
-          annCtx.arc(pt[0], pt[1], handleR, 0, Math.PI * 2);
-          annCtx.fill();
-        }
-
         const centerX = poly.reduce((s, p) => s + p[0], 0) / poly.length;
         const centerY = poly.reduce((s, p) => s + p[1], 0) / poly.length;
         annCtx.fillStyle = '#00ffcc';
         annCtx.fillText(getEffectiveBoxId(i, j), centerX, centerY);
       }
     }
-    annCtx.lineWidth = 3;
-  }, [getCtx, getGridExtent, getCellPoly, getEffectiveBoxId, selectedCell]);
+
+    const activeLine = drag && (drag.type === 'row-line' || drag.type === 'col-line') ? drag : null;
+    for (const line of innerGridLines()) {
+      const [a, b] = line.seg;
+      const active = activeLine && activeLine.type === line.type && activeLine.index === line.index;
+      annCtx.beginPath();
+      annCtx.moveTo(a[0], a[1]);
+      annCtx.lineTo(b[0], b[1]);
+      annCtx.lineWidth = active ? 1.5 : 1;
+      annCtx.strokeStyle = line.type === 'col-line' ? '#ffe14a' : '#7ec8ff';
+      annCtx.stroke();
+    }
+    annCtx.lineWidth = 1;
+  }, [getCtx, getGridExtent, getCellPoly, getEffectiveBoxId, selectedCell, innerGridLines]);
 
   const renderLoadedAnnotation = useCallback(() => {
     const ann = loadedAnnotationRef.current;
@@ -2193,8 +2288,6 @@ export function useAnnotateTool(canvasRef, options = {}) {
       const scaleY = bitmapH / rect.height;
       const x = (e.clientX - rect.left) * scaleX;
       const y = (e.clientY - rect.top) * scaleY;
-      // 角点命中约 10 屏幕像素（换算到 bitmap），避免小货位内部被误判为角点
-      const cornerHitBitmap = 10 * Math.max(scaleX, scaleY, 1);
       const shelfCornerHit = (streamOverlay ? 18 : 12) * Math.max(scaleX, scaleY, 1);
 
       const shelfPoints = shelfPointsRef.current;
@@ -2225,69 +2318,33 @@ export function useAnnotateTool(canvasRef, options = {}) {
       }
 
       const { rows: extentRows, cols: extentCols } = getGridExtent();
-
-      // 点在货位内：默认整体平移，仅贴近顶点时改形状
+      let hitCell = null;
       for (let i = extentRows - 1; i >= 0; i--) {
         for (let j = extentCols - 1; j >= 0; j--) {
           const poly = getCellPoly(i, j);
           if (!poly || poly.length < 4 || !pointInPolygon([x, y], poly)) continue;
-
-          let nearestCi = 0;
-          let nearestDist = Infinity;
-          for (let ci = 0; ci < poly.length; ci++) {
-            const d = getPointDist([x, y], poly[ci]);
-            if (d < nearestDist) {
-              nearestDist = d;
-              nearestCi = ci;
-            }
-          }
-
-          if (nearestDist < cornerHitBitmap) {
-            dragTargetRef.current = {
-              type: 'cell-corner',
-              row: i,
-              col: j,
-              ci: nearestCi,
-            };
-          } else {
-            dragTargetRef.current = {
-              type: 'cell-body',
-              row: i,
-              col: j,
-              startX: x,
-              startY: y,
-              startPoly: clonePoly(poly),
-              moved: false,
-            };
-          }
-          renderAnnotator();
-          return;
+          hitCell = { row: i, col: j };
+          break;
         }
+        if (hitCell) break;
       }
 
-      // 点在货位外：仅当靠近角点时才拉角
-      let best = null;
-      let bestDist = cornerHitBitmap;
-      for (let i = 0; i < extentRows; i++) {
-        for (let j = 0; j < extentCols; j++) {
-          const poly = getCellPoly(i, j);
-          if (!poly) continue;
-          for (let ci = 0; ci < poly.length; ci++) {
-            const d = getPointDist([x, y], poly[ci]);
-            if (d < bestDist) {
-              bestDist = d;
-              best = { type: 'cell-corner', row: i, col: j, ci };
-            }
-          }
-        }
-      }
-      if (best) {
-        dragTargetRef.current = best;
-        renderAnnotator();
-        return;
-      }
+      const lineHit = (streamOverlay ? 10 : 8) * Math.max(scaleX, scaleY, 1);
+      const line = hitInnerGridLine(x, y, lineHit);
+      if (hitCell) selectCell(hitCell.row, hitCell.col);
+      else if (!line) clearSelectedCell();
 
-      clearSelectedCell();
+      // 落在货格里时先选中，便于改编号。只有按住拖过几像素才移动行线或列线。
+      if (line) {
+        dragTargetRef.current = {
+          type: 'pending-line',
+          lineType: line.type,
+          index: line.index,
+          startClientX: e.clientX,
+          startClientY: e.clientY,
+          moved: false,
+        };
+      }
       renderAnnotator();
     };
 
@@ -2304,41 +2361,40 @@ export function useAnnotateTool(canvasRef, options = {}) {
     };
 
     const onMove = (e) => {
-      if (!dragTargetRef.current) return;
       const canvasPt = clientToCanvas(e.clientX, e.clientY);
       if (!canvasPt) return;
+      const annCvs = getCanvas();
+      if (!dragTargetRef.current) {
+        if (!annCvs) return;
+        const rect = annCvs.getBoundingClientRect();
+        const bitmapW = annCvs.width > 0 ? annCvs.width : coordSpaceRef.current.w || rect.width;
+        const bitmapH = annCvs.height > 0 ? annCvs.height : coordSpaceRef.current.h || rect.height;
+        const scale = Math.max(bitmapW / (rect.width || 1), bitmapH / (rect.height || 1), 1);
+        annCvs.style.cursor = hitInnerGridLine(canvasPt[0], canvasPt[1], 8 * scale) ? 'grab' : 'crosshair';
+        return;
+      }
       const dragTarget = dragTargetRef.current;
 
       if (dragTarget.type === 'shelf-corner') {
         shelfPointsRef.current[dragTarget.i] = [canvasPt[0], canvasPt[1]];
         refreshPerspectiveFromShelf();
+        rebuildCellsFromGrid();
         renderAnnotator();
         setCanSave(!!mInvRef.current);
         return;
       }
 
-      if (dragTarget.type === 'cell-corner') {
-        const key = getCellKey(dragTarget.row, dragTarget.col);
-        const poly = cellPolygonsRef.current.get(key) || getCellPoly(dragTarget.row, dragTarget.col);
-        if (!poly) return;
-        const next = clonePoly(poly);
-        next[dragTarget.ci] = [canvasPt[0], canvasPt[1]];
-        cellPolygonsRef.current.set(key, next);
-        renderAnnotator();
-        setCanSave(!!mInvRef.current);
-        return;
+      if (dragTarget.type === 'pending-line') {
+        const dx = e.clientX - dragTarget.startClientX;
+        const dy = e.clientY - dragTarget.startClientY;
+        if (dx * dx + dy * dy < 16) return;
+        dragTarget.type = dragTarget.lineType;
+        dragTarget.moved = true;
       }
 
-      if (dragTarget.type === 'cell-body') {
-        const dx = canvasPt[0] - dragTarget.startX;
-        const dy = canvasPt[1] - dragTarget.startY;
-        if (!dragTarget.moved) {
-          if (dx * dx + dy * dy < 16) return;
-          dragTarget.moved = true;
-        }
-        const key = getCellKey(dragTarget.row, dragTarget.col);
-        const next = dragTarget.startPoly.map(([px, py]) => [px + dx, py + dy]);
-        cellPolygonsRef.current.set(key, next);
+      if (dragTarget.type === 'row-line' || dragTarget.type === 'col-line') {
+        if (annCvs) annCvs.style.cursor = 'grabbing';
+        moveGridLine(dragTarget, canvasPt);
         renderAnnotator();
         setCanSave(!!mInvRef.current);
       }
@@ -2346,24 +2402,15 @@ export function useAnnotateTool(canvasRef, options = {}) {
 
     const onUp = () => {
       const ended = dragTargetRef.current;
-      const hadDrag = ended !== null;
+      const movedLine = Boolean(
+        ended && (ended.type === 'row-line' || ended.type === 'col-line') && ended.moved,
+      );
+      const movedShelf = Boolean(ended && ended.type === 'shelf-corner');
       dragTargetRef.current = null;
-      if (
-        ended &&
-        (ended.type === 'cell-body' || ended.type === 'cell-corner') &&
-        Number.isInteger(ended.row) &&
-        Number.isInteger(ended.col)
-      ) {
-        if (ended.type === 'cell-body' && !ended.moved) {
-          cellPolygonsRef.current.set(
-            getCellKey(ended.row, ended.col),
-            clonePoly(ended.startPoly),
-          );
-        }
-        selectCell(ended.row, ended.col);
-        renderAnnotator();
-      }
-      if (hadDrag && embedded) autoSaveRef.current.schedule();
+      const annCvs = getCanvas();
+      if (annCvs) annCvs.style.cursor = 'crosshair';
+      if (movedLine || movedShelf) renderAnnotator();
+      if ((movedLine || movedShelf) && embedded) autoSaveRef.current.schedule();
     };
 
     pointerApiRef.current = { onDown, onMove, onUp };
@@ -2377,6 +2424,9 @@ export function useAnnotateTool(canvasRef, options = {}) {
     selectCell,
     clearSelectedCell,
     refreshPerspectiveFromShelf,
+    rebuildCellsFromGrid,
+    hitInnerGridLine,
+    moveGridLine,
     embedded,
     streamOverlay,
     bumpRender,
@@ -2407,9 +2457,11 @@ export function useAnnotateTool(canvasRef, options = {}) {
       };
 
       annCvs.addEventListener('mousedown', onDownWrapped);
+      annCvs.addEventListener('mousemove', onMoveWindow);
 
       return () => {
         annCvs.removeEventListener('mousedown', onDownWrapped);
+        annCvs.removeEventListener('mousemove', onMoveWindow);
         window.removeEventListener('mousemove', onMoveWindow);
         window.removeEventListener('mouseup', onUpWindow);
       };

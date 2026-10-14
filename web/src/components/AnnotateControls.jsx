@@ -105,7 +105,7 @@ export default function AnnotateControls({ tool, embedded = false }) {
             <>
               <span className="group-title">货位编号</span>
               <p className="annotate-box-empty-hint">
-                点击画面中的货位进行编辑；选中后点「删除货位」可移除该 ROI。
+                拖行线、列线调整格子。点击货位可改编号，或删除该格。
               </p>
             </>
           )}

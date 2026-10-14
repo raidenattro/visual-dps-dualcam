@@ -113,7 +113,7 @@ export default function LegacyCameraAnnotatePage() {
       <header className="legacy-annotate-header">
         <h1 className="page-title">单路 2D 货框标注</h1>
         <p className="legacy-annotate-lead">
-          进页自动恢复上次抓帧与标注；需更新画面时点「抓帧」→ 生成货位 → 保存
+          四角定外框。生成货位后拖蓝色行线、黄色列线，一次改整行或整列。单击货格改编号。
         </p>
       </header>
 
