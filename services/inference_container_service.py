@@ -406,6 +406,16 @@ def start_inference_container(camera: dict, request=None) -> dict:
     if os.path.isfile("/etc/localtime"):
         binds.append("/etc/localtime:/etc/localtime:ro")
     effective = get_effective_settings(app_config, camera)
+    if mode == "legacy":
+        from services.runtime_config_service import get_legacy_section
+
+        pace = get_legacy_section(app_config)
+    else:
+        pace = {
+            "frame_rate": effective.get("inference.frame_rate", 15),
+            "height": effective.get("inference.height", 480),
+            "pose_frame_interval": effective.get("inference.pose_frame_interval", 2),
+        }
     preset = resolve_model_preset(app_config, overrides=effective)
     infer_image, _family = _resolve_inference_image(client, preset.family)
     use_gpu = os.environ.get("INFERENCE_USE_GPU", "0") == "1"
@@ -420,9 +430,9 @@ def start_inference_container(camera: dict, request=None) -> dict:
         "INFERENCE_BACKEND": preset.id,
         "INFERENCE_USE_GPU": "1" if use_gpu else "0",
         "MEDIAMTX_INTERNAL_HOST": os.environ.get("MEDIAMTX_INTERNAL_HOST", "mediamtx"),
-        "INFERENCE_FRAME_RATE": str(effective.get("inference.frame_rate", 15)),
-        "INFERENCE_HEIGHT": str(effective.get("inference.height", 480)),
-        "INFERENCE_POSE_FRAME_INTERVAL": str(effective.get("inference.pose_frame_interval", 2)),
+        "INFERENCE_FRAME_RATE": str(pace.get("frame_rate", 15)),
+        "INFERENCE_HEIGHT": str(pace.get("height", 480)),
+        "INFERENCE_POSE_FRAME_INTERVAL": str(pace.get("pose_frame_interval", 2)),
         "RUNTIME_CONFIG_FILE": "/app/localdata/runtime_config.json",
         "INFERENCE_DEBUG_VISUAL": "1" if effective.get("debug-info.enabled") else "0",
         "PIPELINE_LOG": "1" if effective_pipeline_log_enabled(app_config, camera) else "0",

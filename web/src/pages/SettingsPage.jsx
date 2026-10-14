@@ -5,7 +5,7 @@ import LogsPanel from '../components/LogsPanel';
 import ConfirmDialog from '../components/ConfirmDialog';
 import UserDrawer from '../components/UserDrawer';
 import FieldHint from '../components/FieldHint';
-import { CAMERA_OVERRIDE_FIELDS, GLOBAL_DUALCAM_FIELDS, GLOBAL_ONLY_INFERENCE_FIELDS, GLOBAL_PIPELINE_LOG_FIELDS, formatFieldDefaultValue, resolveSettingValue, settingsFieldTooltip } from '../lib/cameraSettings';
+import { CAMERA_OVERRIDE_FIELDS, GLOBAL_DUALCAM_FIELDS, GLOBAL_ONLY_INFERENCE_FIELDS, GLOBAL_PIPELINE_LOG_FIELDS, LEGACY_FIELDS, formatFieldDefaultValue, resolveSettingValue, settingsFieldTooltip } from '../lib/cameraSettings';
 import { InferenceModelGlobalFields } from '../components/InferenceModelFields';
 import { formatUserError } from '../lib/userFacingText';
 import './SettingsPage.css';
@@ -272,8 +272,8 @@ export default function SettingsPage() {
         {tab === 'system' && isAdmin && (
           <form className="settings-panel" onSubmit={saveSettings}>
             <p className="settings-panel-lead">
-              以下为<strong>全局默认值</strong>。帧率、推理高度等可在摄像头设置中勾选「自定义」覆盖；姿态检测间隔仅全局生效，保证左右路配对窗一致。
-              保存后写入 <code>localdata/runtime_config.json</code>（覆盖 <code>app_config.json</code>）。改姿态间隔后需重新启动各路检测。
+              双路 3D 与单路 2D 的帧率、推理高度、跳帧分开配置。下面先是双路 3D；单路在「单路 2D」一节。
+              保存后写入 <code>localdata/runtime_config.json</code>。改帧率或跳帧后需重新启动对应的检测。
             </p>
             <div className="settings-form-fields">
               <InferenceModelGlobalFields
@@ -321,6 +321,46 @@ export default function SettingsPage() {
                       type="number"
                       min={field.min}
                       max={field.max}
+                      value={settings[field.key] ?? ''}
+                      onChange={(e) =>
+                        setSettings((s) => ({
+                          ...s,
+                          [field.key]: Number(e.target.value),
+                        }))
+                      }
+                    />
+                  )}
+                </label>
+              ))}
+              <h3 className="settings-subsection-title">单路 2D</h3>
+              <p className="settings-subsection-lead">
+                未编入巷道的单路用这里的帧率和跳帧。Δt 关闭时，告警仍是连续 n 帧进框。
+              </p>
+              {LEGACY_FIELDS.map((field) => (
+                <label key={field.key}>
+                  <span className="settings-field-label">
+                    {field.label}
+                    <FieldHint text={settingsFieldTooltip(field)} />
+                  </span>
+                  {field.type === 'boolean' ? (
+                    <span className="settings-toggle-field">
+                      <span className="settings-toggle">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(settings[field.key])}
+                          onChange={(e) =>
+                            setSettings((s) => ({ ...s, [field.key]: e.target.checked }))
+                          }
+                        />
+                        <span className="settings-toggle-track" aria-hidden="true" />
+                      </span>
+                    </span>
+                  ) : (
+                    <input
+                      type="number"
+                      min={field.min}
+                      max={field.max}
+                      step={field.step}
                       value={settings[field.key] ?? ''}
                       onChange={(e) =>
                         setSettings((s) => ({
