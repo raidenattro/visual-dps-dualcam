@@ -254,6 +254,50 @@ def test_same_side_split_shelves_with_ground():
     assert fwd_l[2] > 0.4 and fwd_r[2] > 0.4
 
 
+def test_one_shelf_other_view_ground_only():
+    """左路标墙1和地面，右路只标同一块地面：右路相机仍能解出来。"""
+    c_l = np.array([-0.35, 2.90, -1.20])
+    c_r = np.array([0.40, 2.90, -1.05])
+    left = _split_view("L", c_l, 50.0, 4.0, {
+        "camH": 2.90, "camDist": 1.20, "pitch": 50, "yaw": 4,
+        "wallDist1": 0.65, "wallDist2": 1.35,
+    }, 1)
+    right = _split_view("R", c_r, 48.0, -3.0, {
+        "camH": 2.90, "camDist": 1.05, "pitch": 48, "yaw": -3,
+        "wallDist1": 1.40, "wallDist2": 0.60,
+    }, 2)
+    for w in right["walls"]:
+        w["quad"] = []
+    g = np.array([
+        [-AISLE / 2, 0.0, WIDTH],
+        [-AISLE / 2, 0.0, 0.0],
+        [AISLE / 2, 0.0, 0.0],
+        [AISLE / 2, 0.0, WIDTH],
+    ])
+    rect = {
+        "a": WIDTH,
+        "b": AISLE,
+        "L": _project_world(g, c_l, 50.0, 4.0, 0.0, 90.0).tolist(),
+        "R": _project_world(g, c_r, 48.0, -3.0, 0.0, 90.0).tolist(),
+    }
+    res = solve_dual({
+        "aisle": AISLE,
+        "layout": "same_side",
+        "ground_rect": rect,
+        "views": [left, right],
+    })
+    assert res["ok"], res.get("error")
+    assert res["method"] == "one_shelf_ground"
+    assert sorted(w["wall_id"] for w in res["walls"]) == [1, 2]
+    assert abs(res["cameras"]["L"]["C"][0] - c_l[0]) < 0.15
+    assert abs(res["cameras"]["R"]["C"][0] - c_r[0]) < 0.15
+    assert abs(res["cameras"]["L"]["C"][2] - c_l[2]) < 0.2
+    assert abs(res["cameras"]["R"]["C"][2] - c_r[2]) < 0.2
+    assert res["ground_reproj_px"]["L"] < 3.0
+    assert res["ground_reproj_px"]["R"] < 3.0
+    assert res["wall_reproj_px"]["L"][1] < 3.0
+
+
 def test_same_side_different_walls_do_not_align():
     """左路只标墙1、右路只标墙2：没有共同墙，不能硬对齐。"""
     c_l = np.array([-0.2, 2.84, -1.56])

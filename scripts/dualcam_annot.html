@@ -200,6 +200,15 @@ function singleWallOn() {
   return document.getElementById('singleWall').checked;
 }
 
+function oneShelfGroundReady() {
+  if (!isSameSide()) return false;
+  const g = ensureGround();
+  if (g.L.length !== 4 || g.R.length !== 4) return false;
+  const counts = ['L', 'R'].map((v) => wallsOf(v).filter((w) => w.quad.length === 4).length);
+  counts.sort();
+  return counts[0] === 0 && counts[1] === 1;
+}
+
 function activeWallId() {
   const w = wallsOf('L')[activeWall];
   return w ? w.wall_id : 1;
@@ -231,7 +240,7 @@ function syncLayoutUi() {
   document.getElementById('intro').innerHTML = one
     ? '左右路都在，但<strong>只标同一面墙</strong>（表格里点选墙1或墙2）。另一面留空。点序相对本机 ①顶远 ②顶近 ③底近 ④底远。'
     : (same
-      ? '同侧同向：每路只标自己看得到的一面（墙1=81 绿，墙2=82 紫），另一面留空。再在两路点同一块地面矩形。点序 ①顶远 ②顶近 ③底近 ④底远。'
+      ? '同侧同向：每路只标自己看得到的一面（墙1=81 绿，墙2=82 紫）。只有一路能看到货架时，另一路留空货架、只点地面。两路地面用同一套角序。点序 ①顶远 ②顶近 ③底近 ④底远。'
       : '每一路都能标<strong>左右两面墙</strong>：墙1 绿色（81）、墙2 紫色（82）。点表格或点画面上的墙切换；点哪路画面就标哪路。点序相对本机 ①顶远 ②顶近 ③底近 ④底远。');
 }
 
@@ -395,14 +404,16 @@ function hint() {
     el.textContent = `${side} 墙${w.wall_id}：点 ${HINT[w.quad.length]}。左右路都只标这一面，标满四角再反解。`;
   } else if (w.quad.length < 4) {
     el.textContent = `${side} 墙${w.wall_id}：点 ${HINT[w.quad.length]}。标完一面后点表格换墙，或直接点另一面已有的角。`;
+  } else if (oneShelfGroundReady() && !solved()) {
+    el.textContent = '只有一路标了货架，两路地面四角已齐。可以直接反解，另一路不用再标货架。';
   } else if (singleWallOn() && !solved()) {
     const id = w.wall_id;
     const miss = ['L', 'R'].filter((v) => !wallReady(v, id));
     el.textContent = miss.length
-      ? `墙${id} 还差 ${miss.map((v) => (v === 'L' ? '左路' : '右路')).join('、')} 的四角。另一面留空即可。`
+      ? `墙${id} 还差 ${miss.map((v) => (v === 'L' ? '左路' : '右路')).join('、')} 的四角。若另一路只能看见地面，两路都点满地面四角即可，不必再标货架。`
       : `左右路都标齐了墙${id}。点「1. 反解并对齐」。未标的另一面不参与。`;
   } else if (!solved()) {
-    el.textContent = `当前这面四角已齐。另一面可继续标；只标同一面时勾选「两路只标同一面」再反解。`;
+    el.textContent = '当前这面四角已齐。另一路若只能看见地面，点满同一块地面四角即可反解。';
   } else if (!mesh) {
     el.textContent = `当前墙${w.wall_id}。点「生成本墙层线」，再逐条拖分格线对齐隔板。`;
   } else {
@@ -1018,12 +1029,16 @@ function solveSummary(res) {
 }
 
 document.getElementById('btnSolve').onclick = async () => {
-  if (singleWallOn()) {
+  if (singleWallOn() && !oneShelfGroundReady()) {
     const id = activeWallId();
     const miss = ['L', 'R'].filter((v) => !wallReady(v, id));
     if (miss.length) {
-      document.getElementById('msg').textContent =
-        `墙${id} 还没标满：${miss.map((v) => (v === 'L' ? '左路' : '右路')).join('、')}。左右路都要有这一面的四角。`;
+      const g = ensureGround();
+      const groundMiss = ['L', 'R'].filter((v) => g[v].length < 4);
+      const shelfOnly = miss.length === 1 && isSameSide();
+      document.getElementById('msg').textContent = shelfOnly
+        ? `墙${id} 的${miss.map((v) => (v === 'L' ? '左路' : '右路')).join('、')}还没标。这一路可以不标货架，但左右地面都要四个角。还差 ${groundMiss.map((v) => (v === 'L' ? '左路地面' : '右路地面')).join('、') || '地面已齐，请再点一次反解'}。`
+        : `墙${id} 还没标满：${miss.map((v) => (v === 'L' ? '左路' : '右路')).join('、')}。左右路都要有这一面的四角。`;
       return;
     }
   }
