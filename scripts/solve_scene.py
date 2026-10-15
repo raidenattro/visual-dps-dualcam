@@ -540,11 +540,362 @@ def _cam_bundle(sol: dict, img_w: int, img_h: int, R=None, t=None, scale: float 
     }
 
 
+def _marked_walls(view: dict) -> list:
+    return [w for w in (view.get("walls") or []) if len(w.get("quad") or []) == 4]
+
+
+def _wall_sign(wall_id: int) -> int:
+    """墙1=81 在 x 负侧，墙2=82 在 x 正侧。"""
+    return -1 if int(wall_id) == 1 else 1
+
+
+def _ground_ready(rect: Any) -> bool:
+    if not isinstance(rect, dict):
+        return False
+    if _finite_dist(rect.get("a")) is None or _finite_dist(rect.get("b")) is None:
+        return False
+    for key in ("L", "R"):
+        pts = rect.get(key) or []
+        if len(pts) != 4:
+            return False
+    return True
+
+
+def _match_shelf_bottom(shelf_quad, ground_quad, max_px: float = 30.0) -> dict[str, int] | None:
+    """货架底边（底近、底远）落在地面矩形的哪两个角上。对不上说明底边没和地面重合。"""
+    q = np.asarray(shelf_quad, float)
+    g = np.asarray(ground_quad, float)
+    out: dict[str, int] = {}
+    used: set[int] = set()
+    for shelf_i, name in ((2, "near"), (3, "far")):
+        dist = np.linalg.norm(g - q[shelf_i], axis=1)
+        pick = None
+        for j in np.argsort(dist):
+            j = int(j)
+            if j in used or float(dist[j]) > max_px:
+                continue
+            pick = j
+            break
+        if pick is None:
+            return None
+        used.add(pick)
+        out[name] = pick
+    return out
+
+
+def _cam_x_from_wall_dists(prior: dict, wall_ids: list[int], aisle: float) -> float | None:
+    """两面墙的法向距都能推出同一个 camX。标了的那一面和没标的那一面都用。"""
+    xs: list[float] = []
+    for wid in wall_ids:
+        wd = _wall_dist(prior, wid)
+        if wd is None:
+            continue
+        sign = _wall_sign(wid)
+        wall_x = sign * aisle / 2.0
+        xs.append(wall_x - sign * wd)
+    if not xs:
+        return None
+    return float(sum(xs) / len(xs))
+
+
+def _ground_corners(x: float, z: float, theta: float, a: float, b: float, flip: float) -> np.ndarray:
+    """地面 y=0。①→② 长 a，②→③ 长 b。flip=±1 决定矩形往哪一侧转。"""
+    c, s = math.cos(theta), math.sin(theta)
+    u = np.array([c, 0.0, s])
+    v = np.array([-s, 0.0, c]) * float(flip)
+    p0 = np.array([x, 0.0, z])
+    return np.stack([p0, p0 + a * u, p0 + a * u + b * v, p0 + b * v])
+
+
+def _pack_camera(z7: np.ndarray, img_w: int, img_h: int, resid_px: float, shift: float) -> dict:
+    f, cam_x, cam_h, cam_z, pitch, yaw, roll = [float(v) for v in z7]
+    cam_z -= shift
+    right, down, fwd = cam_axes(pitch, yaw, roll)
+    fov_h = 2 * math.degrees(math.atan((img_w / 2.0) / f))
+    return {
+        "f": round(f, 3),
+        "cx": round(img_w / 2.0, 2),
+        "cy": round(img_h / 2.0, 2),
+        "C": [round(cam_x, 4), round(cam_h, 4), round(cam_z, 4)],
+        "right": [round(float(v), 6) for v in right],
+        "down": [round(float(v), 6) for v in down],
+        "fwd": [round(float(v), 6) for v in fwd],
+        "fovH": round(fov_h, 2),
+        "camH": round(cam_h, 4),
+        "resid_px": round(resid_px, 2),
+    }
+
+
+def _init_cam_z(view: dict, aisle: float, img_w: int, img_h: int, wall: dict) -> np.ndarray:
+    """单路只靠自己那面墙出初值。近端先放在 z=0，camZ = -离近端。"""
+    prior = view.get("prior") or {}
+    sign = _wall_sign(int(wall["wall_id"]))
+    res = solve(
+        {"aisle": aisle, "prior": prior, "walls": [wall]},
+        img_w, img_h, force_signs=[sign],
+    )
+    if res.get("ok") and float(res["resid_px"]) < 12.0:
+        c = res["camera"]
+        f = (img_w / 2.0) / math.tan(math.radians(float(c["fovH"]) / 2.0))
+        return np.array([
+            f, c["camX"], c["camH"], -c["camDist"],
+            math.radians(c["pitch"]), math.radians(c["yaw"]), math.radians(c["roll"]),
+        ], float)
+    cam_x = _cam_x_guess([wall], [sign], aisle, prior)
+    f = (img_w / 2.0) / math.tan(math.radians(90.0 / 2.0))
+    return np.array([
+        f, cam_x, float(prior.get("camH", 2.84)), -float(prior.get("camDist", 1.56)),
+        math.radians(float(prior.get("pitch", 45.0))),
+        math.radians(float(prior.get("yaw", 0.0))),
+        0.0,
+    ], float)
+
+
+def solve_split_ground(payload: dict, views: list) -> dict:
+    """同侧、左右各标一面不同的货架，再用地面矩形接到同一个巷道系。
+
+    货架给出宽高，地面矩形给出边①→②、边②→③的米制长度。
+    相机高、离近端、到该货架的法向距只作软先验。
+    """
+    rect = payload.get("ground_rect") or {}
+    if not _ground_ready(rect):
+        return {
+            "ok": False,
+            "error": "左右路没有共同的墙。请在两路都点满同一块地面矩形的四个角，并填写边长",
+        }
+    aisle = float(payload.get("aisle") or 2.0)
+    names = [v.get("name") or ("L" if i == 0 else "R") for i, v in enumerate(views)]
+    sizes = [(v.get("image_size") or [1280, 720])[:2] for v in views]
+    marked = [_marked_walls(v) for v in views]
+    if any(len(ws) != 1 for ws in marked):
+        return {"ok": False, "error": "分墙反解时每路只标一面货架的四个角"}
+    wall_by_id: dict[int, dict] = {}
+    for ws in marked:
+        wall_by_id[int(ws[0]["wall_id"])] = ws[0]
+    wall_ids = sorted(wall_by_id)
+    if len(wall_ids) < 2:
+        return {"ok": False, "error": "两路标的是同一面墙，请走共同墙对齐"}
+    obs_wall = []
+    for v, ws in zip(views, marked):
+        obs_wall.append(np.array(ws[0]["quad"], float))
+    obs_ground = [np.array(rect[name], float) for name in names]
+    # 地面四个角 = 两面货架的底近、底远。底边在 y=base，和地面标注是同一组点。
+    slots: list[tuple[int, str] | None] = [None] * 4
+    for ws, gobs in zip(marked, obs_ground):
+        wid = int(ws[0]["wall_id"])
+        links = _match_shelf_bottom(ws[0]["quad"], gobs)
+        if links is None:
+            return {
+                "ok": False,
+                "error": "货架底边要和地面矩形重合。请把地面的两个角点标在这面货架的底边上",
+            }
+        for name, gi in links.items():
+            prev = slots[gi]
+            if prev is not None and prev != (wid, name):
+                return {
+                    "ok": False,
+                    "error": "左右路同一个地面角对到了不同的货架底点，请按同一套角序点",
+                }
+            slots[gi] = (wid, name)
+    if any(s is None for s in slots):
+        return {
+            "ok": False,
+            "error": "地面四个角还没被两面货架的底边盖全。矩形应一头贴 81 底边、一头贴 82 底边",
+        }
+    z_cams = [
+        _init_cam_z(v, aisle, int(sz[0]), int(sz[1]), ws[0])
+        for v, sz, ws in zip(views, sizes, marked)
+    ]
+    for i, v in enumerate(views):
+        prior = v.get("prior") or payload.get("prior") or {}
+        cam_x = _cam_x_from_wall_dists(prior, wall_ids, aisle)
+        if cam_x is not None:
+            z_cams[i][1] = cam_x
+    # 参数：两路各 7 + 共用的近端 Z。地面角由两面墙的底边决定，不再单独摆。
+    n = 15
+
+    def project_view(zcam: np.ndarray, pts: np.ndarray, img_w: int, img_h: int) -> np.ndarray:
+        return _project(pts, zcam, img_w / 2.0, img_h / 2.0)
+
+    def sign_of(wid: int, flipped: bool) -> int:
+        s = _wall_sign(wid)
+        return -s if flipped else s
+
+    def shelf_bottoms(zn: float, flipped: bool) -> dict[tuple[int, str], np.ndarray]:
+        out: dict[tuple[int, str], np.ndarray] = {}
+        for wid in wall_ids:
+            spec = wall_by_id[wid]
+            x = sign_of(wid, flipped) * aisle / 2.0
+            y = float(spec.get("base") or 0.0)
+            width = float(spec["width"])
+            out[(wid, "near")] = np.array([x, y, zn])
+            out[(wid, "far")] = np.array([x, y, zn + width])
+        return out
+
+    def ground_at(zn: float, flipped: bool) -> np.ndarray:
+        btm = shelf_bottoms(zn, flipped)
+        return np.stack([btm[slots[i]] for i in range(4)])
+
+    def pixel_resid(x: np.ndarray, flipped: bool) -> tuple[list[float], list[np.ndarray]]:
+        zn = float(x[14])
+        g = ground_at(zn, flipped)
+        chunks = []
+        r: list[float] = []
+        for i, ws in enumerate(marked):
+            wid = int(ws[0]["wall_id"])
+            block = _wall_corners(wall_by_id[wid], sign_of(wid, flipped), aisle, zn)
+            iw, ih = int(sizes[i][0]), int(sizes[i][1])
+            zcam = x[i * 7 : i * 7 + 7]
+            uv_w = project_view(zcam, block, iw, ih)
+            uv_g = project_view(zcam, g, iw, ih)
+            dw = np.nan_to_num(uv_w - obs_wall[i], nan=400.0)
+            dg = np.nan_to_num(uv_g - obs_ground[i], nan=400.0)
+            r.extend(dw.ravel().tolist())
+            r.extend(dg.ravel().tolist())
+            chunks.append(np.vstack([dw, dg]))
+        return r, chunks
+
+    def resid(x: np.ndarray, flipped: bool) -> list[float]:
+        r, _chunks = pixel_resid(x, flipped)
+        zn = float(x[14])
+        for i, v in enumerate(views):
+            prior = v.get("prior") or payload.get("prior") or {}
+            zcam = x[i * 7 : i * 7 + 7]
+            r.append(8.0 * (float(zcam[2]) - float(prior.get("camH", 2.84))))
+            r.append(1.0 * (math.degrees(float(zcam[4])) - float(prior.get("pitch", 45.0))) / 10.0)
+            r.append(1.0 * (math.degrees(float(zcam[5])) - float(prior.get("yaw", 0.0))) / 10.0)
+            r.append(2.0 * math.degrees(float(zcam[6])) / 10.0)
+            for wid in wall_ids:
+                wd = _wall_dist(prior, wid)
+                if wd is None:
+                    continue
+                sign = sign_of(wid, flipped)
+                wall_x = sign * aisle / 2.0
+                r.append(12.0 * (sign * (wall_x - float(zcam[1])) - wd))
+            cd = _finite_dist(prior.get("camDist"))
+            if cd is not None:
+                # 相机在货架近端外侧 camDist 米，两面墙共用这个近端
+                r.append(8.0 * (float(zcam[3]) - (zn - cd)))
+        return r
+
+    def pixel_rms(x: np.ndarray, flipped: bool) -> float:
+        _r, chunks = pixel_resid(x, flipped)
+        err = np.vstack(chunks)
+        return float(np.sqrt(np.mean(np.sum(err * err, axis=1))))
+
+    def cam_x_of(prior: dict, flipped: bool) -> float | None:
+        xs: list[float] = []
+        for wid in wall_ids:
+            wd = _wall_dist(prior, wid)
+            if wd is None:
+                continue
+            sign = sign_of(wid, flipped)
+            wall_x = sign * aisle / 2.0
+            xs.append(wall_x - sign * wd)
+        if not xs:
+            return None
+        return float(sum(xs) / len(xs))
+
+    best = None
+    for flipped in (False, True):
+        x0 = np.zeros(n)
+        x0[0:7] = z_cams[0]
+        x0[7:14] = z_cams[1]
+        lo = np.full(n, -8.0)
+        hi = np.full(n, 12.0)
+        for i, v in enumerate(views):
+            prior = v.get("prior") or {}
+            iw = int(sizes[i][0])
+            base = i * 7
+            lo[base], hi[base] = iw * 0.25, iw * 4.0
+            cam_x = cam_x_of(prior, flipped)
+            if cam_x is not None:
+                x0[base + 1] = cam_x
+                lo[base + 1], hi[base + 1] = cam_x - 0.35, cam_x + 0.35
+            else:
+                lo[base + 1], hi[base + 1] = -aisle, aisle
+            lo[base + 2], hi[base + 2] = 1.2, 6.5
+            lo[base + 3], hi[base + 3] = -12.0, 4.0
+            lo[base + 4], hi[base + 4] = math.radians(-5), math.radians(89)
+            lo[base + 5], hi[base + 5] = math.radians(-75), math.radians(75)
+            lo[base + 6], hi[base + 6] = math.radians(-35), math.radians(35)
+        lo[14], hi[14] = -1.0, 8.0
+        x0 = np.minimum(np.maximum(x0, lo + 1e-6), hi - 1e-6)
+        try:
+            sol = least_squares(
+                lambda x, fp=flipped: resid(x, fp), x0,
+                method="trf", bounds=(lo, hi), max_nfev=2000,
+            )
+        except Exception:
+            continue
+        rms = pixel_rms(sol.x, flipped)
+        if best is None or rms < best["rms"]:
+            best = {"rms": rms, "x": sol.x.copy(), "flipped": flipped}
+    if best is None:
+        return {"ok": False, "error": "分墙地面反解未收敛"}
+    x = best["x"]
+    rms = best["rms"]
+    flipped = best["flipped"]
+    zn = float(x[14])
+    shift = zn
+    walls_out = []
+    for wid in wall_ids:
+        pts = _wall_corners(wall_by_id[wid], sign_of(wid, flipped), aisle, 0.0)
+        walls_out.append({
+            "wall_id": wid,
+            "sign": sign_of(wid, flipped),
+            "z_near": 0.0,
+            "corners": [[round(float(c), 4) for c in p] for p in pts],
+        })
+    g = ground_at(0.0, flipped)
+    cameras = {}
+    per_view = {}
+    ground_reproj: dict[str, float] = {}
+    _r, chunks = pixel_resid(x, flipped)
+    for i, name in enumerate(names):
+        iw, ih = int(sizes[i][0]), int(sizes[i][1])
+        zcam = x[i * 7 : i * 7 + 7].copy()
+        view_rms = float(np.sqrt(np.mean(np.sum(chunks[i] * chunks[i], axis=1))))
+        g_uv = project_view(zcam, ground_at(zn, flipped), iw, ih)
+        g_err = np.linalg.norm(np.nan_to_num(g_uv - obs_ground[i], nan=400.0), axis=1)
+        ground_reproj[name] = round(float(np.max(g_err)), 1)
+        cameras[name] = _pack_camera(zcam, iw, ih, view_rms, shift)
+        per_view[name] = {"resid_px": round(view_rms, 2), "camera": {
+            "camX": cameras[name]["C"][0],
+            "camH": cameras[name]["camH"],
+            "camDist": round(-cameras[name]["C"][2], 4),
+        }}
+    reproj = _wall_reproj_px(walls_out, views, cameras)
+    return {
+        "ok": True,
+        "method": "split_ground",
+        "layout": LAYOUT_SAME_SIDE,
+        "aisle": aisle,
+        "align_scale": 1.0,
+        "align_rms_m": 0.0,
+        "align_wall_id": wall_ids[0],
+        "align_wall_ids": wall_ids,
+        "cameras": cameras,
+        "walls": walls_out,
+        "wall_reproj_px": reproj,
+        "ground": {
+            "a": float(rect.get("a") or 0.0),
+            "b": float(rect.get("b") or 0.0),
+            "corners": [[round(float(c), 4) for c in p] for p in g],
+            "tied_to_shelf_base": True,
+        },
+        "ground_reproj_px": ground_reproj,
+        "per_view": per_view,
+        "pixel_rms": round(rms, 2),
+    }
+
+
 def solve_dual(payload: dict) -> dict:
     """两路各自反解，再把路 B 对到路 A 的巷道坐标。
 
     每路只保留四角标齐的墙。左右路可以都只标同一面（另一面 quad 为空），
     用这一面的角把两路相机放进同一个巷道系。
+    同侧若左右各标一面不同的货架，则改用地面矩形把两路接到同一巷道。
     """
     views = _as_view_list(payload.get("views"))
     if len(views) != 2:
@@ -572,6 +923,8 @@ def solve_dual(payload: dict) -> dict:
     wb = {w["wall_id"]: w for w in sols[1]["walls"]}
     common = [k for k in wa if k in wb]
     if not common:
+        if layout == LAYOUT_SAME_SIDE and _ground_ready(payload.get("ground_rect")):
+            return solve_split_ground(payload, views)
         return {
             "ok": False,
             "error": "左右路要标同一面墙（同一墙号的四角都齐）。现在两路没有共同的完整墙",

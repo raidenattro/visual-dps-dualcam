@@ -376,6 +376,7 @@ class Handler(BaseHTTPRequestHandler):
                 "aisle": body.get("aisle"),
                 "prior": body.get("prior"),
                 "layout": body.get("layout") or body.get("stereo_layout") or "same_side",
+                "ground_rect": body.get("ground_rect"),
                 "views": [views["L"], views["R"]] if isinstance(views, dict) and "L" in views else views,
             }
             res = solve_dual(payload)

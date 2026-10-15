@@ -184,6 +184,76 @@ def test_same_side_one_shared_wall():
     assert float(fwd_l @ fwd_r) > 0.7
 
 
+def _split_view(name, C, pitch, yaw, prior, wall_id, fov_h=90.0, ground=None):
+    """只投影指定的一面墙。ground 为世界坐标 4 点时写入 quad 由调用方投影。"""
+    spec = {"width": WIDTH, "height": HEIGHT, "base": BASE}
+    sign = -1 if wall_id == 1 else 1
+    corners = _wall_corners(spec, sign, AISLE, 0.0)
+    quad = _project_world(corners, C, pitch, yaw, 0.0, fov_h).tolist()
+    walls = [
+        {"wall_id": 1, "width": WIDTH, "height": HEIGHT, "base": BASE, "quad": []},
+        {"wall_id": 2, "width": WIDTH, "height": HEIGHT, "base": BASE, "quad": []},
+    ]
+    walls[wall_id - 1]["quad"] = quad
+    return {
+        "name": name,
+        "image_size": [IW, IH],
+        "prior": prior,
+        "walls": walls,
+    }
+
+
+def test_same_side_split_shelves_with_ground():
+    """左路只标墙1、右路只标墙2，地面矩形已知边长：两路能进同一个巷道。"""
+    c_l = np.array([-0.35, 2.90, -1.20])
+    c_r = np.array([0.40, 2.90, -1.05])
+    # 墙1 x=-1，法向距 = -1 * (-1 - camX) = 1 + camX
+    # 墙2 x=+1，法向距 = 1 - camX
+    left = _split_view("L", c_l, 50.0, 4.0, {
+        "camH": 2.90, "camDist": 1.20, "pitch": 50, "yaw": 4,
+        "wallDist1": 0.65, "wallDist2": 1.35,
+    }, 1)
+    right = _split_view("R", c_r, 48.0, -3.0, {
+        "camH": 2.90, "camDist": 1.05, "pitch": 48, "yaw": -3,
+        "wallDist1": 1.40, "wallDist2": 0.60,
+    }, 2)
+    # 地面四角就是两面货架的底边：①81底远 ②81底近 ③82底近 ④82底远
+    g = np.array([
+        [-AISLE / 2, 0.0, WIDTH],
+        [-AISLE / 2, 0.0, 0.0],
+        [AISLE / 2, 0.0, 0.0],
+        [AISLE / 2, 0.0, WIDTH],
+    ])
+    rect = {
+        "a": WIDTH,
+        "b": AISLE,
+        "L": _project_world(g, c_l, 50.0, 4.0, 0.0, 90.0).tolist(),
+        "R": _project_world(g, c_r, 48.0, -3.0, 0.0, 90.0).tolist(),
+    }
+    res = solve_dual({
+        "aisle": AISLE,
+        "layout": "same_side",
+        "ground_rect": rect,
+        "views": [left, right],
+    })
+    assert res["ok"], res.get("error")
+    assert res["method"] == "split_ground"
+    got = np.array(res["cameras"]["R"]["C"]) - np.array(res["cameras"]["L"]["C"])
+    true = c_r - c_l
+    assert abs(float(np.linalg.norm(got)) - float(np.linalg.norm(true))) < 0.15
+    assert abs(res["cameras"]["L"]["C"][0] - c_l[0]) < 0.15
+    assert abs(res["cameras"]["R"]["C"][0] - c_r[0]) < 0.15
+    assert abs(res["cameras"]["L"]["C"][2] - c_l[2]) < 0.2
+    assert abs(res["cameras"]["R"]["C"][2] - c_r[2]) < 0.2
+    for side in ("L", "R"):
+        assert res["ground_reproj_px"][side] < 3.0
+        for px in (res["wall_reproj_px"].get(side) or {}).values():
+            assert px < 3.0
+    fwd_l = np.array(res["cameras"]["L"]["fwd"])
+    fwd_r = np.array(res["cameras"]["R"]["fwd"])
+    assert fwd_l[2] > 0.4 and fwd_r[2] > 0.4
+
+
 def test_same_side_different_walls_do_not_align():
     """左路只标墙1、右路只标墙2：没有共同墙，不能硬对齐。"""
     c_l = np.array([-0.2, 2.84, -1.56])
