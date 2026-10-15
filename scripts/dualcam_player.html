@@ -484,10 +484,14 @@ function frameHits(fr) {
     const w = { 9: [], 10: [] };
     if (person.xyz) {
       for (const idx of [9, 10]) {
+        const src = Array.isArray(person.src) ? person.src[idx] : null;
+        // 单路借深度没有可靠三维点，不报。对侧规则：有向距离 < 阈值且 (y,z) 在货格内就告警。
+        if (person.held || src === 'Lmono' || src === 'Rmono' || src === 'Lhold' || src === 'Rhold') {
+          continue;
+        }
         const raw = contactSlots(person.xyz[idx], slotMeshes, solved, contactM);
-        const h = raw.filter((hit) => wristContactOk(person, idx, hit));
-        w[idx] = h;
-        hits.push(...h);
+        w[idx] = raw;
+        hits.push(...raw);
       }
     }
     wristHits.push(w);
