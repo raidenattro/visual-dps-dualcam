@@ -427,15 +427,6 @@ def snap_solved_walls_parametric(solved: dict, views: list, aisle: float) -> dic
     return {**solved, "walls": fixed}
 
 
-def _wall_x_spread(walls: list[dict]) -> float:
-    s = 0.0
-    for w in walls:
-        xs = [p[0] for p in w.get("corners") or []]
-        if len(xs) >= 2:
-            s = max(s, float(max(xs) - min(xs)))
-    return s
-
-
 def _snap_merged_walls_parametric(walls: list[dict], views: list, aisle: float) -> list[dict]:
     """双路融合后仍保持参数化墙面：x=±aisle/2、竖直、宽/高/底沿来自标注表格。"""
     specs = _wall_specs_from_views(views)
@@ -549,15 +540,6 @@ def _cam_x_from_wall_dists(prior: dict, wall_ids: list[int], aisle: float) -> fl
     if not xs:
         return None
     return float(sum(xs) / len(xs))
-
-
-def _ground_corners(x: float, z: float, theta: float, a: float, b: float, flip: float) -> np.ndarray:
-    """地面 y=0。①→② 长 a，②→③ 长 b。flip=±1 决定矩形往哪一侧转。"""
-    c, s = math.cos(theta), math.sin(theta)
-    u = np.array([c, 0.0, s])
-    v = np.array([-s, 0.0, c]) * float(flip)
-    p0 = np.array([x, 0.0, z])
-    return np.stack([p0, p0 + a * u, p0 + a * u + b * v, p0 + b * v])
 
 
 def _pack_camera(z7: np.ndarray, img_w: int, img_h: int, resid_px: float, shift: float) -> dict:
