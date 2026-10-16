@@ -49,14 +49,12 @@ _COMPOSE_CONTAINERS = (
     ("visual-dps-redis", "redis", "redis"),
     ("visual-dps-event-worker", "event_worker", "event-worker"),
     ("visual-dps-event-worker-b", "event_worker", "event-worker-b"),
-    ("visual-dps-event-worker-legacy", "event_worker", "event-worker-legacy"),
     ("visual-dps-ui", "ui", "ui"),
 )
 
 _EVENT_WORKER_SPECS = (
     ("visual-dps-event-worker", "event-worker"),
     ("visual-dps-event-worker-b", "event-worker-b"),
-    ("visual-dps-event-worker-legacy", "event-worker-legacy"),
 )
 
 
@@ -254,15 +252,11 @@ def _event_worker_for_camera(
     g = camera_group(cid, json_dir)
     if g:
         sid = logical_shard_id(g["aisle_id"])
-        dualcam = [w for w in workers if w.get("node_id") != "event-worker-legacy"]
-        for worker in dualcam:
+        for worker in workers:
             if sid in (worker.get("shards") or []):
                 return worker
-        running = [w for w in dualcam if w.get("running")]
-        return running[0] if running else (dualcam[0] if dualcam else None)
-    legacy = [w for w in workers if w.get("node_id") == "event-worker-legacy"]
-    if legacy:
-        return legacy[0]
+        running = [w for w in workers if w.get("running")]
+        return running[0] if running else (workers[0] if workers else None)
     sid = logical_shard_id(cid)
     for worker in workers:
         if sid in (worker.get("shards") or []):

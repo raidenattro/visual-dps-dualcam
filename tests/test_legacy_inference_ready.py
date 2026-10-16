@@ -29,8 +29,8 @@ def _write_cam_json(json_dir: str, camera_id: str, boxes: list | None = None):
 def test_legacy_ready_with_boxes(json_dir: str):
     _write_cam_json(json_dir, "lonely", [{"box_id": "1", "video_polygon": [[0, 0], [1, 0], [1, 1]]}])
     ok, err = require_legacy_inference_ready("lonely", json_dir)
-    assert err is None
-    assert ok and ok.get("camera_id") == "lonely"
+    assert ok is None
+    assert err and "单路" in err
 
 
 def test_legacy_rejects_grouped(json_dir: str, monkeypatch):
@@ -38,11 +38,11 @@ def test_legacy_rejects_grouped(json_dir: str, monkeypatch):
     _write_cam_json(json_dir, "cam-l", [{"box_id": "1", "video_polygon": [[0, 0], [1, 0], [1, 1]]}])
     ok, err = require_legacy_inference_ready("cam-l", json_dir)
     assert ok is None
-    assert err and "已编入巷道" in err
+    assert err and "单路" in err
 
 
 def test_legacy_rejects_empty_boxes(json_dir: str):
     _write_cam_json(json_dir, "empty", [])
     ok, err = require_legacy_inference_ready("empty", json_dir)
     assert ok is None
-    assert err and "货框" in err
+    assert err and "单路" in err
