@@ -535,3 +535,19 @@ def test_sync_slot_meshes_rebuilds_when_wall_plane_flips():
     assert mesh["shelf_code"] == "S2"
     assert float(mesh["vertices"][0][0]) == pytest.approx(-1.0)
     assert mesh_matches_solved_wall(mesh, synced["solved"], 2) is True
+
+
+def test_same_side_ground_required_wall_optional_on_one_side():
+    data = empty_aisle("aisle-same")
+    data["layout"] = "same_side"
+    data["required_wall_ids"] = [1]
+    assert "左路地面" in missing_required_quads(data)
+    assert "右路地面" in missing_required_quads(data)
+    data["ground_rect"] = {
+        "a": 2.2,
+        "b": 2.0,
+        "L": [[0, 0], [1, 0], [1, 1], [0, 1]],
+        "R": [[0, 0], [1, 0], [1, 1], [0, 1]],
+    }
+    data["views"]["L"]["walls"][0]["quad"] = [[10, 10], [20, 10], [20, 20], [10, 20]]
+    assert missing_required_quads(data) == []

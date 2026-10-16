@@ -7,6 +7,7 @@ from fastapi import APIRouter, Request
 from dualcam.geom import make_layer_mesh, wall_by_id
 from dualcam.solve import solve_dual
 from services.aisle_store import (
+    aisle_layout,
     apply_capture_sizes,
     bind_group,
     camera_group,
@@ -24,6 +25,26 @@ from services.aisle_store import (
 )
 from services.dualcam_overlay import overlay_for_role
 from services.event_engine.sharding import logical_shard_id
+
+
+def _layout_change_blocked(aisle: dict) -> str | None:
+    """检测开着时不许改对侧/同侧，避免外参和正在跑的姿态对不上。"""
+    try:
+        from services.inference_container_service import get_inference_status
+    except Exception:
+        return None
+    cams = aisle.get("cameras") or {}
+    for role, label in (("L", "左路"), ("R", "右路")):
+        cid = str((cams.get(role) or {}).get("camera_id") or "").strip()
+        if not cid:
+            continue
+        try:
+            status = str((get_inference_status(cid) or {}).get("status") or "")
+        except Exception:
+            continue
+        if status in ("running", "starting"):
+            return f"{label}检测还在跑，请先停止后再改巷道布局（对侧/同侧）。"
+    return None
 
 
 def register_aisle_routes(
@@ -53,6 +74,7 @@ def register_aisle_routes(
             camera_file=camera_ips_file,
             mediamtx_config_path=mediamtx_config_path,
             json_dir=json_dir,
+            layout=(payload or {}).get("layout"),
         )
         if result.get("status") == "success":
             for cam in (result.get("camera_l"), result.get("camera_r")):
@@ -152,6 +174,11 @@ def register_aisle_routes(
     async def api_save_aisle(aisle_id: str, payload: dict):
         payload = dict(payload or {})
         payload["aisle_id"] = aisle_id
+        old = load_aisle(aisle_id, json_dir)
+        if old and aisle_layout(old) != aisle_layout(payload):
+            blocked = _layout_change_blocked(old)
+            if blocked:
+                return {"status": "error", "error": blocked}
         try:
             data = save_aisle(payload, json_dir)
         except ValueError as exc:
@@ -188,6 +215,8 @@ def register_aisle_routes(
         dual_payload = {
             "aisle": data.get("aisle", 2.0),
             "prior": data.get("prior") or {},
+            "layout": aisle_layout(data),
+            "ground_rect": data.get("ground_rect") or {},
             "views": views_for_solve(data),
         }
         solved = solve_dual(dual_payload)

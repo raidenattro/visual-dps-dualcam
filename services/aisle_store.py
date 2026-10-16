@@ -79,8 +79,90 @@ def empty_aisle(aisle_id: str) -> dict[str, Any]:
         },
         "slot_meshes": [],
         "required_wall_ids": list(DEFAULT_REQUIRED_WALL_IDS),
+        "layout": "opposite",
+        "ground_rect": empty_ground_rect(),
         "solved": {"ok": False},
     }
+
+
+def normalize_layout(raw: Any) -> str:
+    """缺省对侧，兼容还没有 layout 字段的旧巷道。"""
+    s = str(raw or "opposite").strip().lower().replace("-", "_")
+    if s in ("same_side", "sameside", "same"):
+        return "same_side"
+    return "opposite"
+
+
+def aisle_layout(aisle: dict | None) -> str:
+    data = aisle if isinstance(aisle, dict) else {}
+    return normalize_layout(data.get("layout"))
+
+
+def empty_ground_rect() -> dict[str, Any]:
+    return {"a": 1.2, "b": 2.0, "L": [], "R": []}
+
+
+def normalize_ground_rect(raw: Any) -> dict[str, Any]:
+    base = empty_ground_rect()
+    if not isinstance(raw, dict):
+        return base
+    try:
+        a = float(raw.get("a"))
+        if a > 0.05:
+            base["a"] = a
+    except (TypeError, ValueError):
+        pass
+    try:
+        b = float(raw.get("b"))
+        if b > 0.05:
+            base["b"] = b
+    except (TypeError, ValueError):
+        pass
+    for role in ROLES:
+        pts = raw.get(role) or []
+        cleaned = []
+        if isinstance(pts, list):
+            for p in pts[:4]:
+                if isinstance(p, (list, tuple)) and len(p) >= 2:
+                    try:
+                        cleaned.append([float(p[0]), float(p[1])])
+                    except (TypeError, ValueError):
+                        continue
+        base[role] = cleaned
+    return base
+
+
+def ground_rect_ready(aisle: dict | None) -> bool:
+    data = aisle if isinstance(aisle, dict) else {}
+    rect = normalize_ground_rect(data.get("ground_rect"))
+    if rect["a"] <= 0.05 or rect["b"] <= 0.05:
+        return False
+    return all(len(rect[role]) == 4 for role in ROLES)
+
+
+def ground_rect_missing(aisle: dict | None) -> list[str]:
+    """同侧地面缺什么。对侧返回空。"""
+    if aisle_layout(aisle) != "same_side":
+        return []
+    data = aisle if isinstance(aisle, dict) else {}
+    rect = normalize_ground_rect(data.get("ground_rect"))
+    missing: list[str] = []
+    raw = data.get("ground_rect") if isinstance(data.get("ground_rect"), dict) else {}
+    try:
+        if float(raw.get("a")) <= 0.05:
+            missing.append("地面边长 a")
+    except (TypeError, ValueError):
+        missing.append("地面边长 a")
+    try:
+        if float(raw.get("b")) <= 0.05:
+            missing.append("地面边长 b")
+    except (TypeError, ValueError):
+        missing.append("地面边长 b")
+    role_label = {"L": "左路地面", "R": "右路地面"}
+    for role in ROLES:
+        if len(rect[role]) < 4:
+            missing.append(role_label[role])
+    return missing
 
 
 def _empty_walls() -> list[dict]:
@@ -267,13 +349,14 @@ def views_for_solve(aisle: dict | None) -> list[dict]:
     return out
 
 
-def missing_required_quads(aisle: dict | None) -> list[str]:
-    """勾选墙在左右路是否都标满四角。返回如「左路墙1」。"""
-    data = aisle if isinstance(aisle, dict) else {}
-    need = required_wall_ids(data)
-    views = data.get("views") if isinstance(data.get("views"), dict) else {}
-    role_label = {"L": "左路", "R": "右路"}
-    missing: list[str] = []
+def _quad_len(wall: dict | None) -> int:
+    quad = (wall or {}).get("quad") or []
+    return len(quad) if isinstance(quad, list) else 0
+
+
+def _walls_by_role(aisle: dict) -> dict[str, dict[int, dict]]:
+    views = aisle.get("views") if isinstance(aisle.get("views"), dict) else {}
+    out: dict[str, dict[int, dict]] = {}
     for role in ROLES:
         raw = views.get(role)
         walls = raw.get("walls") if isinstance(raw, dict) else []
@@ -286,9 +369,38 @@ def missing_required_quads(aisle: dict | None) -> list[str]:
             except (TypeError, ValueError):
                 continue
             by_id[wid] = wall
+        out[role] = by_id
+    return out
+
+
+def missing_required_quads(aisle: dict | None) -> list[str]:
+    """对侧：勾选墙左右路都要四角。同侧：地面必填，每面勾选墙至少一路四角齐。"""
+    data = aisle if isinstance(aisle, dict) else {}
+    need = required_wall_ids(data)
+    role_label = {"L": "左路", "R": "右路"}
+    by_role = _walls_by_role(data)
+    if aisle_layout(data) == "same_side":
+        missing = list(ground_rect_missing(data))
+        any_wall = False
         for wid in need:
-            quad = (by_id.get(wid) or {}).get("quad") or []
-            if not isinstance(quad, list) or len(quad) < 4:
+            complete = [role for role in ROLES if _quad_len(by_role[role].get(wid)) >= 4]
+            partial = [
+                role for role in ROLES
+                if 0 < _quad_len(by_role[role].get(wid)) < 4
+            ]
+            if complete:
+                any_wall = True
+            elif not partial:
+                missing.append(f"墙{wid}")
+            for role in partial:
+                missing.append(f"{role_label[role]}墙{wid}")
+        if need and not any_wall and not any(item.startswith("墙") for item in missing):
+            missing.append("至少一面货架")
+        return missing
+    missing = []
+    for role in ROLES:
+        for wid in need:
+            if _quad_len(by_role[role].get(wid)) < 4:
                 missing.append(f"{role_label[role]}墙{wid}")
     return missing
 
@@ -347,6 +459,7 @@ def list_aisles(json_dir: str | None = None, *, bound_only: bool = True) -> list
             "camera_l": camera_l,
             "camera_r": camera_r,
             "solved": bool((data.get("solved") or {}).get("ok")),
+            "layout": aisle_layout(data),
             "mesh_walls": len(meshes) if isinstance(meshes, list) else 0,
         })
     return out
@@ -417,6 +530,13 @@ def apply_capture_sizes(
         old_w, old_h = calib_size_from_view(view)
         if remap_view_image_size(view, width, height):
             changed = True
+            rect = data.get("ground_rect")
+            if isinstance(rect, dict) and rect.get(role):
+                from services.dualcam_config import _remap_xy_list
+
+                rect = dict(rect)
+                rect[role] = _remap_xy_list(rect.get(role), old_w, old_h, width, height)
+                data["ground_rect"] = rect
             sc = uniform_pixel_scale(old_w, old_h, width, height)
             if sc is None:
                 aspect_mismatch = True
@@ -446,6 +566,8 @@ def save_aisle(data: dict, json_dir: str | None = None) -> dict:
         raise ValueError("巷道编号仅支持字母、数字、下划线、中划线（1–64）")
     data = dict(data)
     data["aisle_id"] = aid
+    data["layout"] = normalize_layout(data.get("layout"))
+    data["ground_rect"] = normalize_ground_rect(data.get("ground_rect"))
     data["required_wall_ids"] = required_wall_ids(data)
     data = prune_unrequired_walls(data)
     meshes = data.get("slot_meshes")
@@ -591,6 +713,12 @@ def require_inference_ready(camera_id: str, json_dir: str | None = None) -> tupl
             f"巷道 {aid} 尚未反解：请到「巷道标注」页点「1. 反解并对齐」。"
             "没有相机外参无法把 2D 姿态抬到 3D，开了检测也不会产生碰撞事件。"
         )
+    if aisle_layout(data) == "same_side" and not ground_rect_ready(data):
+        miss = "、".join(ground_rect_missing(data)) or "地面矩形"
+        return None, (
+            f"巷道 {aid} 是同侧双路，还没标齐{miss}。"
+            "请到「巷道标注」填写地面边长，并在左右路各点四个地面角。"
+        )
     need = required_wall_ids(data)
     meshes = [m for m in (data.get("slot_meshes") or []) if isinstance(m, dict)]
     by_wall: dict[int, dict] = {}
@@ -624,7 +752,7 @@ def require_inference_ready(camera_id: str, json_dir: str | None = None) -> tupl
 
 
 def camera_collision_mode(camera_id: str, json_dir: str | None = None) -> str:
-    """dualcam：已编入巷道；legacy：单路 2D。"""
+    """dualcam：已编入巷道。未编组不再走单路 2D，只用于分区巡检。"""
     return "dualcam" if camera_group(camera_id, json_dir) else "legacy"
 
 
@@ -633,36 +761,12 @@ def require_legacy_inference_ready(
     json_dir: str | None = None,
     camera_ips_file: str | None = None,
 ) -> tuple[dict | None, str | None]:
-    """单路 legacy 开推理：未成组 + cameras/<id>.json 含货框。"""
+    """单路 2D 已移除。保留函数名，避免旧调用以为还能开检测。"""
+    del json_dir, camera_ips_file
     cid = str(camera_id or "").strip()
     if not cid:
         return None, "摄像头信息不完整"
-    if camera_group(cid, json_dir):
-        return None, "该摄像头已编入巷道，请使用巷道双路检测，不能按单路 2D 开推理。"
-    from services.annotation_service import existing_camera_annotation_path, flatten_annotation_boxes
-
-    root = _json_dir(json_dir)
-    ips_file = (
-        str(camera_ips_file or "").strip()
-        or os.environ.get("CAMERA_IPS_FILE", "").strip()
-        or None
-    )
-    apath = existing_camera_annotation_path(root, cid, camera_ips_file=ips_file)
-    if not os.path.isfile(apath):
-        return None, (
-            "尚未配置单路货框标注，请打开该路的单路监控页完成 2D 标定并保存。"
-        )
-    try:
-        with open(apath, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return None, "标注文件无效，请重新保存 2D 标定。"
-    if not isinstance(data, dict):
-        return None, "标注文件无效，请重新保存 2D 标定。"
-    boxes = flatten_annotation_boxes(data)
-    if not boxes:
-        return None, "货框标注为空，请绘制货位并保存后再开智能检测。"
-    return {"camera_id": cid, "box_count": len(boxes)}, None
+    return None, "单路 2D 已停用，请把摄像头编入对侧或同侧巷道后再开检测。"
 
 
 def bind_group(
@@ -726,6 +830,7 @@ def create_aisle_with_cameras(
     camera_file: str,
     mediamtx_config_path: str,
     json_dir: str | None = None,
+    layout: str | None = None,
 ) -> dict:
     """一次创建巷道并写入左右路摄像头（上游地址即 IP/RTSP 入口）。"""
     from services.camera_store import create_camera, delete_camera
@@ -769,6 +874,7 @@ def create_aisle_with_cameras(
     created.append(str((r2.get("camera") or {}).get("id") or ""))
     try:
         aisle = bind_group(aid, created[0], created[1], json_dir)
+        aisle["layout"] = normalize_layout(layout)
     except ValueError as exc:
         for cid in created:
             if cid:
