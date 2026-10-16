@@ -332,10 +332,6 @@ export default function SettingsPage() {
                   )}
                 </label>
               ))}
-              <h3 className="settings-subsection-title">单路 2D</h3>
-              <p className="settings-subsection-lead">
-                未编入巷道的单路用这里的帧率和跳帧。Δt 关闭时，告警仍是连续 n 帧进框。
-              </p>
               {LEGACY_FIELDS.map((field) => (
                 <label key={field.key}>
                   <span className="settings-field-label">

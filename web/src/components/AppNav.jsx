@@ -28,9 +28,6 @@ export default function AppNav() {
         <NavLink to="/aisle">
           巷道标注
         </NavLink>
-        <NavLink to="/legacy/annotate">
-          单路标注
-        </NavLink>
         <NavLink to="/topology">
           服务拓扑
         </NavLink>

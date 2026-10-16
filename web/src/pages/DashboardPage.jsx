@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import CameraSetupDrawer from '../components/CameraSetupDrawer';
 import AisleCreateDrawer from '../components/AisleCreateDrawer';
@@ -20,7 +20,7 @@ import {
   startAisleInference,
   stopAisleInference,
 } from '../lib/aisleInference';
-import { cameraMonitorPath, legacyCameraAnnotatePath } from '../lib/aisleNavigation.js';
+import { cameraMonitorPath } from '../lib/aisleNavigation.js';
 import {
   validateAisleCreate,
   validateLegacyCameraCreate,
@@ -257,22 +257,15 @@ export default function DashboardPage() {
     return () => document.removeEventListener('mousedown', onDoc);
   }, [addMenuOpen]);
 
-  const openCreateAisle = () => {
+  const openCreateAisle = (layout) => {
     setAddMenuOpen(false);
     setDrawerMode('create');
     setSetupCamera(null);
     setSetupAisle(null);
-    setAisleForm(emptyAisleCreateForm());
-    setDrawerOpen(true);
-    loadGlobalSettings();
-  };
-
-  const openCreateSingle = () => {
-    setAddMenuOpen(false);
-    setDrawerMode('camera-create');
-    setSetupCamera(null);
-    setSetupAisle(null);
-    setForm(emptyCameraForm());
+    setAisleForm({
+      ...emptyAisleCreateForm(),
+      layout: layout === 'same_side' ? 'same_side' : 'opposite',
+    });
     setDrawerOpen(true);
     loadGlobalSettings();
   };
@@ -296,6 +289,7 @@ export default function DashboardPage() {
     setSetupCamera(null);
     setAisleForm({
       aisle_id: openingId,
+      layout: aisle.layout === 'same_side' ? 'same_side' : 'opposite',
       left: cameraToForm(left),
       right: cameraToForm(right),
     });
@@ -387,6 +381,7 @@ export default function DashboardPage() {
       try {
         const data = await apiPost('/api/aisles', {
           aisle_id: aid,
+          layout: aisleForm.layout === 'same_side' ? 'same_side' : 'opposite',
           camera_l: formToCameraPayload(aisleForm.left),
           camera_r: formToCameraPayload(aisleForm.right),
         });
@@ -427,6 +422,25 @@ export default function DashboardPage() {
         if (data.error) {
           alert(formatUserError(data.error) || '保存失败');
           return;
+        }
+        const wantLayout = aisleForm.layout === 'same_side' ? 'same_side' : 'opposite';
+        const hadLayout = setupAisle.layout === 'same_side' ? 'same_side' : 'opposite';
+        if (wantLayout !== hadLayout) {
+          const loaded = await apiGet(`/api/aisles/${encodeURIComponent(nextAisleId)}`);
+          const aisle = loaded?.aisle;
+          if (!aisle) {
+            alert(formatUserError(loaded?.error) || '布局未保存');
+            return;
+          }
+          const saved = await apiPut(`/api/aisles/${encodeURIComponent(nextAisleId)}`, {
+            ...aisle,
+            aisle_id: nextAisleId,
+            layout: wantLayout,
+          });
+          if (saved.error || saved.status === 'error') {
+            alert(formatUserError(saved.error) || '布局未保存');
+            return;
+          }
         }
         applyConfigHint(data);
         closeDrawer();
@@ -592,19 +606,13 @@ export default function DashboardPage() {
 
   const startAllInference = async () => {
     const targetsAisle = aisles.filter((a) => a.camera_l && a.camera_r);
-    const groupedSet = new Set(
-      aisles.flatMap((a) => [a.camera_l, a.camera_r].filter(Boolean)),
-    );
-    const targetsLegacy = cameras.filter(
-      (c) => !groupedSet.has(c.id) && c.enabled !== false && String(c.url || '').trim(),
-    );
-    if (!targetsAisle.length && !targetsLegacy.length) {
-      alert('没有可启动的巷道或单路摄像头（需启用且配置视频流）。');
+    if (!targetsAisle.length) {
+      alert('没有可启动的巷道（需左右路都已绑定并配置视频流）。');
       return;
     }
     if (
       !window.confirm(
-        `将启动 ${targetsAisle.length} 条巷道（双路 3D）与 ${targetsLegacy.length} 路单摄（2D），是否继续？`,
+        `将启动 ${targetsAisle.length} 条巷道（对侧或同侧双路 3D），是否继续？`,
       )
     ) {
       return;
@@ -616,9 +624,6 @@ export default function DashboardPage() {
       let aisleStarted = 0;
       let aisleSkipped = 0;
       let aisleFailed = 0;
-      let legacyStarted = 0;
-      let legacySkipped = 0;
-      let legacyFailed = 0;
       const errors = [];
       const isLive = (st) => st === 'running' || st === 'starting';
       for (const aisle of targetsAisle) {
@@ -636,25 +641,9 @@ export default function DashboardPage() {
           aisleStarted += 1;
         }
       }
-      for (const cam of targetsLegacy) {
-        if (isLive(cam.inference?.status)) {
-          legacySkipped += 1;
-          continue;
-        }
-        const data = await apiPost(`/api/cameras/${encodeURIComponent(cam.id)}/inference/start`, {});
-        if (data.error) {
-          legacyFailed += 1;
-          errors.push(`${cam.id}：${formatUserError(data.error)}`);
-        } else {
-          legacyStarted += 1;
-        }
-      }
       const detail = errors.length ? `。${errors[0]}` : '';
-      setMsg(
-        `启动完成：巷道 成功${aisleStarted}/跳过${aisleSkipped}/失败${aisleFailed}；`
-          + `单路 成功${legacyStarted}/跳过${legacySkipped}/失败${legacyFailed}${detail}`,
-      );
-      setMsgErr(aisleFailed > 0 || legacyFailed > 0);
+      setMsg(`启动完成：巷道 成功${aisleStarted}/跳过${aisleSkipped}/失败${aisleFailed}${detail}`);
+      setMsgErr(aisleFailed > 0);
       await loadCameras({ probe: false });
     } catch (e) {
       setMsg(formatUserError(e.message) || '批量启动失败');
@@ -703,6 +692,8 @@ export default function DashboardPage() {
   );
   const ungrouped = cameras.filter((c) => !groupedIds.has(c.id));
   const aisleCards = aisles.filter((a) => a.camera_l && a.camera_r);
+  const oppositeCards = aisleCards.filter((a) => a.layout !== 'same_side');
+  const sameSideCards = aisleCards.filter((a) => a.layout === 'same_side');
 
   const captureFrame = async (cam) => {
     setRefreshingId(cam.id);
@@ -749,7 +740,7 @@ export default function DashboardPage() {
             <button
               type="button"
               className="btn-batch"
-              title="启动全部巷道（双路）与未编组单路（2D）"
+              title="启动全部巷道（对侧或同侧双路 3D）"
               disabled={batchInferBusy || listLoading || (!aisleCards.length && !ungrouped.length)}
               onClick={startAllInference}
             >
@@ -768,7 +759,7 @@ export default function DashboardPage() {
               <button
                 type="button"
                 className="btn-icon btn-icon-primary"
-                title="添加巷道或单路"
+                title="添加对侧或同侧巷道"
                 aria-label="添加"
                 aria-expanded={addMenuOpen}
                 aria-haspopup="menu"
@@ -778,11 +769,11 @@ export default function DashboardPage() {
               </button>
               {addMenuOpen ? (
                 <div className="add-menu" role="menu">
-                  <button type="button" role="menuitem" onClick={openCreateAisle}>
-                    添加巷道（双路 3D）
+                  <button type="button" role="menuitem" onClick={() => openCreateAisle('opposite')}>
+                    添加巷道（对侧双路 3D）
                   </button>
-                  <button type="button" role="menuitem" onClick={openCreateSingle}>
-                    添加单路（2D Legacy）
+                  <button type="button" role="menuitem" onClick={() => openCreateAisle('same_side')}>
+                    添加巷道（同侧双路 3D）
                   </button>
                 </div>
               ) : null}
@@ -807,14 +798,17 @@ export default function DashboardPage() {
             <div className="empty grid-status">加载中…</div>
           ) : !cameras.length ? (
             <div className="empty">
-              暂无摄像头。点击「+」选择「添加巷道（双路 3D）」或「添加单路（2D Legacy）」。
+              暂无摄像头。点击「+」选择「添加巷道（对侧双路 3D）」或「添加巷道（同侧双路 3D）」。
             </div>
           ) : (
             <>
-              {aisleCards.length ? (
-                <h2 className="grid-section-label">巷道 · 双路 3D</h2>
-              ) : null}
-              {aisleCards.map((aisle) => {
+              {[
+                { key: 'opposite', title: '对侧 · 双路 3D', items: oppositeCards },
+                { key: 'same_side', title: '同侧 · 双路 3D', items: sameSideCards },
+              ].map((section) => (section.items.length ? (
+                <Fragment key={section.key}>
+                  <h2 className="grid-section-label">{section.title}</h2>
+                  {section.items.map((aisle) => {
                 const left = cameras.find((c) => c.id === aisle.camera_l);
                 const right = cameras.find((c) => c.id === aisle.camera_r);
                 const thumb = (left?.has_thumbnail && left) || (right?.has_thumbnail && right) || left || right;
@@ -898,10 +892,12 @@ export default function DashboardPage() {
                       </div>
                     </div>
                   </article>
-                );
-              })}
+                  );
+                  })}
+                </Fragment>
+              ) : null))}
               {ungrouped.length ? (
-                <h2 className="grid-section-label">单路 · 2D（Legacy）</h2>
+                <h2 className="grid-section-label">未编组（需并入对侧或同侧巷道后才能检测）</h2>
               ) : null}
               {ungrouped.map((cam) => {
                 const camHint = streamHintOf(cam);
@@ -939,9 +935,11 @@ export default function DashboardPage() {
                       <InferenceToggle
                         on={on}
                         loading={inferLoadingId === cam.id}
-                        disabled={inferToggleDisabled}
-                        title={on ? '停止检测' : '开启检测'}
-                        onToggle={(turnOn) => toggleInference(cam, turnOn)}
+                        disabled={inferToggleDisabled || !on}
+                        title={on ? '停止检测' : '未编组不能开检测，请先并入巷道'}
+                        onToggle={(turnOn) => {
+                          if (!turnOn) toggleInference(cam, false);
+                        }}
                       />
                       <button
                         type="button"
@@ -951,14 +949,6 @@ export default function DashboardPage() {
                         onClick={() => captureFrame(cam)}
                       >
                         ↻
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-icon"
-                        title="2D 货框标注"
-                        onClick={() => navigate(legacyCameraAnnotatePath(cam.id))}
-                      >
-                        ▦
                       </button>
                       <button
                         type="button"

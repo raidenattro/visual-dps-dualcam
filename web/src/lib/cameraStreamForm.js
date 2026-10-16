@@ -181,6 +181,7 @@ export function applyFormFields(prev, field, value) {
 export function emptyAisleCreateForm() {
   return {
     aisle_id: '',
+    layout: 'opposite',
     left: emptyCameraForm(),
     right: emptyCameraForm(),
   };

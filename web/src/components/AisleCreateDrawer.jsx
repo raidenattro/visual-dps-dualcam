@@ -84,7 +84,7 @@ export default function AisleCreateDrawer({
             <p className="drawer-subtitle">
               {isEdit
                 ? '巷道号、通道号、名称、流类型、视频流地址均可改。'
-                : '双路 3D：左右路各配一路流；通道不能与已有单路或他巷 L/R 重复。'}
+                : '双路 3D：选择对侧或同侧，左右路各配一路流。'}
             </p>
           </div>
           <button type="button" className="drawer-close" onClick={onClose} aria-label="关闭">
@@ -158,6 +158,19 @@ export default function AisleCreateDrawer({
                   巷道号只是名称，可改。检测正在跑时改名会先停止该巷道检测。
                 </p>
               )}
+              <label>
+                布局
+                <select
+                  value={form.layout === 'same_side' ? 'same_side' : 'opposite'}
+                  onChange={(e) => onChange((prev) => ({ ...(prev || form), layout: e.target.value }))}
+                >
+                  <option value="opposite">对侧双路 3D</option>
+                  <option value="same_side">同侧双路 3D（必须标地面）</option>
+                </select>
+              </label>
+              {isEdit ? (
+                <p className="drawer-field-hint">检测正在跑时不能改布局，请先停止检测。</p>
+              ) : null}
             </section>
             <div className="aisle-cam-grid">
               <section className="drawer-section aisle-cam-block">

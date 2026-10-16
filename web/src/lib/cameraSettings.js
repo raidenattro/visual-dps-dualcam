@@ -95,84 +95,13 @@ export const GLOBAL_ONLY_INFERENCE_FIELDS = [
     min: 1,
     max: 30,
     default: 3,
-    hint: '只作用于双路 3D。同一货位连续命中 N 帧才告警。单路在 Δt 关闭时用「单路 2D 碰撞连续帧数」。',
+    hint: '同一货位连续命中 N 帧才告警。对侧和同侧都用这一项。',
     effectHint: '保存后 event-worker 热读生效；已在跑的 worker 下一批 pose 即应用新门控，无需重启 infer。',
   },
 ];
 
-/** 单路 2D。帧率、跳帧和 Δt 不与双路 3D 混用。dwell_enabled 关闭时回退 n 帧碰撞。 */
-export const LEGACY_FIELDS = [
-  {
-    key: 'legacy.frame_rate',
-    label: '单路 2D 推理帧率 (fps)',
-    type: 'number',
-    min: 1,
-    max: 60,
-    default: 15,
-    hint: '只作用于未编入巷道的单路。时间差需要较高帧率时改这里，不影响双路 3D。',
-    effectHint: '保存后需重新启动该路检测，推理容器才会换帧率。',
-  },
-  {
-    key: 'legacy.height',
-    label: '单路 2D 推理高度 (px)',
-    type: 'number',
-    min: 120,
-    max: 2160,
-    default: 480,
-    hint: '单路推理缩放高度。τ 的像素是按这个高度下的推理画面量的。',
-    effectHint: '保存后需重新启动该路检测。',
-  },
-  {
-    key: 'legacy.pose_frame_interval',
-    label: '单路 2D 姿态检测间隔 (帧)',
-    type: 'number',
-    min: 1,
-    max: 120,
-    default: 2,
-    hint: '单路每隔 N 帧做一次姿态。Δt 的对照帧允许偏差不超过这一个间隔。',
-    effectHint: '保存后需重新启动该路检测；单路 event-worker 会热读。',
-  },
-  {
-    key: 'legacy.alarm_min_consecutive_frames',
-    label: '单路 2D 碰撞连续帧数',
-    type: 'number',
-    min: 1,
-    max: 30,
-    default: 3,
-    hint: 'Δt 关闭时使用。同一货位连续进框达到 N 帧才告警。Δt 开启后这项不参与判定。',
-    effectHint: '保存后单路 event-worker 热读。',
-  },
-  {
-    key: 'legacy.dwell_enabled',
-    label: '单路 2D 启用 Δt 时间差',
-    type: 'boolean',
-    default: false,
-    hint: '开启后，同一条轨迹、同一只手腕对比 t 与 t−Δ 的像素位移，小于等于 τ 且人在货框里才告警。关闭则回退上面的 n 帧碰撞。',
-    effectHint: '保存后单路 event-worker 热读，不必重启推理容器。',
-  },
-  {
-    key: 'legacy.dwell_delta_sec',
-    label: '单路时间差 Δ (秒)',
-    type: 'number',
-    min: 0.04,
-    max: 1,
-    step: 0.01,
-    default: 0.24,
-    hint: '对照帧大约是 round(帧率 × Δ) 之前。实验仓默认 0.24 秒。缺这帧就不算停住。',
-    effectHint: '仅在启用 Δt 时生效。保存后单路 event-worker 热读。',
-  },
-  {
-    key: 'legacy.dwell_tau_px',
-    label: '单路停留阈值 τ (像素)',
-    type: 'number',
-    min: 1,
-    max: 200,
-    step: 1,
-    default: 20,
-    hint: '同一只手腕在 Δ 秒内的像素位移。小于等于 τ 才算停住。这是推理画面上的像素，不是米。',
-    effectHint: '仅在启用 Δt 时生效。保存后单路 event-worker 热读。',
-  },
-];
+/** 单路 2D 已移除，设置页不再展示这些项。 */
+export const LEGACY_FIELDS = [];
 
 /** 仅全局设置页：流水线阶段日志（infer / event-worker 读取） */
 const PIPELINE_LOG_EFFECT_HINT =
