@@ -27,14 +27,6 @@ PUBLIC_KEYS = {
     "inference.pose_frame_interval": ("inference", "pose_frame_interval", int),
     "inference.alarm_min_consecutive_frames": ("inference", "alarm_min_consecutive_frames", int),
     "inference.alarm_cooldown_frames": ("inference", "alarm_cooldown_frames", int),
-    "legacy.frame_rate": ("legacy", "frame_rate", int),
-    "legacy.height": ("legacy", "height", int),
-    "legacy.pose_frame_interval": ("legacy", "pose_frame_interval", int),
-    "legacy.alarm_min_consecutive_frames": ("legacy", "alarm_min_consecutive_frames", int),
-    "legacy.alarm_cooldown_frames": ("legacy", "alarm_cooldown_frames", int),
-    "legacy.dwell_enabled": ("legacy", "dwell_enabled", bool),
-    "legacy.dwell_delta_sec": ("legacy", "dwell_delta_sec", float),
-    "legacy.dwell_tau_px": ("legacy", "dwell_tau_px", float),
     "collision_prefilter.enabled": ("collision_prefilter", "enabled", bool),
     "collision_prefilter.speed_feature": ("collision_prefilter", "speed_feature", str),
     "collision_prefilter.speed_threshold": ("collision_prefilter", "speed_threshold", float),
@@ -71,14 +63,6 @@ GLOBAL_ONLY_KEYS = frozenset(
     {
         "inference.alarm_min_consecutive_frames",
         "inference.alarm_cooldown_frames",
-        "legacy.frame_rate",
-        "legacy.height",
-        "legacy.pose_frame_interval",
-        "legacy.alarm_min_consecutive_frames",
-        "legacy.alarm_cooldown_frames",
-        "legacy.dwell_enabled",
-        "legacy.dwell_delta_sec",
-        "legacy.dwell_tau_px",
         "collision_prefilter.enabled",
         "collision_prefilter.speed_feature",
         "collision_prefilter.speed_threshold",
@@ -232,55 +216,6 @@ def ensure_runtime_overlay(app_config: dict | None = None, path: str = DEFAULT_P
     return path
 
 
-def get_legacy_section(app_config: dict | None = None, path: str = DEFAULT_PATH) -> dict:
-    """单路 2D 的帧率、跳帧和 Δt。未开 dwell_enabled 时 worker 仍用 n 帧碰撞。"""
-    base = {
-        "frame_rate": 15,
-        "height": 480,
-        "pose_frame_interval": DEFAULT_POSE_FRAME_INTERVAL,
-        "alarm_min_consecutive_frames": 3,
-        "alarm_cooldown_frames": 0,
-        "dwell_enabled": False,
-        "dwell_delta_sec": 0.24,
-        "dwell_tau_px": 20.0,
-    }
-    for src in ((app_config or {}).get("legacy"), _load_json(path).get("legacy")):
-        if isinstance(src, dict):
-            base.update(src)
-    try:
-        base["frame_rate"] = max(1, int(base.get("frame_rate") or 15))
-    except (TypeError, ValueError):
-        base["frame_rate"] = 15
-    try:
-        base["height"] = max(120, int(base.get("height") or 480))
-    except (TypeError, ValueError):
-        base["height"] = 480
-    try:
-        base["pose_frame_interval"] = max(1, int(base.get("pose_frame_interval") or DEFAULT_POSE_FRAME_INTERVAL))
-    except (TypeError, ValueError):
-        base["pose_frame_interval"] = DEFAULT_POSE_FRAME_INTERVAL
-    try:
-        base["alarm_min_consecutive_frames"] = max(1, int(base.get("alarm_min_consecutive_frames") or 3))
-    except (TypeError, ValueError):
-        base["alarm_min_consecutive_frames"] = 3
-    try:
-        base["alarm_cooldown_frames"] = max(0, int(base.get("alarm_cooldown_frames") or 0))
-    except (TypeError, ValueError):
-        base["alarm_cooldown_frames"] = 0
-    base["dwell_enabled"] = bool(base.get("dwell_enabled"))
-    try:
-        delta = float(base.get("dwell_delta_sec") or 0.24)
-    except (TypeError, ValueError):
-        delta = 0.24
-    base["dwell_delta_sec"] = delta if delta > 0 else 0.24
-    try:
-        tau = float(base.get("dwell_tau_px") or 20.0)
-    except (TypeError, ValueError):
-        tau = 20.0
-    base["dwell_tau_px"] = tau if tau > 0 else 20.0
-    return base
-
-
 def get_merged_inference_section(app_config: dict | None = None, path: str = DEFAULT_PATH) -> dict:
     """app_config.inference 与 runtime 覆盖合并（供 event-worker / infer 读取）。"""
     base_infer = dict((app_config or {}).get("inference") or {})
@@ -351,20 +286,10 @@ def _coerce_setting_value(pub_key: str, raw: Any, typ: type) -> Any:
         return _normalize_backend(raw)
     if pub_key == "models.det":
         return normalize_det_setting(str(raw))
-    if pub_key in ("inference.alarm_min_consecutive_frames", "legacy.alarm_min_consecutive_frames"):
+    if pub_key == "inference.alarm_min_consecutive_frames":
         return _coerce_alarm_min(raw)
-    if pub_key in ("inference.alarm_cooldown_frames", "legacy.alarm_cooldown_frames"):
+    if pub_key == "inference.alarm_cooldown_frames":
         return _coerce_alarm_cooldown(raw)
-    if pub_key == "legacy.dwell_delta_sec":
-        val = float(raw)
-        if not (val > 0):
-            raise ValueError("must be positive")
-        return val
-    if pub_key == "legacy.dwell_tau_px":
-        val = float(raw)
-        if not (val > 0):
-            raise ValueError("must be positive")
-        return val
     if pub_key == "collision_prefilter.max_pose_gap_sec":
         return max(0.0, float(raw))
     if pub_key.startswith("collision_prefilter.") and typ is float:
@@ -503,16 +428,7 @@ def get_public_settings(app_config: dict | None, path: str = DEFAULT_PATH) -> di
     }
     from services.dualcam_config import get_dualcam_section
 
-    legacy = get_legacy_section(merged, path)
     items = result["items"]
-    items["legacy.frame_rate"] = int(legacy["frame_rate"])
-    items["legacy.height"] = int(legacy["height"])
-    items["legacy.pose_frame_interval"] = int(legacy["pose_frame_interval"])
-    items["legacy.alarm_min_consecutive_frames"] = int(legacy["alarm_min_consecutive_frames"])
-    items["legacy.alarm_cooldown_frames"] = int(legacy["alarm_cooldown_frames"])
-    items["legacy.dwell_enabled"] = bool(legacy["dwell_enabled"])
-    items["legacy.dwell_delta_sec"] = float(legacy["dwell_delta_sec"])
-    items["legacy.dwell_tau_px"] = float(legacy["dwell_tau_px"])
     dual = get_dualcam_section(merged)
     items["dualcam.calib_width"] = int(dual["calib_width"])
     items["dualcam.calib_height"] = int(dual["calib_height"])
@@ -542,18 +458,10 @@ def patch_public_settings(updates: dict, path: str = DEFAULT_PATH) -> dict:
                 val = _normalize_backend(raw)
             elif pub_key == "models.det":
                 val = normalize_det_setting(str(raw))
-            elif pub_key in ("inference.alarm_min_consecutive_frames", "legacy.alarm_min_consecutive_frames"):
+            elif pub_key == "inference.alarm_min_consecutive_frames":
                 val = _coerce_alarm_min(raw)
-            elif pub_key in ("inference.alarm_cooldown_frames", "legacy.alarm_cooldown_frames"):
+            elif pub_key == "inference.alarm_cooldown_frames":
                 val = _coerce_alarm_cooldown(raw)
-            elif pub_key == "legacy.dwell_delta_sec":
-                val = float(raw)
-                if not (val > 0):
-                    raise ValueError("must be positive")
-            elif pub_key == "legacy.dwell_tau_px":
-                val = float(raw)
-                if not (val > 0):
-                    raise ValueError("must be positive")
             elif pub_key == "pipeline_log.max_bytes":
                 val = max(1024, int(raw))
             elif pub_key == "pipeline_log.backup_count":

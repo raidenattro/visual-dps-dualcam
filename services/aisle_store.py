@@ -752,21 +752,8 @@ def require_inference_ready(camera_id: str, json_dir: str | None = None) -> tupl
 
 
 def camera_collision_mode(camera_id: str, json_dir: str | None = None) -> str:
-    """dualcam：已编入巷道。未编组不再走单路 2D，只用于分区巡检。"""
-    return "dualcam" if camera_group(camera_id, json_dir) else "legacy"
-
-
-def require_legacy_inference_ready(
-    camera_id: str,
-    json_dir: str | None = None,
-    camera_ips_file: str | None = None,
-) -> tuple[dict | None, str | None]:
-    """单路 2D 已移除。保留函数名，避免旧调用以为还能开检测。"""
-    del json_dir, camera_ips_file
-    cid = str(camera_id or "").strip()
-    if not cid:
-        return None, "摄像头信息不完整"
-    return None, "单路 2D 已停用，请把摄像头编入对侧或同侧巷道后再开检测。"
+    """已编入巷道为 dualcam。未编组只给分区巡检用，不能开检测。"""
+    return "dualcam" if camera_group(camera_id, json_dir) else "ungrouped"
 
 
 def bind_group(

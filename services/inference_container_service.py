@@ -330,7 +330,6 @@ def start_inference_container(camera: dict, request=None) -> dict:
     grouped, group_err = require_inference_ready(camera_id)
     if group_err:
         return {"error": group_err}
-    mode = "dualcam"
 
     stream_url = str(camera.get("url") or "").strip()
     if not stream_url:
@@ -394,16 +393,11 @@ def start_inference_container(camera: dict, request=None) -> dict:
     if os.path.isfile("/etc/localtime"):
         binds.append("/etc/localtime:/etc/localtime:ro")
     effective = get_effective_settings(app_config, camera)
-    if mode == "legacy":
-        from services.runtime_config_service import get_legacy_section
-
-        pace = get_legacy_section(app_config)
-    else:
-        pace = {
-            "frame_rate": effective.get("inference.frame_rate", 15),
-            "height": effective.get("inference.height", 480),
-            "pose_frame_interval": effective.get("inference.pose_frame_interval", 2),
-        }
+    pace = {
+        "frame_rate": effective.get("inference.frame_rate", 15),
+        "height": effective.get("inference.height", 480),
+        "pose_frame_interval": effective.get("inference.pose_frame_interval", 2),
+    }
     preset = resolve_model_preset(app_config, overrides=effective)
     infer_image, _family = _resolve_inference_image(client, preset.family)
     use_gpu = os.environ.get("INFERENCE_USE_GPU", "0") == "1"

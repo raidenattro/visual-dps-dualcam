@@ -10,11 +10,11 @@ import time
 
 import redis.asyncio as aioredis
 
+from typing import Any
+
 from services.annotation_service import existing_camera_annotation_path
 from services.box_identity import parse_collision_token
 from services.event_bus import publish_event_frame
-from services.event_engine.annotation_boxes import load_scaled_boxes
-from services.event_engine.collision import CollisionProcessor
 from services.event_engine.pick_prefilter.service import PickPrefilterGate
 from services.event_engine.event_log import (
     PrefilterLogEntry,
@@ -44,7 +44,7 @@ from services.pose_bus import (
 from services.runtime_config_service import (
     DEFAULT_PATH,
     get_collision_prefilter_section,
-    get_legacy_section,
+    get_merged_inference_section,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ class _CameraContext:
         self,
         json_path: str,
         json_mtime: float = 0.0,
-        processor: CollisionProcessor | None = None,
+        processor: Any | None = None,
         prefilter: PickPrefilterGate | None = None,
         infer_w: int = 0,
         infer_h: int = 0,
@@ -82,8 +82,7 @@ class EventRedisWorker:
         self._runtime_config_path = os.environ.get("RUNTIME_CONFIG_FILE", DEFAULT_PATH)
         self._runtime_settings_mtime: float | None = None
         self._contexts: dict[str, _CameraContext] = {}
-        legacy_cfg = get_legacy_section(app_config, self._runtime_config_path)
-        self._apply_runtime_settings(legacy_cfg)
+        self._apply_runtime_settings()
         try:
             self._runtime_settings_mtime = (
                 os.path.getmtime(self._runtime_config_path)
@@ -99,31 +98,30 @@ class EventRedisWorker:
         self._redis: aioredis.Redis | None = None
         self._pubsub: aioredis.client.PubSub | None = None
 
-    def _apply_runtime_settings(self, legacy_cfg: dict) -> None:
-        self._alarm_min = max(1, int(legacy_cfg.get("alarm_min_consecutive_frames", 3) or 3))
-        self._alarm_cooldown = max(0, int(legacy_cfg.get("alarm_cooldown_frames", 0) or 0))
-        self._video_fps = float(legacy_cfg.get("frame_rate", 15) or 15)
-        self._pose_frame_interval = max(1, int(legacy_cfg.get("pose_frame_interval", 1) or 1))
-        self._dwell_enabled = bool(legacy_cfg.get("dwell_enabled"))
-        self._dwell_delta_sec = float(legacy_cfg.get("dwell_delta_sec") or 0.24)
-        self._dwell_tau_px = float(legacy_cfg.get("dwell_tau_px") or 20.0)
+    def _apply_runtime_settings(self, _cfg: dict | None = None) -> None:
+        """帧率、跳帧、连续碰撞帧都读 inference。单路 legacy 段不再参与。"""
+        infer = get_merged_inference_section(self.app_config, self._runtime_config_path)
+        try:
+            self._alarm_min = max(1, int(infer.get("alarm_min_consecutive_frames") or 1))
+        except (TypeError, ValueError):
+            self._alarm_min = 1
+        try:
+            self._alarm_cooldown = max(0, int(infer.get("alarm_cooldown_frames") or 0))
+        except (TypeError, ValueError):
+            self._alarm_cooldown = 0
+        try:
+            self._video_fps = float(infer.get("frame_rate") or 15)
+        except (TypeError, ValueError):
+            self._video_fps = 15.0
+        try:
+            self._pose_frame_interval = max(1, int(infer.get("pose_frame_interval") or 1))
+        except (TypeError, ValueError):
+            self._pose_frame_interval = 1
         self._prefilter_section = get_collision_prefilter_section(
             self.app_config,
             self._runtime_config_path,
         )
         for ctx in self._contexts.values():
-            proc = ctx.processor
-            if proc is not None:
-                switched = proc.dwell_enabled != self._dwell_enabled
-                proc.alarm_min_consecutive_frames = self._alarm_min
-                proc.alarm_cooldown_frames = self._alarm_cooldown
-                proc.video_fps = self._video_fps
-                proc.dwell_enabled = self._dwell_enabled
-                proc.dwell_delta_sec = self._dwell_delta_sec
-                proc.dwell_tau_px = self._dwell_tau_px
-                proc.pose_frame_interval = self._pose_frame_interval
-                if switched:
-                    proc._box_consecutive_hits.clear()
             self._sync_prefilter(ctx)
 
     def _sync_prefilter(self, ctx: _CameraContext) -> None:
@@ -157,8 +155,7 @@ class EventRedisWorker:
         if self._runtime_settings_mtime == mtime:
             return
         self._runtime_settings_mtime = mtime
-        legacy_cfg = get_legacy_section(self.app_config, path)
-        self._apply_runtime_settings(legacy_cfg)
+        self._apply_runtime_settings()
         reload_process_logging(self.app_config)
 
     def _resolve_json_path(self, camera_id: str) -> str:
@@ -176,54 +173,9 @@ class EventRedisWorker:
             return os.path.abspath(rel)
         return rel
 
-    def _get_processor(self, camera_id: str, infer_w: int, infer_h: int) -> CollisionProcessor | None:
-        self._refresh_runtime_settings_if_needed()
-        json_path = self._resolve_json_path(camera_id)
-        ctx = self._contexts.get(camera_id)
-        mtime = os.path.getmtime(json_path) if os.path.isfile(json_path) else 0.0
-
-        if (
-            ctx is None
-            or ctx.json_path != json_path
-            or ctx.json_mtime != mtime
-            or ctx.infer_w != infer_w
-            or ctx.infer_h != infer_h
-        ):
-            boxes = load_scaled_boxes(json_path, infer_w, infer_h) if infer_w > 0 and infer_h > 0 else []
-            if not boxes:
-                logger.warning("event worker: no boxes for camera=%s path=%s", camera_id, json_path)
-            processor = CollisionProcessor(
-                boxes,
-                alarm_min_consecutive_frames=self._alarm_min,
-                alarm_cooldown_frames=self._alarm_cooldown,
-                video_fps=self._video_fps,
-                dwell_enabled=self._dwell_enabled,
-                dwell_delta_sec=self._dwell_delta_sec,
-                dwell_tau_px=self._dwell_tau_px,
-                pose_frame_interval=self._pose_frame_interval,
-            )
-            prefilter = None
-            if self._prefilter_section.get("enabled"):
-                prefilter = PickPrefilterGate.from_config(
-                    self._prefilter_section,
-                    infer_width=infer_w,
-                    infer_height=infer_h,
-                    video_fps=self._video_fps,
-                    pose_frame_interval=self._pose_frame_interval,
-                )
-            ctx = _CameraContext(
-                json_path=json_path,
-                json_mtime=mtime,
-                processor=processor,
-                prefilter=prefilter,
-                infer_w=infer_w,
-                infer_h=infer_h,
-            )
-            self._contexts[camera_id] = ctx
-        else:
-            self._sync_prefilter(ctx)
-
-        return ctx.processor
+    def _get_processor(self, camera_id: str, infer_w: int, infer_h: int):
+        """单路 2D 已移除。双路在 DualcamRedisWorker 里按巷道建处理器。"""
+        return None
 
     def _maybe_reset_on_frame_regression(
         self,

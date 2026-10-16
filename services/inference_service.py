@@ -26,7 +26,7 @@ from services.event_bus import get_event_snapshot
 from services.inference_backends import create_inference_backend, resolve_backend_name
 from services.pipeline_log import get_inference_logger, log_pipeline_stage, reload_process_logging
 from services.rtsp_capture import open_rtsp_capture, read_latest_frame
-from services.runtime_config_service import get_legacy_section, get_merged_inference_section
+from services.runtime_config_service import get_merged_inference_section
 
 
 def _snapshot_stream_frame(cap):
@@ -275,14 +275,6 @@ class InferenceService:
             return
 
         infer_cfg = get_merged_inference_section(self.app_config, self._runtime_config_path)
-        if not os.environ.get("AISLE_ID", "").strip():
-            legacy_pace = get_legacy_section(self.app_config, self._runtime_config_path)
-            infer_cfg = {
-                **infer_cfg,
-                "frame_rate": legacy_pace["frame_rate"],
-                "height": legacy_pace["height"],
-                "pose_frame_interval": legacy_pace["pose_frame_interval"],
-            }
         target_height = int(infer_cfg.get("height", 480) or 480)
         infer_w, infer_h, resize_needed = _compute_infer_resolution(
             stream_w,
@@ -387,10 +379,7 @@ class InferenceService:
                 if frame_count == 1 or frame_count % 300 == 0 or (time.monotonic() - last_config_check_at) >= 30.0:
                     last_config_check_at = time.monotonic()
                     self._refresh_pipeline_log_if_needed()
-                    if os.environ.get("AISLE_ID", "").strip():
-                        paced = get_merged_inference_section(self.app_config, self._runtime_config_path)
-                    else:
-                        paced = get_legacy_section(self.app_config, self._runtime_config_path)
+                    paced = get_merged_inference_section(self.app_config, self._runtime_config_path)
                     try:
                         pose_frame_interval = max(1, int(paced.get("pose_frame_interval", pose_frame_interval) or pose_frame_interval))
                     except (TypeError, ValueError):

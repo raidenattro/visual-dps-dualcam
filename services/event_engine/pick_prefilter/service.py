@@ -13,7 +13,7 @@ from services.event_engine.pick_prefilter.gate import evaluate_pick_prefilter_bl
 
 
 class PickPrefilterGate:
-    """按摄像头维护速度 tracker；enabled 时由 CollisionProcessor 调用。"""
+    """按摄像头维护速度 tracker。双路贴墙不走这里。"""
 
     STALE_SEC = 1.2
 

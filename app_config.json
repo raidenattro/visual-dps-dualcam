@@ -35,16 +35,6 @@
         "alarm_min_consecutive_frames": 3,
         "alarm_cooldown_frames": 0
     },
-    "legacy": {
-        "frame_rate": 15,
-        "height": 480,
-        "pose_frame_interval": 2,
-        "alarm_min_consecutive_frames": 3,
-        "alarm_cooldown_frames": 0,
-        "dwell_enabled": false,
-        "dwell_delta_sec": 0.24,
-        "dwell_tau_px": 20
-    },
     "debug-info": {
         "enabled": false,
         "interval_frames": 30

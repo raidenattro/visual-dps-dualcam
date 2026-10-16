@@ -8,7 +8,6 @@ import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-from services.event_engine.collision import CollisionProcessor
 from services.event_engine.event_log import (
     EventLogContext,
     PrefilterLogEntry,
@@ -120,34 +119,6 @@ class EventLogFormatTests(unittest.TestCase):
         ):
             self.assertIn(key, lines[0])
             self.assertIn(key, lines[1])
-
-    def test_collision_processor_collects_prefilter_logs_without_print(self):
-        buf = io.StringIO()
-
-        class _Gate:
-            def evaluate(self, *_a, **_k):
-                return PrefilterDecision(
-                    blocked=False,
-                    track_id=1,
-                    speed_feature="ankle_max_speed_norm",
-                    speed_value=0.2,
-                    speed_threshold=0.081770,
-                )
-
-        proc = CollisionProcessor([], video_fps=15.0)
-        pose = {
-            "frame_idx": 10,
-            "persons": [
-                {
-                    "keypoints": [[0, 0, 1] for _ in range(17)],
-                }
-            ],
-        }
-        with patch.dict(os.environ, {"PREFILTER_LOG": "1"}, clear=False):
-            with redirect_stdout(buf):
-                result = proc.process(pose, prefilter=_Gate())
-        self.assertEqual(buf.getvalue().strip(), "")
-        self.assertEqual(result.get("prefilter_logs"), [])
 
 
 if __name__ == "__main__":
