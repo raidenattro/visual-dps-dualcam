@@ -351,6 +351,64 @@ def anchor_person_to_floor(raw3: list, xyz: list, floor_y: float = WORLD_FLOOR_Y
     _apply_floor_shift(raw3, xyz, shift, floor_y)
 
 
+def _hip_y(xyz: list) -> float | None:
+    """左右髋平均高度。缺一路就用另一路。"""
+    ys = []
+    for i in (11, 12):
+        if xyz and i < len(xyz) and xyz[i]:
+            ys.append(float(xyz[i][1]))
+    if not ys:
+        return None
+    return float(sum(ys) / len(ys))
+
+
+def _shift_xyz_y(xyz: list, dy: float) -> None:
+    for i, p in enumerate(xyz):
+        if not p:
+            continue
+        xyz[i] = [round(float(p[0]), 3), round(float(p[1]) + dy, 3), round(float(p[2]), 3)]
+
+
+def stabilize_hip_height(frames: list[dict], window_s: float = 0.4) -> dict:
+    """按轨迹把髋高钉到短时中位，整副骨架只沿 Y 平移。
+
+    贴地把每帧最低点钉到地面，脚一抖腕就会跨层。髋比脚稳，拣货时也不会离地。
+    因果窗：只用当前及过去 window_s 秒。XZ 和到墙的距离不变。
+    """
+    from scripts.skel3d_smooth import _tracks_from_ids, assign_tracks
+
+    if not any(p.get("track_id") is not None for fr in frames for p in (fr.get("persons") or [])):
+        assign_tracks(frames)
+    tracks = _tracks_from_ids(frames)
+    n_shift = 0
+    for _tid, members in tracks.items():
+        if len(members) < 2:
+            continue
+        hist: list[tuple[float, float]] = []
+        for fi, pi in members:
+            persons = frames[fi].get("persons") or []
+            if pi >= len(persons):
+                continue
+            p = persons[pi]
+            xyz = p.get("xyz") or []
+            hy = _hip_y(xyz)
+            t = float(frames[fi].get("t") or 0.0)
+            if hy is None:
+                continue
+            hist.append((t, hy))
+            lo = t - window_s
+            ys = [y for tt, y in hist if tt >= lo]
+            if not ys:
+                continue
+            target = float(np.median(ys))
+            dy = target - hy
+            if abs(dy) < 1e-4:
+                continue
+            _shift_xyz_y(xyz, dy)
+            n_shift += 1
+    return {"n_tracks": len(tracks), "n_shifted": n_shift, "window_s": window_s}
+
+
 def anchor_xyz_list_to_floor(xyz: list, floor_y: float = WORLD_FLOOR_Y) -> None:
     """平滑后仅有 xyz 列表时再次贴地。"""
     raw3 = [None if not xyz or i >= len(xyz) or not xyz[i] else np.asarray(xyz[i], float) for i in range(17)]

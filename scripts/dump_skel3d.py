@@ -27,7 +27,7 @@ from scripts.dualcam_lift import (
     PREFER_PX,
     RWRIST,
     _torso_xy,
-    anchor_xyz_list_to_floor,
+    stabilize_hip_height,
     lift_point,
     load_cams,
     normalize_pose_pack_for_calib,
@@ -325,11 +325,7 @@ def main() -> int:
         smooth_info = smooth_frames(frames, plane)
         jump_after = {"L": wrist_jump_stats(frames, LWRIST), "R": wrist_jump_stats(frames, RWRIST)}
 
-    for fr in frames:
-        for p in fr.get("persons") or []:
-            xyz = p.get("xyz")
-            if xyz:
-                anchor_xyz_list_to_floor(xyz)
+    hip_info = stabilize_hip_height(frames)
 
     # 单应腕点：与三角化并行的另一路判定，只依赖两路墙四角
     pc = PlaneContact.from_calib(json.loads(Path(args.calib).read_text(encoding="utf-8")), tau=args.tau)
@@ -360,6 +356,7 @@ def main() -> int:
         "n_people": n_people,
         "smooth2d": smooth2d_info,
         "smooth": smooth_info,
+        "hip_stabilize": hip_info,
         "plane_contact": {**pc.describe(), "stats": pc_stats} if pc.walls else None,
         "frames": frames,
     }
@@ -383,6 +380,10 @@ def main() -> int:
             f"smooth2d tracks={smooth2d_info['n_tracks']}  "
             f"wrist {smooth2d_info['n_wrist_in']}→{smooth2d_info['n_wrist_out']}"
         )
+    print(
+        f"hip_stabilize tracks={hip_info['n_tracks']}  "
+        f"shifted={hip_info['n_shifted']}  window={hip_info['window_s']}s"
+    )
     if smooth_info:
         print(
             f"smooth3d tracks={smooth_info['n_tracks']}  "
