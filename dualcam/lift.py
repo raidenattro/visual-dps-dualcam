@@ -31,6 +31,8 @@ PREFER_PX = 90.0
 DUPLICATE_M = 0.40
 # 仅作缺省；运行时请用 dualcam_config.aabb_from_section / 巷道 JSON
 AISLE_AABB = {"x": (-1.35, 1.35), "y": (0.50, 1.65), "z": (-0.12, 2.50)}
+# 同侧基线短，三角化 Y 误差大；配对阶段放宽，避免 paired=0。XZ 到墙距离仍由 contact_slots 判。
+AISLE_AABB_SAME_SIDE = {"x": (-1.45, 1.45), "y": (-0.15, 3.55), "z": (-2.5, 4.5)}
 # 可贴墙的源：立体或高分路主导。hold/mono 只显示不报警。
 CONTACT_SRC = frozenset({"stereo", "L", "R"})
 

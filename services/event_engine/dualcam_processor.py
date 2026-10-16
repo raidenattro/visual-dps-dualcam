@@ -26,10 +26,11 @@ from dualcam.lift import (
     keypoints_to_ks,
     lift_point,
     nms_indices,
+    AISLE_AABB_SAME_SIDE,
     pick_pairs,
     wall_plane_from_solved,
 )
-from services.aisle_store import required_wall_ids, wall_shelf_code
+from services.aisle_store import aisle_layout, required_wall_ids, wall_shelf_code
 from services.box_identity import box_collision_token
 from services.dualcam_config import (
     aabb_from_section,
@@ -261,6 +262,8 @@ class DualcamProcessor:
         self.calib_l = calib_size_from_view(views.get("L") if isinstance(views, dict) else None, self.section)
         self.calib_r = calib_size_from_view(views.get("R") if isinstance(views, dict) else None, self.section)
         self.aabb = aabb_from_section(self.section, aisle)
+        if aisle_layout(aisle) == "same_side":
+            self.aabb = {k: (v[0], v[1]) for k, v in AISLE_AABB_SAME_SIDE.items()}
 
     def _lift_joints(
         self,

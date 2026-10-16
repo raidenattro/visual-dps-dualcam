@@ -17,7 +17,10 @@ from dualcam.lift import (
     KPT_MIN,
     LELB,
     RELB,
+    AISLE_AABB,
+    AISLE_AABB_SAME_SIDE,
     conf_weights,
+    in_aisle,
     lift_point,
     point_on_ray,
     ray,
@@ -113,3 +116,10 @@ def test_conf_weights_square_weakens_low_score():
     assert abs(w_eq_l - w_eq_r) < 1e-12
     assert ARM_CONF_POWER == 2.5
     assert {LELB, RELB} <= ARM_CONF_JOINTS
+
+
+def test_same_side_aabb_keeps_points_outside_opposite_box():
+    """同侧配对盒比对侧高、也更宽，避免短基线把人滤掉。"""
+    hip = np.array([0.2, 0.1, 1.0])
+    assert in_aisle(hip, AISLE_AABB) is False
+    assert in_aisle(hip, AISLE_AABB_SAME_SIDE) is True
