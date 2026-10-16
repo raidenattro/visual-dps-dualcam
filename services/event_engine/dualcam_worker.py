@@ -66,10 +66,23 @@ class DualcamRedisWorker(EventRedisWorker):
         self._pair_window_mono = 0.0
         self._last_drop_log: dict[str, float] = {}
         super().__init__(app_config, callback_reporter=callback_reporter)
-        logger.info("dualcam pair_window=%.3fs", self._pair_window)
+        logger.info(
+            "dualcam pair_window=%.3fs alarm_min_consecutive_frames=%s",
+            self._pair_window,
+            self._alarm_min,
+        )
 
-    def _apply_runtime_settings(self, infer_cfg: dict) -> None:
-        super()._apply_runtime_settings(infer_cfg)
+    def _apply_runtime_settings(self, legacy_cfg: dict) -> None:
+        super()._apply_runtime_settings(legacy_cfg)
+        # 连续帧数用设置页的 inference 项。基类仍从 legacy 读，这里盖掉。
+        from services.runtime_config_service import get_merged_inference_section
+
+        infer = get_merged_inference_section(self.app_config, self._runtime_config_path)
+        try:
+            n = int(infer.get("alarm_min_consecutive_frames") or 1)
+        except (TypeError, ValueError):
+            n = 1
+        self._alarm_min = max(1, n)
         procs = getattr(self, "_aisle_proc", None)
         if not procs:
             return
