@@ -14,7 +14,9 @@ if str(ROOT) not in sys.path:
 from dualcam.geom import (
     contact_slots,
     drag_vertex,
+    equal_col_ts,
     equal_row_ys,
+    move_layer_col,
     make_grid_vertices,
     make_layer_mesh,
     mesh_from_row_ys,
@@ -190,6 +192,18 @@ def test_move_one_row_leaves_others():
     again = move_layer_row(moved, corners, 2, 0.7)
     assert again["row_ys"][1] == pytest.approx(1.2)
     assert again["row_ys"][2] == pytest.approx(0.7)
+
+
+def test_columns_start_even_and_one_drag_keeps_the_rest():
+    corners = [[-1, 2, 2], [-1, 2, 0], [-1, 0, 0], [-1, 0, 2]]
+    mesh = make_layer_mesh(1, corners, n_layers=4, cols=4)
+    assert mesh["col_ts"] == pytest.approx(equal_col_ts(4))
+    moved = move_layer_col(mesh, corners, 1, 0.4)
+    assert moved["col_ts"][1] == pytest.approx(0.4)
+    assert moved["col_ts"][2] == pytest.approx(0.5)
+    kept = move_layer_row(moved, corners, 1, 1.2)
+    assert kept["col_ts"][1] == pytest.approx(0.4)
+    assert kept["row_ys"][1] == pytest.approx(1.2)
 
 
 def test_mesh_from_custom_row_ys():

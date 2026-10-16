@@ -160,6 +160,24 @@ def equal_row_ys(y_bottom: float, y_top: float, n_layers: int) -> list[float]:
     return [y_top - i * h / n for i in range(n + 1)]
 
 
+def equal_col_ts(n_cols: int) -> list[float]:
+    """沿墙均分的列界（0=远端，1=近端），只作拖线起点。"""
+    n = max(1, int(n_cols))
+    return [i / n for i in range(n + 1)]
+
+
+def wall_tz(corners: Any, p: Any) -> float:
+    """墙面上的点落到 tz：0 远端，1 近端。"""
+    c0, c1, c2, c3 = [_v(x) for x in corners]
+    far = 0.5 * (c0 + c3)
+    near = 0.5 * (c1 + c2)
+    axis = near - far
+    den = float(axis @ axis)
+    if den < 1e-12:
+        return 0.0
+    return float((_v(p) - far) @ axis) / den
+
+
 def row_ys_from_mesh(mesh: dict, corners: Any = None) -> list[float]:
     ys = mesh.get("row_ys")
     if isinstance(ys, list) and len(ys) >= 2:
@@ -167,6 +185,13 @@ def row_ys_from_mesh(mesh: dict, corners: Any = None) -> list[float]:
     rows, cols = int(mesh["rows"]), int(mesh["cols"])
     verts = mesh["vertices"]
     return [float(verts[vert_index(rows, cols, r, 0)][1]) for r in range(rows + 1)]
+
+
+def col_ts_from_mesh(mesh: dict) -> list[float]:
+    ts = mesh.get("col_ts")
+    if isinstance(ts, list) and len(ts) >= 2:
+        return [float(t) for t in ts]
+    return equal_col_ts(int(mesh.get("cols") or 1))
 
 
 def _with_mesh_identity(out: dict, extra: dict | None) -> dict:
@@ -186,22 +211,35 @@ def _with_mesh_identity(out: dict, extra: dict | None) -> dict:
 
 
 def mesh_from_row_ys(
-    wall_id: int, corners: Any, row_ys: list[float], cols: int = 4, extra: dict | None = None,
+    wall_id: int,
+    corners: Any,
+    row_ys: list[float],
+    cols: int = 4,
+    extra: dict | None = None,
+    col_ts: list[float] | None = None,
 ) -> dict:
-    """用逐行 Y 界生成网格；列沿墙面均分。row_ys 从顶到底，含顶沿和底沿。"""
+    """用逐行 Y 界和列界生成网格。未给 col_ts 时列沿墙均分。row_ys 从顶到底。"""
     y_bot, y_top = wall_y_span(corners)
     ys = [float(y) for y in row_ys]
     if len(ys) < 2:
         ys = [y_top, y_bot]
     ys[0] = y_top
     ys[-1] = y_bot
-    cols = max(1, int(cols))
+    if col_ts is None:
+        ts = equal_col_ts(cols)
+    else:
+        ts = [float(t) for t in col_ts]
+        if len(ts) < 2:
+            ts = [0.0, 1.0]
+        ts[0] = 0.0
+        ts[-1] = 1.0
+    cols = max(1, len(ts) - 1)
     height = y_top - y_bot
     tys = [0.0 if abs(height) < 1e-9 else (y_top - y) / height for y in ys]
     verts: list[list[float]] = []
     for ty in tys:
-        for c in range(cols + 1):
-            verts.append(bilinear_on_wall(corners, ty, c / cols if cols else 0.0))
+        for tz in ts:
+            verts.append(bilinear_on_wall(corners, ty, tz))
     rows = len(ys) - 1
     return _with_mesh_identity({
         "wall_id": int(wall_id),
@@ -209,6 +247,7 @@ def mesh_from_row_ys(
         "cols": cols,
         "n_layers": rows,
         "row_ys": [round(y, 4) for y in ys],
+        "col_ts": [round(t, 4) for t in ts],
         "vertices": verts,
     }, extra)
 
@@ -219,7 +258,10 @@ def move_layer_row(mesh: dict, corners: Any, r: int, y: float) -> dict:
     rows = len(ys) - 1
     r = int(r)
     if r <= 0 or r >= rows:
-        return mesh_from_row_ys(mesh["wall_id"], corners, ys, int(mesh["cols"]), extra=mesh)
+        ts = col_ts_from_mesh(mesh)
+        return mesh_from_row_ys(
+            mesh["wall_id"], corners, ys, len(ts) - 1, extra=mesh, col_ts=ts,
+        )
     hi = ys[r - 1] - MIN_LAYER_GAP
     lo = ys[r + 1] + MIN_LAYER_GAP
     if hi < lo:
@@ -227,7 +269,30 @@ def move_layer_row(mesh: dict, corners: Any, r: int, y: float) -> dict:
     else:
         y = min(max(float(y), lo), hi)
     ys[r] = y
-    return mesh_from_row_ys(mesh["wall_id"], corners, ys, int(mesh["cols"]), extra=mesh)
+    ts = col_ts_from_mesh(mesh)
+    return mesh_from_row_ys(
+        mesh["wall_id"], corners, ys, len(ts) - 1, extra=mesh, col_ts=ts,
+    )
+
+
+def move_layer_col(mesh: dict, corners: Any, c: int, tz: float) -> dict:
+    """只移动第 c 条列线（c=0 远端、c=cols 近端不可动），夹在相邻线之间。"""
+    ys = row_ys_from_mesh(mesh, corners)
+    ts = col_ts_from_mesh(mesh)
+    cols = len(ts) - 1
+    c = int(c)
+    if c <= 0 or c >= cols:
+        return mesh_from_row_ys(mesh["wall_id"], corners, ys, cols, extra=mesh, col_ts=ts)
+    span = float(np.linalg.norm(_v(corners[1]) - _v(corners[0])))
+    gap = MIN_LAYER_GAP / span if span > 1e-6 else 0.02
+    lo = ts[c - 1] + gap
+    hi = ts[c + 1] - gap
+    if hi < lo:
+        tz = 0.5 * (ts[c - 1] + ts[c + 1])
+    else:
+        tz = min(max(float(tz), lo), hi)
+    ts[c] = tz
+    return mesh_from_row_ys(mesh["wall_id"], corners, ys, cols, extra=mesh, col_ts=ts)
 
 
 def make_layer_mesh(

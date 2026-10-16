@@ -125,6 +125,34 @@ export function equalRowYs(yBottom, yTop, nLayers) {
   return ys;
 }
 
+export function equalColTs(nCols) {
+  const n = Math.max(1, Math.round(Number(nCols)) || 1);
+  const ts = [];
+  for (let i = 0; i <= n; i++) ts.push(i / n);
+  return ts;
+}
+
+export function wallTz(corners, p) {
+  const c0 = v3(corners[0]);
+  const c1 = v3(corners[1]);
+  const c2 = v3(corners[2]);
+  const c3 = v3(corners[3]);
+  const far = [(c0[0] + c3[0]) / 2, (c0[1] + c3[1]) / 2, (c0[2] + c3[2]) / 2];
+  const near = [(c1[0] + c2[0]) / 2, (c1[1] + c2[1]) / 2, (c1[2] + c2[2]) / 2];
+  const axis = [near[0] - far[0], near[1] - far[1], near[2] - far[2]];
+  const den = axis[0] ** 2 + axis[1] ** 2 + axis[2] ** 2;
+  if (den < 1e-12) return 0;
+  const d = [Number(p[0]) - far[0], Number(p[1]) - far[1], Number(p[2]) - far[2]];
+  return (d[0] * axis[0] + d[1] * axis[1] + d[2] * axis[2]) / den;
+}
+
+export function colTsFromMesh(mesh) {
+  if (Array.isArray(mesh.col_ts) && mesh.col_ts.length >= 2) {
+    return mesh.col_ts.map(Number);
+  }
+  return equalColTs(mesh.cols || 1);
+}
+
 export function rowYsFromMesh(mesh) {
   if (Array.isArray(mesh.row_ys) && mesh.row_ys.length >= 2) {
     return mesh.row_ys.map(Number);
@@ -146,17 +174,20 @@ export function meshRowTy(mesh, corners, rowIndex) {
   return (yTop - ys[ri]) / h;
 }
 
-export function meshFromRowYs(wallId, corners, rowYs, cols = 4, extra = null) {
+export function meshFromRowYs(wallId, corners, rowYs, cols = 4, extra = null, colTs = null) {
   const [yBot, yTop] = wallYSpan(corners);
   let ys = (rowYs && rowYs.length >= 2) ? rowYs.map(Number) : [yTop, yBot];
   ys[0] = yTop;
   ys[ys.length - 1] = yBot;
-  cols = Math.max(1, Math.round(Number(cols)) || 1);
+  let ts = Array.isArray(colTs) && colTs.length >= 2 ? colTs.map(Number) : equalColTs(cols);
+  ts[0] = 0;
+  ts[ts.length - 1] = 1;
+  cols = Math.max(1, ts.length - 1);
   const height = yTop - yBot;
   const tys = ys.map((y) => (Math.abs(height) < 1e-9 ? 0 : (yTop - y) / height));
   const vertices = [];
   for (const ty of tys) {
-    for (let c = 0; c <= cols; c++) vertices.push(bilinearOnWall(corners, ty, c / cols));
+    for (const tz of ts) vertices.push(bilinearOnWall(corners, ty, tz));
   }
   const rows = ys.length - 1;
   const out = {
@@ -165,6 +196,7 @@ export function meshFromRowYs(wallId, corners, rowYs, cols = 4, extra = null) {
     cols,
     n_layers: rows,
     row_ys: ys.map((y) => Math.round(y * 1e4) / 1e4),
+    col_ts: ts.map((t) => Math.round(t * 1e4) / 1e4),
     vertices,
   };
   if (extra && typeof extra === 'object') {
@@ -180,12 +212,30 @@ export function moveLayerRow(mesh, corners, r, y) {
   const ys = rowYsFromMesh(mesh);
   const rows = ys.length - 1;
   r = Math.round(Number(r));
-  if (r <= 0 || r >= rows) return meshFromRowYs(mesh.wall_id, corners, ys, mesh.cols, mesh);
+  const tsKeep = colTsFromMesh(mesh);
+  if (r <= 0 || r >= rows) return meshFromRowYs(mesh.wall_id, corners, ys, tsKeep.length - 1, mesh, tsKeep);
   const hi = ys[r - 1] - MIN_LAYER_GAP;
   const lo = ys[r + 1] + MIN_LAYER_GAP;
   if (hi < lo) ys[r] = 0.5 * (ys[r - 1] + ys[r + 1]);
   else ys[r] = Math.min(Math.max(Number(y), lo), hi);
-  return meshFromRowYs(mesh.wall_id, corners, ys, mesh.cols, mesh);
+  return meshFromRowYs(mesh.wall_id, corners, ys, tsKeep.length - 1, mesh, tsKeep);
+}
+
+export function moveLayerCol(mesh, corners, c, tz) {
+  const ys = rowYsFromMesh(mesh);
+  const ts = colTsFromMesh(mesh);
+  const cols = ts.length - 1;
+  c = Math.round(Number(c));
+  if (c <= 0 || c >= cols) return meshFromRowYs(mesh.wall_id, corners, ys, cols, mesh, ts);
+  const c0 = v3(corners[0]);
+  const c1 = v3(corners[1]);
+  const span = Math.hypot(c1[0] - c0[0], c1[1] - c0[1], c1[2] - c0[2]);
+  const gap = span > 1e-6 ? MIN_LAYER_GAP / span : 0.02;
+  const lo = ts[c - 1] + gap;
+  const hi = ts[c + 1] - gap;
+  if (hi < lo) ts[c] = 0.5 * (ts[c - 1] + ts[c + 1]);
+  else ts[c] = Math.min(Math.max(Number(tz), lo), hi);
+  return meshFromRowYs(mesh.wall_id, corners, ys, cols, mesh, ts);
 }
 
 export function makeLayerMesh(wallId, corners, pitch = DEFAULT_LAYER_PITCH, nLayers = 4, cols = 4) {

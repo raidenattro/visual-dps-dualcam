@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiGet, apiPost, apiPut, thumbnailUrl } from '../api/client.js';
 import {
   meshCells,
+  moveLayerCol,
   moveLayerRow,
   projectPix,
   rayPlane,
   vertIndex,
   wallById,
   wallPlane,
+  wallTz,
 } from '../lib/dualcamGeom.js';
 import { letterboxParams } from '../lib/previewLayout.js';
 import { formatUserError } from '../lib/userFacingText.js';
@@ -301,7 +303,7 @@ function annotateSteps(aisle, { grouped, frameAt, camL, camR, dirty, cameras = [
   items.push(
     { key: 'quad', label: quadLabel, done: quadsOk },
     { key: 'solve', label: '反解并对齐', done: Boolean(aisle.solved?.ok) },
-    { key: 'layer', label: '拖层线对齐层板', done: Boolean(aisle.solved?.ok && meshesOk) },
+    { key: 'layer', label: '拖层线和列线对齐隔板', done: Boolean(aisle.solved?.ok && meshesOk) },
     { key: 'commit', label: '保存墙标定', done: Boolean(aisle.solved?.ok && meshesOk && !dirty) },
     { key: 'shelf', label: '填货架号', done: shelfOk },
   );
@@ -841,7 +843,7 @@ export default function AisleAnnotatePage() {
             if (skipOuter && (j === 0 || j === cols)) continue;
             const pts = [];
             for (let i = 0; i <= rows; i++) pts.push(toUv(i, j));
-            strokeUv(pts, onWall ? pal.dim : pal.dim, onWall ? 1.2 : 0.9);
+            strokeUv(pts, onWall ? pal.line : pal.dim, onWall ? 1.6 : 0.9);
           }
           for (let i = 0; i <= rows; i++) {
             if (skipOuter && (i === 0 || i === rows)) continue;
@@ -928,6 +930,34 @@ export default function AisleAnnotatePage() {
     return best;
   };
 
+  /** 列线命中：内列竖线，两端墙边不拖。 */
+  const hitLayerCol = (e, v, aisle = stateRef.current) => {
+    if (!aisle.solved?.ok) return null;
+    const cam = camOf(aisle, v);
+    const canvas = cvs[v].current;
+    if (!cam || !canvas) return null;
+    const wallId = (aisle.views?.L?.walls || [])[activeWall]?.wall_id;
+    const mesh = meshForWall(aisle, wallId);
+    if (!mesh?.vertices) return null;
+    const [IW, IH] = viewSize(aisle, v);
+    const layout = overlayLayout(canvas, IW, IH);
+    const [iu, iv] = evtToImg(e, v, aisle);
+    const hitPx = LAYER_HIT_PX / Math.max(layout.scale * ((layout.sx + layout.sy) / 2), 1e-6);
+    const rows = Number(mesh.rows) || 0;
+    const cols = Number(mesh.cols) || 0;
+    let best = null;
+    for (let j = 1; j < cols; j++) {
+      const a = projectPix(mesh.vertices[vertIndex(rows, cols, 0, j)], cam);
+      const b = projectPix(mesh.vertices[vertIndex(rows, cols, rows, j)], cam);
+      if (!a || !b) continue;
+      const d = distToSeg(iu, iv, a[0], a[1], b[0], b[1]);
+      if (d <= hitPx && (!best || d < best.dist)) {
+        best = { v, col: j, wallId: Number(mesh.wall_id), dist: d };
+      }
+    }
+    return best;
+  };
+
   const hitGroundCorner = (e, v, aisle = stateRef.current) => {
     const canvas = cvs[v].current;
     if (!canvas || !isSameSide(aisle)) return null;
@@ -980,6 +1010,10 @@ export default function AisleAnnotatePage() {
       canvas.style.cursor = 'grabbing';
       return;
     }
+    if (drag?.kind === 'col') {
+      canvas.style.cursor = 'ew-resize';
+      return;
+    }
     if (drag) {
       canvas.style.cursor = 'ns-resize';
       return;
@@ -992,7 +1026,13 @@ export default function AisleAnnotatePage() {
       canvas.style.cursor = 'grab';
       return;
     }
-    canvas.style.cursor = hitLayerRow(e, v) ? 'ns-resize' : 'crosshair';
+    const rowHit = hitLayerRow(e, v);
+    const colHit = hitLayerCol(e, v);
+    if (colHit && (!rowHit || colHit.dist < rowHit.dist)) {
+      canvas.style.cursor = 'ew-resize';
+      return;
+    }
+    canvas.style.cursor = rowHit ? 'ns-resize' : 'crosshair';
   };
 
   const onCanvasClick = (e, v) => {
@@ -1067,8 +1107,10 @@ export default function AisleAnnotatePage() {
     }
     const corner = hitWallCorner(e, v, aisle);
     const layer = hitLayerRow(e, v, aisle);
-    // 角点优先：标定后外沿层线会贴在四角上，否则永远拖到层线
-    if (corner && (!layer || corner.dist <= layer.dist + 2)) {
+    const col = hitLayerCol(e, v, aisle);
+    const line = !layer ? col : !col ? layer : (col.dist < layer.dist ? col : layer);
+    // 角点优先：标定后外沿线会贴在四角上，否则永远拖到网格线
+    if (corner && (!line || corner.dist <= line.dist + 2)) {
       setActiveWall(corner.wi);
       dragRef.current = {
         kind: 'corner',
@@ -1088,10 +1130,10 @@ export default function AisleAnnotatePage() {
       e.preventDefault();
       return;
     }
-    if (!layer) return;
+    if (!line) return;
     dragRef.current = {
-      kind: 'layer',
-      ...layer,
+      kind: line.col != null ? 'col' : 'layer',
+      ...line,
       x0: e.clientX,
       y0: e.clientY,
     };
@@ -1145,14 +1187,16 @@ export default function AisleAnnotatePage() {
     const plane = wallPlane(wall.corners);
     const hit = rayPlane(u, vv, cam, plane.p0, plane.n);
     if (!hit) return;
-    const nextMesh = moveLayerRow(mesh, wall.corners, drag.row, hit[1]);
+    const nextMesh = drag.kind === 'col'
+      ? moveLayerCol(mesh, wall.corners, drag.col, wallTz(wall.corners, hit))
+      : moveLayerRow(mesh, wall.corners, drag.row, hit[1]);
     const next = structuredClone(aisle);
     next.slot_meshes = (aisle.slot_meshes || []).map((m) => (
       Number(m.wall_id) === Number(drag.wallId) ? nextMesh : m
     ));
     markDirty(next);
     const canvas = cvs[v].current;
-    if (canvas) canvas.style.cursor = 'ns-resize';
+    if (canvas) canvas.style.cursor = drag.kind === 'col' ? 'ew-resize' : 'ns-resize';
   };
 
   const onCanvasUp = (e) => {
@@ -1177,7 +1221,8 @@ export default function AisleAnnotatePage() {
       );
       return;
     }
-    showToast(`墙${drag.wallId} 层线已调整，尚未保存。请点底部「保存墙${drag.wallId} 标定」`, 'warn');
+    const what = drag.kind === 'col' ? '列线' : '层线';
+    showToast(`墙${drag.wallId} ${what}已调整，尚未保存。请点底部「保存墙${drag.wallId} 标定」`, 'warn');
   };
 
   const applyBoxId = () => {
@@ -1326,7 +1371,7 @@ export default function AisleAnnotatePage() {
           <p className="hint aisle-next">
             下一步：
             {steps.next.key === 'solve' && '到右下点「反解并对齐」，随后会自动画出层线'}
-            {steps.next.key === 'layer' && '按住画面里的层线上下拖，对齐货架层板'}
+            {steps.next.key === 'layer' && '按住层线上下拖、列线左右拖，对齐隔板。新建网格仍是平均分'}
             {steps.next.key === 'commit' && '层线已改，点底部绿色按钮保存，画面上方会提示「已保存」'}
             {steps.next.key === 'shelf' && '填写货架号，再点底部「保存墙标定」'}
             {steps.next.key === 'bind' && '请到总览「添加巷道」同时配置左右路摄像头'}
