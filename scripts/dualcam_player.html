@@ -36,7 +36,7 @@
   #hud .alarm { color: #ff6677; font-weight: 600; }
   #bar {
     grid-column: 1 / -1;
-    display: flex; gap: 10px; align-items: center;
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
     padding: 8px 14px; border-top: 1px solid #333; background: #181818;
   }
   #bar input[type=range] { flex: 1; }
@@ -84,6 +84,8 @@
     <span id="tlab">0:00</span>
     <label><input type="checkbox" id="wristMode" checked> 腕点模式</label>
     <label><span id="thrLab">报警阈值 m</span> <input type="number" id="contactM" step="0.01" value="0"></label>
+    <label>接触 n 帧 <input type="number" id="minFrames" min="1" step="1" value="1" title="同一货格连续接触这么多抽帧后才告警，1=立刻报"></label>
+    <label>stride <input type="number" id="playStride" min="1" step="1" value="1" title="骨架抽帧间隔，1=不跳帧"></label>
     <span id="hint">空格播放 · ←→ 跳 2 秒 · 有向距离小于阈值才变红（0=伸进墙）· 先滤 2D 再轻滤 3D</span>
   </div>
 </div>
@@ -132,7 +134,14 @@ function sourcesQuery(pref) {
 }
 const pref = videoPref();
 const srcQ = sourcesQuery(pref);
-const skelQ = new URLSearchParams(location.search).get('skel');
+const pageQ = new URLSearchParams(location.search);
+function readPosInt(name, fallback) {
+  const v = parseInt(pageQ.get(name) || '', 10);
+  return Number.isFinite(v) && v >= 1 ? v : fallback;
+}
+let minFrames = readPosInt('minFrames', 1);
+let playStride = readPosInt('stride', 1);
+const skelQ = pageQ.get('skel');
 const skelUrl = skelQ
   ? `/api/skel3d?skel=${encodeURIComponent(skelQ)}`
   : (srcQ ? `/api/skel3d?${srcQ}` : '/api/skel3d');
@@ -267,6 +276,31 @@ const thrLab = document.getElementById('thrLab');
 if (!PC) { chkWrist.checked = false; chkWrist.disabled = true; chkWrist.parentElement.title = '这份 skel3d 没有 pc 字段，请重新 dump'; }
 let wristMode = chkWrist.checked;
 const inpContact = document.getElementById('contactM');
+const inpMinFrames = document.getElementById('minFrames');
+const inpPlayStride = document.getElementById('playStride');
+inpMinFrames.value = String(minFrames);
+inpPlayStride.value = String(playStride);
+function syncPolicyUrl() {
+  const u = new URL(location.href);
+  u.searchParams.set('minFrames', String(minFrames));
+  u.searchParams.set('stride', String(playStride));
+  history.replaceState(null, '', u);
+}
+function parsePosInt(el, cur) {
+  const v = Math.floor(Number(el.value));
+  if (!Number.isFinite(v) || v < 1) {
+    el.value = String(cur);
+    return cur;
+  }
+  el.value = String(v);
+  return v;
+}
+function bumpView() {
+  hitsCache.clear();
+  lastIdx = -1;
+  lastPaintSig = null;
+  show(vid.currentTime || 0);
+}
 function syncThrInput() {
   thrLab.textContent = wristMode ? '重合阈值 τ m' : '报警阈值 m';
   inpContact.value = String(wristMode ? tau : contactM);
@@ -276,17 +310,43 @@ inpContact.addEventListener('input', () => {
   const v = Number(inpContact.value);
   if (!Number.isFinite(v)) return;
   if (wristMode) tau = v; else contactM = v;
-  lastIdx = -1;
-  lastPaintSig = null;
-  show(vid.currentTime || 0);
+  bumpView();
 });
 chkWrist.addEventListener('change', () => {
   wristMode = chkWrist.checked;
   syncThrInput();
   applyAnnotScene();
-  lastIdx = -1;
-  lastPaintSig = null;
-  show(vid.currentTime || 0);
+  bumpView();
+});
+function tryPosInt(el) {
+  const v = Math.floor(Number(el.value));
+  return Number.isFinite(v) && v >= 1 ? v : null;
+}
+function onMinFramesInput() {
+  const next = tryPosInt(inpMinFrames);
+  if (next == null || next === minFrames) return;
+  minFrames = next;
+  syncPolicyUrl();
+  bumpView();
+}
+function onPlayStrideInput() {
+  const next = tryPosInt(inpPlayStride);
+  if (next == null || next === playStride) return;
+  playStride = next;
+  syncPolicyUrl();
+  bumpView();
+}
+inpMinFrames.addEventListener('input', onMinFramesInput);
+inpMinFrames.addEventListener('change', () => {
+  minFrames = parsePosInt(inpMinFrames, minFrames);
+  syncPolicyUrl();
+  bumpView();
+});
+inpPlayStride.addEventListener('input', onPlayStrideInput);
+inpPlayStride.addEventListener('change', () => {
+  playStride = parsePosInt(inpPlayStride, playStride);
+  syncPolicyUrl();
+  bumpView();
 });
 const solved = solvedCalib || { walls: sceneWalls, cameras: projCams };
 const sceneWallIds = new Set(sceneWalls.map((w) => w.wall_id));
@@ -499,6 +559,51 @@ function frameHits(fr) {
   return { hits, keys: new Set(hits.map((h) => `${h.wall_id}:${h.box_id}`)), wristHits };
 }
 
+function slotKey(h) {
+  return `${h.wall_id}:${h.box_id}`;
+}
+function snapStride(i) {
+  if (playStride <= 1) return i;
+  return Math.floor(i / playStride) * playStride;
+}
+const hitsCache = new Map();
+function cachedHits(i) {
+  let v = hitsCache.get(i);
+  if (!v) {
+    v = frameHits(frames[i]);
+    hitsCache.set(i, v);
+  }
+  return v;
+}
+/** 抽帧后同一货格连续接触满 minFrames 才告警。可 seek，所以从当前帧往回数。 */
+function dwellOk(idx, key) {
+  if (minFrames <= 1) return true;
+  let n = 0;
+  for (let j = idx; j >= 0; j -= playStride) {
+    if (!cachedHits(j).keys.has(key)) break;
+    n++;
+    if (n >= minFrames) return true;
+  }
+  return false;
+}
+function gatedHits(idx) {
+  const raw = cachedHits(idx);
+  if (minFrames <= 1) return raw;
+  const keys = new Set();
+  const hits = [];
+  for (const h of raw.hits) {
+    const k = slotKey(h);
+    if (!dwellOk(idx, k)) continue;
+    keys.add(k);
+    hits.push(h);
+  }
+  const wristHits = raw.wristHits.map((w) => ({
+    9: (w[9] || []).filter((h) => keys.has(slotKey(h))),
+    10: (w[10] || []).filter((h) => keys.has(slotKey(h))),
+  }));
+  return { hits, keys, wristHits };
+}
+
 let lastPaintSig = null;
 function paintSlots(keys) {
   const sig = (useAnnotGrid() ? 'a:' : 's:') + [...keys].sort().join(',');
@@ -666,7 +771,7 @@ function nearShelf(wallId, p) {
     && p[1] >= rect.y0 - m && p[1] <= rect.y1 + m;
 }
 
-function draw3dPc(fr) {
+function draw3dPc(fr, keys) {
   const people = personsOf(fr);
   for (let p = 0; p < MAX_PERSONS; p++) {
     const slot = landPeople[p];
@@ -678,7 +783,8 @@ function draw3dPc(fr) {
       const h = pcHit(person, idx);
       const mid = h && wallPoint(h.wall_id, h.zy);
       if (!mid) { hideWristMarks(o); continue; }
-      o.ball.material = h.on ? landMats.on : landMats.off;
+      const alarm = !!(h.on && keys && keys.has(slotKey(h)));
+      o.ball.material = alarm ? landMats.on : landMats.off;
       putLabeled(o.ball, o.labMid, mid, 0.1);
       const a = wallPoint(h.wall_id, h.zyL);
       const b = wallPoint(h.wall_id, h.zyR);
@@ -689,7 +795,7 @@ function draw3dPc(fr) {
       if (showL && showR) {
         o.attr.array.set([...a, ...b]);
         o.attr.needsUpdate = true;
-        o.line.material = h.on ? landLineMats.on : landLineMats.off;
+        o.line.material = alarm ? landLineMats.on : landLineMats.off;
         o.line.visible = true;
       } else {
         o.line.visible = false;
@@ -741,7 +847,7 @@ function draw3d(fr, keys, wristHits) {
   paintSlots(keys);
   if (wristMode) {
     for (const s of skelPeople) s.g.visible = false;
-    draw3dPc(fr);
+    draw3dPc(fr, keys);
     return;
   }
   for (const s of landPeople) s.g.visible = false;
@@ -835,14 +941,15 @@ function draw2d(cv, fr, side, keys, wristHits) {
       for (const idx of [9, 10]) {
         if (scores[idx] < DATA.kpt_min) continue;
         const h = pcHit(person, idx);
+        const alarm = !!(h && h.on && keys.has(slotKey(h)));
         const x = kpts[idx][0] * sx, y = kpts[idx][1] * sy;
         ctx.beginPath();
-        ctx.arc(x, y, h && h.on ? 7 : 5, 0, Math.PI * 2);
-        ctx.fillStyle = h ? (h.on ? '#ff3344' : '#b0b0b0') : 'rgba(176,176,176,.45)';
+        ctx.arc(x, y, alarm ? 7 : 5, 0, Math.PI * 2);
+        ctx.fillStyle = h ? (alarm ? '#ff3344' : '#b0b0b0') : 'rgba(176,176,176,.45)';
         ctx.fill();
         if (h) {
-          ctx.fillStyle = h.on ? '#ff99a6' : '#cfcfcf';
-          ctx.fillText(`${h.on ? `墙${h.wall_id} ${h.box_id} · ` : ''}${h.d.toFixed(2)}m`, x + 9, y - 4);
+          ctx.fillStyle = alarm ? '#ff99a6' : '#cfcfcf';
+          ctx.fillText(`${alarm ? `墙${h.wall_id} ${h.box_id} · ` : ''}${h.d.toFixed(2)}m`, x + 9, y - 4);
         }
       }
     });
@@ -899,11 +1006,11 @@ let lastIdx = -1;
 function show(t) {
   tlab.textContent = fmt(t);
   if (Math.abs(Number(seek.value) - t) > 0.05) seek.value = String(t);
-  const idx = nearest(t);
+  const idx = snapStride(nearest(t));
   const fr = frames[idx];
   if (idx !== lastIdx) {
     lastIdx = idx;
-    const { hits, keys, wristHits } = frameHits(fr);
+    const { hits, keys, wristHits } = gatedHits(idx);
     draw3d(fr, keys, wristHits);
     draw2d(ovL, fr, 'L', keys, wristHits);
     draw2d(ovR, fr, 'R', keys, wristHits);
@@ -915,13 +1022,15 @@ function show(t) {
       const uniq = [...new Set(hits.map((h) => `墙${h.wall_id} ${h.box_id}`))];
       const gaps = people.map((p) => (p.gap != null ? p.gap.toFixed(2) : '—')).join('/');
       const sm = (DATA.smooth2d || DATA.smooth) ? ' · 2D→3D 已平滑' : '';
-      let head = `${people.length} 人 · 交会 ${gaps}m${sm}`;
+      const gate = (minFrames > 1 || playStride > 1)
+        ? ` · 接触≥${minFrames}帧 · stride=${playStride}` : '';
+      let head = `${people.length} 人 · 交会 ${gaps}m${sm}${gate}`;
       if (wristMode) {
         const ds = people.filter((p) => !p.held).map((p) => [9, 10].map((j) => {
           const h = pcHit(p, j);
           return h ? h.d.toFixed(2) : '—';
         }).join('/')).join(' | ');
-        head = `${people.length} 人 · 腕点重合 ${ds}m · τ=${tau.toFixed(2)}`;
+        head = `${people.length} 人 · 腕点重合 ${ds}m · τ=${tau.toFixed(2)}${gate}`;
       }
       hud.innerHTML =
         `${head}<br>` +
