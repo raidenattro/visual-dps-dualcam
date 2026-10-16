@@ -22,6 +22,7 @@ from dualcam.lift import (
     conf_weights,
     in_aisle,
     lift_point,
+    stabilize_hip_xyz,
     point_on_ray,
     ray,
     triangulate_ends,
@@ -123,3 +124,21 @@ def test_same_side_aabb_keeps_points_outside_opposite_box():
     hip = np.array([0.2, 0.1, 1.0])
     assert in_aisle(hip, AISLE_AABB) is False
     assert in_aisle(hip, AISLE_AABB_SAME_SIDE) is True
+
+
+def test_hip_stabilize_pins_y_and_keeps_xz():
+    """过去 0.4 秒髋高中位，整副骨架只沿 Y 平移。"""
+    tracks: list = []
+    raw = [1.00, 1.20, 0.80, 1.10]
+    hips = []
+    for i, hy in enumerate(raw):
+        xyz = [None] * 17
+        xyz[11] = [0.2, hy, 1.0]
+        xyz[12] = [0.4, hy + 0.02, 1.0]
+        xyz[9] = [0.3, hy + 0.4, 1.1]
+        stabilize_hip_xyz(xyz, i * 0.04, tracks)
+        hips.append(xyz[11][1])
+        assert xyz[9][0] == pytest.approx(0.3)
+        assert xyz[9][2] == pytest.approx(1.1)
+    assert hips[0] == pytest.approx(1.0, abs=0.01)
+    assert hips[2] == pytest.approx(1.0, abs=0.02)

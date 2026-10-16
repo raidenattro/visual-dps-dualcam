@@ -28,6 +28,7 @@ from dualcam.lift import (
     nms_indices,
     AISLE_AABB_SAME_SIDE,
     pick_pairs,
+    stabilize_hip_xyz,
     wall_plane_from_solved,
 )
 from services.aisle_store import aisle_layout, required_wall_ids, wall_shelf_code
@@ -256,6 +257,7 @@ class DualcamProcessor:
         cams = aisle.get("cameras") or {}
         self.alarm_min_consecutive_frames = 3
         self._box_consecutive_hits: dict[str, int] = {}
+        self._hip_tracks: list[dict[str, Any]] = []
         self.cam_l = str((cams.get("L") or {}).get("camera_id") or "")
         self.cam_r = str((cams.get("R") or {}).get("camera_id") or "")
         views = aisle.get("views") or {}
@@ -273,6 +275,7 @@ class DualcamProcessor:
         sr: np.ndarray | None,
         prev_key: tuple,
         prev_xyz: list | None = None,
+        t: float | None = None,
     ) -> tuple[list, list, dict[int, list[str]]]:
         """抬 17 关节。对侧缺失时走单路（只显示，不报贴墙）。"""
         xyz: list[list[float] | None] = [None] * 17
@@ -301,6 +304,8 @@ class DualcamProcessor:
                 continue
             xyz[ji] = [float(p[0]), float(p[1]), float(p[2])]
         self._clamp_flying_wrists(xyz, srcs)
+        if t is not None:
+            stabilize_hip_xyz(xyz, float(t), self._hip_tracks)
         for ji in range(17):
             if xyz[ji]:
                 self._new_prev[(*prev_key, ji)] = np.asarray(xyz[ji], float)
@@ -416,6 +421,7 @@ class DualcamProcessor:
     def reset_infer_session(self) -> None:
         """infer 重启导致 frame_idx 回绕时清空连续命中计数。"""
         self._box_consecutive_hits.clear()
+        self._hip_tracks.clear()
 
     def _collect_collision_tokens(self, people: list[dict[str, Any]]) -> list[str]:
         """汇总所有人（含 hold 续帧）的贴墙命中 token（未过门控）。"""
@@ -446,7 +452,7 @@ class DualcamProcessor:
             return (self._holds[0][0] or {}).get("xyz")
         return None
 
-    def _lift_follow(self, fl: dict, fr: dict) -> tuple[list[dict[str, Any]], list[int], list[int]]:
+    def _lift_follow(self, fl: dict, fr: dict, t: float | None = None) -> tuple[list[dict[str, Any]], list[int], list[int]]:
         """配不上立体时：当前 2D + 上一帧深度沿射线跟上。"""
         prefer = list(self._prefer)
         if not prefer and self._holds:
@@ -465,14 +471,14 @@ class DualcamProcessor:
             prev_xyz = self._hold_xyz_near(0)
             if i is not None and j is not None:
                 xyz, srcs, wrist_tok = self._lift_joints(
-                    fl["k"][i], fl["s"][i], fr["k"][j], fr["s"][j], ("F", 0), prev_xyz=prev_xyz,
+                    fl["k"][i], fl["s"][i], fr["k"][j], fr["s"][j], ("F", 0), prev_xyz=prev_xyz, t=t,
                 )
                 idx_l.append(i)
                 idx_r.append(j)
                 wrist_conf = _wrist_conf_from_scores(fl["s"][i], fr["s"][j])
             elif i is not None:
                 xyz, srcs, wrist_tok = self._lift_joints(
-                    fl["k"][i], fl["s"][i], None, None, ("F", 0), prev_xyz=prev_xyz,
+                    fl["k"][i], fl["s"][i], None, None, ("F", 0), prev_xyz=prev_xyz, t=t,
                 )
                 idx_l.append(i)
                 wrist_conf = _wrist_conf_from_scores(fl["s"][i], None)
@@ -480,7 +486,7 @@ class DualcamProcessor:
                 z = np.zeros_like(fr["k"][j])
                 zs = np.zeros_like(fr["s"][j])
                 xyz, srcs, wrist_tok = self._lift_joints(
-                    z, zs, fr["k"][j], fr["s"][j], ("F", 0), prev_xyz=prev_xyz,
+                    z, zs, fr["k"][j], fr["s"][j], ("F", 0), prev_xyz=prev_xyz, t=t,
                 )
                 idx_r.append(j)
                 wrist_conf = _wrist_conf_from_scores(None, fr["s"][j])
@@ -508,19 +514,19 @@ class DualcamProcessor:
             prev_xyz = self._hold_xyz_near(pi)
             if i is not None and j is not None:
                 xyz, srcs, wrist_tok = self._lift_joints(
-                    fl["k"][i], fl["s"][i], fr["k"][j], fr["s"][j], ("F", pi), prev_xyz=prev_xyz,
+                    fl["k"][i], fl["s"][i], fr["k"][j], fr["s"][j], ("F", pi), prev_xyz=prev_xyz, t=t,
                 )
                 wrist_conf = _wrist_conf_from_scores(fl["s"][i], fr["s"][j])
             elif i is not None:
                 xyz, srcs, wrist_tok = self._lift_joints(
-                    fl["k"][i], fl["s"][i], None, None, ("F", pi), prev_xyz=prev_xyz,
+                    fl["k"][i], fl["s"][i], None, None, ("F", pi), prev_xyz=prev_xyz, t=t,
                 )
                 wrist_conf = _wrist_conf_from_scores(fl["s"][i], None)
             else:
                 z = np.zeros_like(fr["k"][j])
                 zs = np.zeros_like(fr["s"][j])
                 xyz, srcs, wrist_tok = self._lift_joints(
-                    z, zs, fr["k"][j], fr["s"][j], ("F", pi), prev_xyz=prev_xyz,
+                    z, zs, fr["k"][j], fr["s"][j], ("F", pi), prev_xyz=prev_xyz, t=t,
                 )
                 wrist_conf = _wrist_conf_from_scores(None, fr["s"][j])
             people.append(_person_preview_payload(xyz, srcs, wrist_tok, wrist_conf))
@@ -598,7 +604,7 @@ class DualcamProcessor:
         idx_l: list[int] = []
         idx_r: list[int] = []
         if self.solved.get("ok") and role in self.cams:
-            people, idx_l, idx_r = self._lift_follow(fl, fr)
+            people, idx_l, idx_r = self._lift_follow(fl, fr, pose_time(pose, frame_idx))
             if apply_hold:
                 people = self._apply_hold(people, pose_time(pose, frame_idx))
             self._prev_xyz = self._new_prev
@@ -683,7 +689,7 @@ class DualcamProcessor:
         fr = keypoints_to_ks(pose_rs.get("persons") or [])
         pairs = pick_pairs(fl, fr, self.cams, prefer=self._prefer, aabb=self.aabb)
         if not pairs:
-            followed, idx_l, idx_r = self._lift_follow(fl, fr)
+            followed, idx_l, idx_r = self._lift_follow(fl, fr, t)
             held = self._apply_hold(followed, t)
             self._prev_xyz = self._new_prev
             sk_l, sk_r = self._overlay_follow(
@@ -710,7 +716,7 @@ class DualcamProcessor:
         for i, j, _gap in pairs:
             new_prefer.append((_prefer_xy(fl["k"][i], fl["s"][i]), _prefer_xy(fr["k"][j], fr["s"][j])))
             xyz, srcs, wrist_tok = self._lift_joints(
-                fl["k"][i], fl["s"][i], fr["k"][j], fr["s"][j], ("P", i, j)
+                fl["k"][i], fl["s"][i], fr["k"][j], fr["s"][j], ("P", i, j), t=t,
             )
             alarm9 = bool(wrist_tok.get(LWRIST))
             alarm10 = bool(wrist_tok.get(RWRIST))

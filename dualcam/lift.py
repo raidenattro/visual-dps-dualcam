@@ -33,6 +33,12 @@ DUPLICATE_M = 0.40
 AISLE_AABB = {"x": (-1.35, 1.35), "y": (0.50, 1.65), "z": (-0.12, 2.50)}
 # 同侧基线短，三角化 Y 误差大；配对阶段放宽，避免 paired=0。XZ 到墙距离仍由 contact_slots 判。
 AISLE_AABB_SAME_SIDE = {"x": (-1.45, 1.45), "y": (-0.15, 3.55), "z": (-2.5, 4.5)}
+# 与实验仓 stabilize_hip_height 相同：因果窗，只平移 Y。
+HIP_STABILIZE_WINDOW_S = 0.4
+HIP_TRACK_MAX_M = 0.60
+HIP_TRACK_GAP_S = 0.48
+_HIP_JOINTS = (11, 12)
+_HIP_TORSO = (5, 6, 11, 12)
 # 可贴墙的源：立体或高分路主导。hold/mono 只显示不报警。
 CONTACT_SRC = frozenset({"stereo", "L", "R"})
 
@@ -134,6 +140,80 @@ def conf_weights(s_l: float, s_r: float, power: float = CONF_POWER) -> tuple[flo
     wl = max(float(s_l), 1e-6) ** pwr
     wr = max(float(s_r), 1e-6) ** pwr
     return wl, wr
+
+
+def hip_height(xyz: list) -> float | None:
+    """左右髋平均高度。缺一路就用另一路。"""
+    ys = []
+    for i in _HIP_JOINTS:
+        if xyz and i < len(xyz) and xyz[i]:
+            ys.append(float(xyz[i][1]))
+    if not ys:
+        return None
+    return float(sum(ys) / len(ys))
+
+
+def _hip_anchor(xyz: list) -> np.ndarray | None:
+    pts = []
+    for i in _HIP_TORSO:
+        if xyz and i < len(xyz) and xyz[i]:
+            pts.append(np.asarray(xyz[i][:3], float))
+    if not pts:
+        return None
+    return np.mean(pts, axis=0)
+
+
+def stabilize_hip_xyz(
+    xyz: list,
+    t: float,
+    tracks: list[dict[str, Any]],
+    window_s: float = HIP_STABILIZE_WINDOW_S,
+) -> float:
+    """把这一帧髋高钉到过去 window_s 秒的中位，整副骨架只沿 Y 平移。
+
+    tracks 就地更新，元素为 {t, c, hist: [(t, raw_hip_y)]}。返回 dy。
+    第一帧中位就是自己，dy 为 0。XZ 不变。
+    """
+    hy = hip_height(xyz)
+    anchor = _hip_anchor(xyz)
+    if hy is None or anchor is None:
+        return 0.0
+    now = float(t)
+    alive: list[dict[str, Any]] = []
+    for tr in tracks:
+        if now - float(tr.get("t", now)) <= HIP_TRACK_GAP_S * 2:
+            alive.append(tr)
+    tracks[:] = alive
+    best: dict[str, Any] | None = None
+    best_d = HIP_TRACK_MAX_M
+    for tr in tracks:
+        if now - float(tr.get("t", now)) > HIP_TRACK_GAP_S:
+            continue
+        c = tr.get("c")
+        if c is None:
+            continue
+        d = float(np.linalg.norm(anchor - np.asarray(c, float)))
+        if d < best_d:
+            best, best_d = tr, d
+    if best is None:
+        best = {"t": now, "c": anchor, "hist": []}
+        tracks.append(best)
+    hist: list[tuple[float, float]] = list(best.get("hist") or [])
+    hist.append((now, hy))
+    lo = now - float(window_s)
+    hist = [(tt, y) for tt, y in hist if tt >= lo]
+    best["hist"] = hist
+    best["t"] = now
+    best["c"] = anchor
+    target = float(np.median([y for _tt, y in hist]))
+    dy = target - hy
+    if abs(dy) < 1e-4:
+        return 0.0
+    for i, p in enumerate(xyz):
+        if not p:
+            continue
+        xyz[i] = [round(float(p[0]), 3), round(float(p[1]) + dy, 3), round(float(p[2]), 3)]
+    return dy
 
 
 def lift_point(
