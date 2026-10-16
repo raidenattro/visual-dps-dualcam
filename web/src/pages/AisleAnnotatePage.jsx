@@ -65,7 +65,7 @@ function drawSolvedCornerHints(c, role, layout, aisle) {
   if (!sol?.ok) return;
   const cam = sol.cameras?.[role];
   if (!cam?.C || !cam?.fwd) return;
-  const order = role === 'R' ? OPP_CORNER : [0, 1, 2, 3];
+  const order = isSameSide(aisle) || role !== 'R' ? [0, 1, 2, 3] : OPP_CORNER;
   const req = new Set(requiredWallIds(aisle));
   for (const w of sol.walls || []) {
     if (!req.has(Number(w.wall_id))) continue;
@@ -140,6 +140,48 @@ function viewWallQuad(aisle, role, wallId) {
   const wall = (aisle?.views?.[role]?.walls || []).find((w) => Number(w.wall_id) === Number(wallId));
   const quad = wall?.quad || [];
   return quad.length >= 4 ? quad : null;
+}
+
+function isSameSide(aisle) {
+  const s = String(aisle?.layout || 'opposite').trim().toLowerCase().replace(/-/g, '_');
+  return s === 'same_side' || s === 'same' || s === 'sameside';
+}
+
+function emptyGroundRect() {
+  return { a: 1.2, b: 2.0, L: [], R: [] };
+}
+
+function wallDistValue(prior, wallId) {
+  const keys = wallId === 1 ? ['wallDist1', 'wallDist81'] : ['wallDist2', 'wallDist82'];
+  for (const key of keys) {
+    const n = Number(prior?.[key]);
+    if (Number.isFinite(n) && n > 0.05) return String(prior[key]);
+  }
+  return '';
+}
+
+function groundReady(aisle) {
+  const g = aisle?.ground_rect || {};
+  const a = Number(g.a);
+  const b = Number(g.b);
+  return a > 0.05 && b > 0.05 && (g.L || []).length >= 4 && (g.R || []).length >= 4;
+}
+
+function quadCount(aisle, role, wallId) {
+  const wall = (aisle?.views?.[role]?.walls || []).find((w) => Number(w.wall_id) === Number(wallId));
+  return (wall?.quad || []).length;
+}
+
+/** 同侧：勾选墙至少一路四角齐，未标的那一路可以空着。 */
+function sameSideWallsOk(aisle) {
+  const req = requiredWallIds(aisle);
+  if (!req.length) return false;
+  for (const id of req) {
+    const counts = ['L', 'R'].map((role) => quadCount(aisle, role, id));
+    if (counts.some((n) => n > 0 && n < 4)) return false;
+    if (!counts.some((n) => n >= 4)) return false;
+  }
+  return true;
 }
 
 function camOf(aisle, role) {
@@ -240,21 +282,29 @@ function aisleNeedsAutoGrab(aisle) {
 
 function annotateSteps(aisle, { grouped, frameAt, camL, camR, dirty, cameras = [] }) {
   const req = requiredWallIds(aisle);
-  const quadsOk = req.every((id) => viewHasWallQuad(aisle, 'L', id) && viewHasWallQuad(aisle, 'R', id));
+  const same = isSameSide(aisle);
+  const quadsOk = same
+    ? sameSideWallsOk(aisle)
+    : req.every((id) => viewHasWallQuad(aisle, 'L', id) && viewHasWallQuad(aisle, 'R', id));
   const meshesOk = req.every((id) => meshForWall(aisle, id));
   const shelfOk = req.every((id) => shelfCodeOf(aisle, id));
-  const quadLabel = req.length === 2
-    ? '左右路两面墙都标满四角'
-    : `左右路墙${req[0]}标满四角`;
+  const quadLabel = same
+    ? '至少一面货架有一路四角（另一路可只标地面）'
+    : (req.length === 2 ? '左右路两面墙都标满四角' : `左右路墙${req[0]}标满四角`);
   const items = [
     { key: 'bind', label: '左右路已绑定', done: grouped },
     { key: 'grab', label: '抽帧', done: hasGrabbedFrames(camL, camR, frameAt, cameras) },
+  ];
+  if (same) {
+    items.push({ key: 'ground', label: '左右路地面矩形四角 + 边长', done: groundReady(aisle) });
+  }
+  items.push(
     { key: 'quad', label: quadLabel, done: quadsOk },
     { key: 'solve', label: '反解并对齐', done: Boolean(aisle.solved?.ok) },
     { key: 'layer', label: '拖层线对齐层板', done: Boolean(aisle.solved?.ok && meshesOk) },
     { key: 'commit', label: '保存墙标定', done: Boolean(aisle.solved?.ok && meshesOk && !dirty) },
     { key: 'shelf', label: '填货架号', done: shelfOk },
-  ];
+  );
   return { items, next: items.find((s) => !s.done) || null };
 }
 
@@ -272,6 +322,8 @@ function emptyAisle(id) {
     },
     slot_meshes: [],
     required_wall_ids: [1, 2],
+    layout: 'opposite',
+    ground_rect: emptyGroundRect(),
     solved: { ok: false },
   };
 }
@@ -305,6 +357,9 @@ export default function AisleAnnotatePage() {
   const [frameAt, setFrameAt] = useState({});
   const [grabbing, setGrabbing] = useState(false);
   const [showSolvedHints, setShowSolvedHints] = useState(readShowSolvedHints);
+  const [markGround, setMarkGround] = useState(false);
+  const markGroundRef = useRef(false);
+  markGroundRef.current = markGround;
   const dragRef = useRef(null);
   const didDragRef = useRef(false);
   const skipClickRef = useRef(false);
@@ -333,7 +388,10 @@ export default function AisleAnnotatePage() {
   const { n_layers: nLayers, n_cols: nCols } = wallGrid(wallsL[activeWall], activeMesh);
   const curQuad = state.views?.[activeView]?.walls?.[activeWall]?.quad || [];
   const steps = annotateSteps(state, { grouped, frameAt, camL, camR, dirty, cameras });
-  const reqQuadsOk = reqIds.every((id) => viewHasWallQuad(state, 'L', id) && viewHasWallQuad(state, 'R', id));
+  const sameSide = isSameSide(state);
+  const reqQuadsOk = sameSide
+    ? groundReady(state) && sameSideWallsOk(state)
+    : reqIds.every((id) => viewHasWallQuad(state, 'L', id) && viewHasWallQuad(state, 'R', id));
   const calibDone = Boolean(state.solved?.ok)
     && requiredWallIds(state).every((id) => meshForWall(state, id) && shelfCodeOf(state, id))
     && !dirty;
@@ -683,6 +741,35 @@ export default function AisleAnnotatePage() {
       }
       const c = canvas.getContext('2d');
       c.clearRect(0, 0, layout.dw, layout.dh);
+      if (isSameSide(state)) {
+        const gpts = state.ground_rect?.[v] || [];
+        if (gpts.length) {
+          c.strokeStyle = '#c6f25a';
+          c.lineWidth = 2;
+          c.beginPath();
+          gpts.forEach((p, i) => {
+            const xy = mapCalibToCanvas(p, layout);
+            if (!xy) return;
+            if (i === 0) c.moveTo(xy[0], xy[1]);
+            else c.lineTo(xy[0], xy[1]);
+          });
+          if (gpts.length === 4) c.closePath();
+          c.stroke();
+          gpts.forEach((p, i) => {
+            const xy = mapCalibToCanvas(p, layout);
+            if (!xy) return;
+            c.beginPath();
+            c.arc(xy[0], xy[1], 7, 0, Math.PI * 2);
+            c.fillStyle = '#c6f25a';
+            c.fill();
+            c.fillStyle = '#142000';
+            c.font = 'bold 11px sans-serif';
+            c.textAlign = 'center';
+            c.textBaseline = 'middle';
+            c.fillText(String(i + 1), xy[0], xy[1]);
+          });
+        }
+      }
       const walls = (state.views?.[v]?.walls || []);
       const drawReq = new Set(requiredWallIds(state));
       walls.forEach((wall, wi) => {
@@ -792,7 +879,7 @@ export default function AisleAnnotatePage() {
       }
       if (showSolvedHints) drawSolvedCornerHints(c, v, layout, state);
     }
-  }, [state, activeView, activeWall, selected, showSolvedHints]);
+  }, [state, activeView, activeWall, selected, showSolvedHints, markGround]);
 
   useEffect(() => {
     draw();
@@ -841,6 +928,26 @@ export default function AisleAnnotatePage() {
     return best;
   };
 
+  const hitGroundCorner = (e, v, aisle = stateRef.current) => {
+    const canvas = cvs[v].current;
+    if (!canvas || !isSameSide(aisle)) return null;
+    const rect = canvas.getBoundingClientRect();
+    const [IW, IH] = viewSize(aisle, v);
+    const layout = overlayLayout(canvas, IW, IH);
+    const mx = (e.clientX - rect.left) * (layout.dw / Math.max(rect.width, 1e-6));
+    const my = (e.clientY - rect.top) * (layout.dh / Math.max(rect.height, 1e-6));
+    let best = null;
+    (aisle.ground_rect?.[v] || []).forEach((p, i) => {
+      const xy = mapCalibToCanvas(p, layout);
+      if (!xy) return;
+      const d = Math.hypot(xy[0] - mx, xy[1] - my);
+      if (d <= CORNER_HIT_PX && (!best || d < best.dist)) {
+        best = { kind: 'ground', v, i, dist: d };
+      }
+    });
+    return best;
+  };
+
   const hitWallCorner = (e, v, aisle = stateRef.current) => {
     const canvas = cvs[v].current;
     if (!canvas) return null;
@@ -869,12 +976,16 @@ export default function AisleAnnotatePage() {
     const canvas = cvs[v].current;
     if (!canvas) return;
     const drag = dragRef.current;
-    if (drag?.kind === 'corner') {
+    if (drag?.kind === 'corner' || drag?.kind === 'ground') {
       canvas.style.cursor = 'grabbing';
       return;
     }
     if (drag) {
       canvas.style.cursor = 'ns-resize';
+      return;
+    }
+    if (isSameSide(stateRef.current) && markGroundRef.current) {
+      canvas.style.cursor = hitGroundCorner(e, v) ? 'grab' : 'crosshair';
       return;
     }
     if (hitWallCorner(e, v)) {
@@ -892,6 +1003,17 @@ export default function AisleAnnotatePage() {
     }
     setActiveView(v);
     const aisle = stateRef.current;
+    if (isSameSide(aisle) && markGroundRef.current) {
+      const pts = (aisle.ground_rect?.[v] || []);
+      if (pts.length >= 4) return;
+      const [u, vv] = evtToImg(e, v, aisle);
+      const next = structuredClone(aisle);
+      if (!next.ground_rect) next.ground_rect = emptyGroundRect();
+      next.ground_rect[v] = [...(next.ground_rect[v] || []), [u, vv]];
+      next.solved = { ok: false };
+      markDirty(next);
+      return;
+    }
     const walls = aisle.views[v].walls;
     const w = walls[activeWall];
     if (!requiredWallIds(aisle).includes(Number(w?.wall_id))) return;
@@ -923,6 +1045,26 @@ export default function AisleAnnotatePage() {
     if (e.button != null && e.button !== 0) return;
     setActiveView(v);
     const aisle = stateRef.current;
+    if (isSameSide(aisle) && markGroundRef.current) {
+      const ground = hitGroundCorner(e, v, aisle);
+      if (!ground) return;
+      dragRef.current = {
+        kind: 'ground',
+        v,
+        i: ground.i,
+        x0: e.clientX,
+        y0: e.clientY,
+      };
+      didDragRef.current = false;
+      skipClickRef.current = true;
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* 非主指针时部分浏览器会拒绝 capture */
+      }
+      e.preventDefault();
+      return;
+    }
     const corner = hitWallCorner(e, v, aisle);
     const layer = hitLayerRow(e, v, aisle);
     // 角点优先：标定后外沿层线会贴在四角上，否则永远拖到层线
@@ -975,6 +1117,17 @@ export default function AisleAnnotatePage() {
     const [u, vv] = evtToImg(e, v, aisle);
     didDragRef.current = true;
     skipClickRef.current = true;
+    if (drag.kind === 'ground') {
+      const next = structuredClone(aisle);
+      const pts = next.ground_rect?.[v];
+      if (!pts?.[drag.i]) return;
+      pts[drag.i] = [u, vv];
+      next.solved = { ok: false };
+      markDirty(next);
+      const canvas = cvs[v].current;
+      if (canvas) canvas.style.cursor = 'grabbing';
+      return;
+    }
     if (drag.kind === 'corner') {
       const next = structuredClone(aisle);
       const wall = next.views?.[v]?.walls?.[drag.wi];
@@ -1012,6 +1165,10 @@ export default function AisleAnnotatePage() {
     if (canvas) canvas.style.cursor = 'crosshair';
     dragRef.current = null;
     if (!didDragRef.current) return;
+    if (drag.kind === 'ground') {
+      showToast('地面角已改，请再点「反解并对齐」', 'warn');
+      return;
+    }
     if (drag.kind === 'corner') {
       const wallId = stateRef.current?.views?.L?.walls?.[drag.wi]?.wall_id;
       showToast(
@@ -1071,6 +1228,41 @@ export default function AisleAnnotatePage() {
     markDirty(next);
   };
 
+  const setWallDist = (wallId, raw) => {
+    const next = structuredClone(stateRef.current);
+    const view = { ...(next.views?.[activeView] || {}) };
+    const prior = { ...(view.prior || next.prior || {}) };
+    const keys = wallId === 1 ? ['wallDist1', 'wallDist81'] : ['wallDist2', 'wallDist82'];
+    const n = Number(raw);
+    if (raw === '' || !Number.isFinite(n) || n <= 0.05) {
+      for (const key of keys) delete prior[key];
+    } else {
+      for (const key of keys) prior[key] = n;
+    }
+    view.prior = prior;
+    next.views = { ...(next.views || {}), [activeView]: view };
+    next.solved = { ok: false };
+    markDirty(next);
+  };
+
+  const setGroundEdge = (key, value) => {
+    const next = structuredClone(stateRef.current);
+    if (!next.ground_rect) next.ground_rect = emptyGroundRect();
+    const n = Number(value);
+    next.ground_rect[key] = Number.isFinite(n) ? n : 0;
+    next.solved = { ok: false };
+    markDirty(next);
+  };
+
+  const resetGround = (role) => {
+    const next = structuredClone(stateRef.current);
+    if (!next.ground_rect) next.ground_rect = emptyGroundRect();
+    next.ground_rect[role] = [];
+    next.solved = { ok: false };
+    markDirty(next);
+    setMsg(`${role === 'L' ? '左路' : '右路'}地面四角已清空`);
+  };
+
   const resetQuad = () => {
     if (!curQuad.length) return;
     patchCurrentQuad([]);
@@ -1118,7 +1310,11 @@ export default function AisleAnnotatePage() {
     <div className="aisle-page">
       <aside className="aisle-panel">
         <h1>巷道双路标注</h1>
-        <p className="muted">选巷道后抽帧、点四角。墙面尺寸在右侧画面下方。</p>
+        <p className="muted">
+          {sameSide
+            ? '同侧双路：必须标地面矩形。墙四角不必左右都标，至少一面货架要有四角、层线和货架号。'
+            : '对侧双路：左右路都要点齐勾选墙的四角。'}
+        </p>
         <ol className="aisle-steps">
           {steps.items.map((s) => (
             <li key={s.key} className={s.done ? 'done' : steps.next?.key === s.key ? 'next' : ''}>
@@ -1135,7 +1331,10 @@ export default function AisleAnnotatePage() {
             {steps.next.key === 'shelf' && '填写货架号，再点底部「保存墙标定」'}
             {steps.next.key === 'bind' && '请到总览「添加巷道」同时配置左右路摄像头'}
             {steps.next.key === 'grab' && '点「抽帧」取左右路静止画面'}
-            {steps.next.key === 'quad' && `在${activeView === 'L' ? '左路' : '右路'}墙${activeWallId}按 1顶远→2顶近→3底近→4底远 点四角`}
+            {steps.next.key === 'ground' && '同侧先标地面：边 a 是 ①→②，边 b 是 ②→③，左右路各点四个角'}
+            {steps.next.key === 'quad' && (sameSide
+              ? `同侧墙不必左右都标。在${activeView === 'L' ? '左路' : '右路'}按 1顶远→2顶近→3底近→4底远 点，或切到「标地面」`
+              : `在${activeView === 'L' ? '左路' : '右路'}墙${activeWallId}按 1顶远→2顶近→3底近→4底远 点四角`)}
           </p>
         )}
         <div className="aisle-field">
@@ -1232,8 +1431,47 @@ export default function AisleAnnotatePage() {
           </div>
         </div>
         <p className="group-title">四角顺序</p>
+        {sameSide ? (
+          <div className="aisle-ground-box">
+            <span className="aisle-field-label">地面（同侧必填）</span>
+            <label>
+              边 a（①→②，米）
+              <input
+                type="number"
+                min="0.1"
+                step="0.05"
+                value={state.ground_rect?.a ?? 1.2}
+                onChange={(e) => setGroundEdge('a', e.target.value)}
+              />
+            </label>
+            <label>
+              边 b（②→③，米）
+              <input
+                type="number"
+                min="0.1"
+                step="0.05"
+                value={state.ground_rect?.b ?? 2}
+                onChange={(e) => setGroundEdge('b', e.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className={markGround ? 'on' : ''}
+              onClick={() => setMarkGround((v) => !v)}
+            >
+              {markGround ? '正在标地面（再点回到墙）' : '标地面'}
+            </button>
+            <button type="button" onClick={() => resetGround(activeView)} disabled={!(state.ground_rect?.[activeView] || []).length}>
+              清空{activeView === 'L' ? '左路' : '右路'}地面
+            </button>
+            <span className="muted">
+              左 {(state.ground_rect?.L || []).length}/4 · 右 {(state.ground_rect?.R || []).length}/4
+            </span>
+          </div>
+        ) : null}
         <p className="muted">
-          面向货架绕一圈，先顶后底。正在标{activeView === 'L' ? '左路' : '右路'} · 墙{activeWallId}。
+          面向货架绕一圈，先顶后底。正在标{activeView === 'L' ? '左路' : '右路'} · 墙{activeWallId}
+          {sameSide ? '。角序与对侧不同：左右路近对近，不要对调。' : '。'}
         </p>
         <ol className="aisle-corner-steps">
           {CORNERS.map((c, i) => (
@@ -1485,6 +1723,32 @@ export default function AisleAnnotatePage() {
               />
             </div>
           </div>
+          {sameSide ? (
+            <div className="aisle-field-pair">
+              <div className="aisle-field">
+                <span className="aisle-field-label">{activeView === 'L' ? '左路' : '右路'} 到墙1 (m)</span>
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.05"
+                  placeholder="空着不约束"
+                  value={wallDistValue(state.views?.[activeView]?.prior, 1)}
+                  onChange={(e) => setWallDist(1, e.target.value)}
+                />
+              </div>
+              <div className="aisle-field">
+                <span className="aisle-field-label">{activeView === 'L' ? '左路' : '右路'} 到墙2 (m)</span>
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.05"
+                  placeholder="空着不约束"
+                  value={wallDistValue(state.views?.[activeView]?.prior, 2)}
+                  onChange={(e) => setWallDist(2, e.target.value)}
+                />
+              </div>
+            </div>
+          ) : null}
           <div className="aisle-field">
             <span className="aisle-field-label">AABB X / Y / Z (m)</span>
             <div className="aisle-field-pair">
