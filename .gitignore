@@ -10,3 +10,4 @@ output/
 data/
 *.parquet
 .DS_Store
+.cursor/
