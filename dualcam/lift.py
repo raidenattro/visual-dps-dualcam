@@ -29,10 +29,8 @@ PAIR_MIN_JOINTS = 3
 NMS_TORSO_PX = 50.0
 PREFER_PX = 90.0
 DUPLICATE_M = 0.40
-# 仅作缺省；运行时请用 dualcam_config.aabb_from_section / 巷道 JSON
+# 仅作缺省；运行时请用 dualcam_config.aabb_from_section / 巷道 JSON。同侧、对侧同一只盒。
 AISLE_AABB = {"x": (-1.35, 1.35), "y": (0.50, 1.65), "z": (-0.12, 2.50)}
-# 同侧基线短，三角化 Y 误差大；配对阶段放宽，避免 paired=0。XZ 到墙距离仍由 contact_slots 判。
-AISLE_AABB_SAME_SIDE = {"x": (-1.45, 1.45), "y": (-0.15, 3.55), "z": (-2.5, 4.5)}
 # 与实验仓 stabilize_hip_height 相同：因果窗，只平移 Y。
 HIP_STABILIZE_WINDOW_S = 0.4
 HIP_TRACK_MAX_M = 0.60

@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from dualcam.geom import contact_slots, make_layer_mesh, signed_wall_dist, wall_by_id
-from dualcam.lift import CONTACT_SRC
+from dualcam.lift import CONTACT_SRC, in_aisle
 from services.event_engine.dualcam_processor import DualcamProcessor, probe_wrist_contacts
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "dual_1-3.json"
@@ -308,6 +308,20 @@ def test_contact_m_zero_is_exact(calib):
     aisle["contact_m"] = 0
     proc = DualcamProcessor(aisle)
     assert proc.contact_m == 0.0
+
+
+def test_same_side_uses_aisle_aabb():
+    """同侧不再套用写死的宽盒，配对范围以巷道 JSON 的 aabb 为准。"""
+    aisle = {
+        "aisle_id": "x",
+        "layout": "same_side",
+        "solved": {"ok": False},
+        "cameras": {},
+        "aabb": {"x": [-1.35, 1.35], "y": [0.50, 1.65], "z": [-0.12, 2.50]},
+    }
+    proc = DualcamProcessor(aisle)
+    assert proc.aabb == {"x": (-1.35, 1.35), "y": (0.50, 1.65), "z": (-0.12, 2.50)}
+    assert in_aisle(np.array([0.2, 0.1, 3.0]), proc.aabb) is False
 
 
 def test_contact_slots_nearest_cell_when_yz_miss(calib):
